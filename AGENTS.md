@@ -67,13 +67,39 @@ pwsh scripts/deploy.ps1 -DryRun         # 只构建/打包/上传/备份，不�
 
 ## 5. 本项目已知的坑（踩过的，别再踩）
 
+### 站点与构建
+
 1. **`public/game/` 签入了构建产物**，CRLF 差异会让每次构建产生新哈希 → 构建后要清理没被 `public/game/index.html` 引用的旧文件；最稳是删掉整个 `public/game` 后重跑 `node scripts/sync-game-dist.mjs`。
-2. **部署后端必须排除 `server/data/`**——线上那里有真实投稿附件与密钥，覆盖 = 数据丢失 + 服务连不上数据库。
-3. 服务器上 `curl` 测站点路径**必须带** `-H 'Host: 47.102.116.172'`，否则落到默认站点返回 404。
-4. PowerShell 里 `ssh aliyun "含引号 / && 的命令"` 会被本地解析坏 → 一律写 here-string 再 `| ssh aliyun bash -s`（`scripts/deploy.ps1` 已封装）。
-5. 站点根里有宝塔生成的 `.user.ini` / `.htaccess`，**切换目录时要保留**（脚本已处理）。
-6. `npm run build` 会先构建小游戏再建站；只改主站想快可以用 `npx vite build`。
-7. 本机 git 默认 `http.sslBackend=schannel` 在受限环境下会握手失败（`SEC_E_NO_CREDENTIALS`）→ 加 `-c http.sslBackend=openssl`。
+2. `npm run build` 会先构建小游戏再建站；只改主站想快可以用 `npx vite build`。
+3. **站点根里有宝塔生成、但不属于构建产物的文件，切换时必须全部保留**：
+   - `.user.ini` —— 被加了 **immutable 属性**（`chattr +i`），`cp -a` **不保留**该属性；删旧目录前也必须先 `chattr -i`，否则 root 也删不掉（`Operation not permitted`）；
+   - **`404.html`** —— nginx 配置里 `error_page 404 /404.html` 依赖它，弄丢会导致 404 处理异常；
+   - `.htaccess`、`README.md`。
+   `scripts/deploy.ps1` 已改为「保留旧目录里所有不在新包顶层的条目」，并在切换后补回 immutable。
+4. **部署后端必须排除 `server/data/`**——线上那里有真实投稿附件与密钥，覆盖 = 数据丢失 + 服务连不上数据库。
+5. 服务器上 `curl` 测站点路径**必须带** `-H 'Host: 47.102.116.172'`，否则落到默认站点返回 404。
+
+### 本机环境（Windows + 受限沙箱）
+
+6. **PowerShell 通过管道给原生程序喂 stdin 时会自动补 CRLF** → `xxx | ssh host bash -s` 会让远程 bash 报 `$'hostname\r': command not found`。改用 **base64 单行传输**：`echo <b64> | base64 -d > /tmp/x.sh && bash /tmp/x.sh`（`Invoke-Remote` 已封装）。
+7. PowerShell 里 `ssh aliyun "含引号 / && 的命令"` 会被本地解析坏 → 一律交给 `Invoke-Remote`。
+8. **`.ps1` 必须是 UTF-8 带 BOM**：否则 Windows PowerShell 5.1 按 GBK 解码，中文变乱码、脚本直接语法报错。注意编辑工具保存时会**吃掉 BOM**，改完要补：
+   ```powershell
+   $p='scripts/deploy.ps1'; $t=[Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($p)).TrimStart([char]0xFEFF)
+   [IO.File]::WriteAllText($p,$t,(New-Object Text.UTF8Encoding($true)))
+   ```
+9. 本机 `pwsh`（PowerShell 7）在受限 shell 里**不可用** → 用 `& ./scripts/deploy.ps1` 在会话内调用。
+10. **`npm run build` 需要 esbuild 以管道 spawn 子进程**，受限沙箱下报 `Error: spawn EPERM`（与坑 6 同源：沙箱禁止创建管道）→ 构建需在放宽权限下执行。
+11. 本机 git 默认 `http.sslBackend=schannel` 会握手失败（`SEC_E_NO_CREDENTIALS`）→ 加 `-c http.sslBackend=openssl`。
+
+### GitHub 写入（本机网络受限）
+
+12. `git push` 经常失败：`github.com:443` 21 秒超时或 `Connection was reset`（**GET 能过、POST 被重置**）；而 git 的凭据助手（GCM）要靠 `sh.exe` 启动，在沙箱下同样 `couldn't create signal pipe`。
+    **替代路径：走 GitHub REST API**（`api.github.com` 稳定可用）——
+    `POST /git/blobs` → `POST /git/trees` → `POST /git/commits` → `POST /git/refs` → `POST /pulls` → `PUT /pulls/{n}/merge`；
+    用 `gh api --input <json文件>` 传参（避免 PowerShell 把含空格/引号的参数拆坏）。
+13. 合并 PR 之后**先确认合并成功、再删 head 分支**：曾因合并命令参数被拆坏而失败、却紧接着删了分支，导致 PR 被 GitHub 自动关闭，只能重建分支重开 PR。
+14. **网络命令失败后绝不要继续执行破坏性 git 操作**：曾因 `git fetch` 超时未检查 exit code，紧接着 `git reset --hard origin/main`（用的还是旧的 origin/main）把刚合并的内容从本地工作区 reset 掉——远端安然无恙，本地白忙一场。凡 fetch/push 之后要 reset/checkout，先确认 `$LASTEXITCODE`。
 
 ---
 

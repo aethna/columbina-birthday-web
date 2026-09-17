@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   新月再梦听羽生 · 一键构建并部署到阿里云服务器（站点 + 可选后端）。
 
@@ -57,8 +57,14 @@ function Die  ([string]$m) { Write-Host "    X   $m" -ForegroundColor Red; throw
 
 function Invoke-Remote {
   param([Parameter(Mandatory)][string]$Script, [switch]$AllowFail)
-  $clean = ($Script -replace "`r", "")
-  $out = $clean | ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 $SshHost 'bash -s' 2>&1
+  # 远程脚本走 base64 单行传输：Windows PowerShell 通过管道给原生程序喂 stdin 时会
+  # 自动把行尾变成 CRLF，直接 `| ssh ... bash -s` 会让远程 bash 报
+  # "$'hostname\r': command not found"。base64 只有一行，彻底绕开换行符问题。
+  $lf  = ($Script -replace "`r`n", "`n") -replace "`r", "`n"
+  $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($lf))
+  $tmp = "/tmp/.dsh-remote-$([guid]::NewGuid().ToString('N').Substring(0,10)).sh"
+  $cmd = "echo $b64 | base64 -d > $tmp && bash $tmp; rc=`$?; rm -f $tmp; exit `$rc"
+  $out = & ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 $SshHost $cmd 2>&1
   $code = $LASTEXITCODE
   if ($code -ne 0 -and -not $AllowFail) {
     throw "远程脚本失败 (exit=$code)`n--- 远程输出 ---`n$($out -join "`n")"
@@ -146,14 +152,30 @@ if [ "$BACKUP" = "1" ]; then
   tar -czf "/root/site-backup-$TS.tgz" -C "$SITE" . && echo "[remote] 备份完成: /root/site-backup-$TS.tgz" || echo "[remote] 备份失败(继续)"
 fi
 
-for f in .user.ini .htaccess; do
-  if [ -e "$SITE/$f" ]; then cp -a "$SITE/$f" "$STAGE/$f"; fi
+# 保留站点根里一切「不属于本次构建产物」的条目：宝塔的 404.html / .user.ini / .htaccess、
+# README.md，以及以后宝塔或其他工具再加的任何文件。早先只复制 .user.ini + .htaccess，
+# 结果把 nginx `error_page 404 /404.html` 依赖的 404.html 一起换掉了。
+tar -tzf "$TGZ" | sed -e 's#^\./##' -e 's#/.*##' | sort -u > /tmp/.dsh-newtop.txt
+for f in "$SITE"/* "$SITE"/.[!.]*; do
+  [ -e "$f" ] || continue
+  b=$(basename "$f")
+  if ! grep -qxF "$b" /tmp/.dsh-newtop.txt; then
+    cp -a "$f" "$STAGE/$b"
+    echo "[remote] 保留非产物条目: $b"
+  fi
 done
+rm -f /tmp/.dsh-newtop.txt
 
 echo "[remote] 原子切换"
 mv "$SITE" "$OLD"
 mv "$STAGE" "$SITE"
 chown -R www:www "$SITE"
+
+# 宝塔给 .user.ini 加了 immutable(+i)，cp -a 不会保留该属性，这里补回去，
+# 否则站点的 open_basedir 防跨站保护会被静默削弱。
+if lsattr "$OLD/.user.ini" 2>/dev/null | grep -q -- '----i'; then
+  chattr +i "$SITE/.user.ini" 2>/dev/null && echo "[remote] 已恢复 .user.ini 的 immutable 保护"
+fi
 echo "[remote] SITE_DONE old=$OLD"
 '@
   $remote = $tpl.Replace('__TS__', $Ts).Replace('__SITE__', $SiteRoot).Replace('__TGZ__', $SiteTgzName).Replace('__BACKUP__', $(if ($NoBackup) { '0' } else { '1' }))
@@ -178,7 +200,11 @@ echo "[remote] SITE_DONE old=$OLD"
     $rb = @'
 set -e
 OLD='__OLD__'
-if [ -d "$OLD" ]; then rm -rf "$OLD"; echo "[remote] 清理旧目录 $OLD"; fi
+if [ -d "$OLD" ]; then
+  # 旧目录里的 .user.ini 带着 immutable(+i)，root 也删不掉，先解除
+  chattr -i "$OLD/.user.ini" 2>/dev/null || true
+  rm -rf "$OLD" && echo "[remote] 清理旧目录 $OLD"
+fi
 '@
     [void](Invoke-Remote -AllowFail -Script $rb.Replace('__OLD__', $siteOld))
   } else {
