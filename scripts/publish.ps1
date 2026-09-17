@@ -31,7 +31,9 @@ param(
   [switch]$NoMerge
 )
 
-$ErrorActionPreference = 'Stop'
+# 注意：原生命令（git / gh）把提示写进 stderr 时，Stop 模式会让脚本直接抛错中断，
+# 所以这里用 Continue，错误一律靠 $LASTEXITCODE 与 Die 显式判断。
+$ErrorActionPreference = 'Continue'
 $PSNativeCommandUseErrorActionPreference = $false
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -140,15 +142,15 @@ if ($NoMerge) {
 # ---------------------------------------------------------------- 7. 同步本地
 Say "同步本地到 $Base（先确认 fetch 成功再 reset —— 踩过这个坑）"
 $fetched = $false
-for ($i = 1; $i -le 5; $i++) {
-  & git -c http.sslBackend=openssl fetch origin $Base --prune 2>&1 | Out-Null
+for ($i = 1; $i -le 6; $i++) {
+  $null = & git -c http.sslBackend=openssl fetch origin $Base --prune 2>&1
   if ($LASTEXITCODE -eq 0) { $fetched = $true; Ok "fetch 成功（第 $i 次）"; break }
   Write-Host "    fetch 第 $i 次失败，重试…" -ForegroundColor Yellow
-  Start-Sleep -Seconds 5
+  Start-Sleep -Seconds 6
 }
 if ($fetched) {
-  & git reset --hard "origin/$Base" 2>&1 | Out-Null
-  & git branch -D $branch 2>&1 | Out-Null
+  $null = & git reset --hard "origin/$Base" 2>&1
+  $null = & git branch -D $branch 2>&1
   Ok "本地已对齐 origin/$Base"
   Write-Host "    $(git log --oneline -1)"
 } else {
