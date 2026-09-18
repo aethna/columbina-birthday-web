@@ -204,15 +204,28 @@ echo "[remote] SITE_DONE old=$OLD"
   $siteOld = "/www/wwwroot/.site-old-$Ts"
 
   # ---- 验证 ----
-  Say "验证线上站点"
-  $checks = @(
-    @{ Name = '首页';          Url = "$PublicUrl/" },
-    @{ Name = '游戏页';        Url = "$PublicUrl/game/index.html" },
-    @{ Name = '后端 /health';  Url = "$PublicUrl/api/health" }
-  )
+  # 一律「在服务器上回环验证」：站点已配 force-https（80 → 301 跳 HTTPS），而
+  # https://<IP>/ 证书不匹配（证书只签给域名）；本机到域名的 TLS 握手也不可靠
+  # （curl 直接返回 000）。回环 + -k + Host 头才是唯一稳定的判据。
+  Say "验证线上站点（服务器侧回环）"
+  $VerifyHost = ([Uri]$PublicUrl).Host
+  if ($VerifyHost -notmatch '\.') { $VerifyHost = 'columbina520.com' }   # PublicUrl 是纯 IP 时改用域名
+  $vtpl = @'
+D='__HOST__'
+c1=$(curl -sk -o /dev/null -w '%{http_code}' -H "Host: $D" https://127.0.0.1/)
+c2=$(curl -sk -o /dev/null -w '%{http_code}' -H "Host: $D" https://127.0.0.1/game/index.html)
+c3=$(curl -sk -o /dev/null -w '%{http_code}' -H "Host: $D" https://127.0.0.1/api/health)
+echo "VERIFY|$c1|$c2|$c3"
+'@
+  $vr = Invoke-Remote -AllowFail -Script $vtpl.Replace('__HOST__', $VerifyHost)
+  $vline = ($vr.Output | Where-Object { $_ -match '^VERIFY\|' } | Select-Object -First 1)
+  $codes = @()
+  if ($vline) { $codes = (($vline -replace '^VERIFY\|', '') -split '\|') }
+  $labels = @('首页', '游戏页', '后端 /health')
   $allOk = $true
-  foreach ($c in $checks) {
-    if (Test-Http -Url $c.Url) { Ok "$($c.Name) 200" } else { $allOk = $false; Warn "$($c.Name) 未通过" }
+  for ($ci = 0; $ci -lt 3; $ci++) {
+    $code = if ($codes.Count -gt $ci) { $codes[$ci] } else { '000' }
+    if ($code -eq '200') { Ok "$($labels[$ci]) 200" } else { $allOk = $false; Warn "$($labels[$ci]) 未通过（HTTP $code）" }
   }
 
   if ($allOk) {
@@ -295,7 +308,8 @@ echo "[remote] API_DONE"
   $r = Invoke-Remote -Script $remote
   $r.Output | ForEach-Object { if ($_ -match '^\[remote\]') { Ok ($_ -replace '^\[remote\]\s*','') } }
 
-  if (Test-Http -Url "$PublicUrl/api/health") { Ok "后端 /api/health 200" } else { Warn "后端健康检查未通过，请查看 systemctl status $Service" }
+  $apiCode = (((Invoke-Remote -AllowFail -Script "curl -sk -o /dev/null -w '%{http_code}' -H 'Host: $VerifyHost' https://127.0.0.1/api/health").Output) -join '').Trim()
+  if ($apiCode -eq '200') { Ok "后端 /api/health 200" } else { Warn "后端健康检查未通过（HTTP $apiCode），请查看 systemctl status $Service" }
 }
 
 # ============================================================ 6. 小结
