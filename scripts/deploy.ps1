@@ -33,7 +33,7 @@ param(
   [string]$SiteRoot  = '/www/wwwroot/47.102.116.172',
   [string]$ApiRoot   = '/www/wwwroot/columbina-birthday-api',
   [string]$Service   = 'columbina-birthday-api',
-  [string]$PublicUrl = 'http://47.102.116.172',
+  [string]$PublicUrl = 'https://columbina520.com',
   [switch]$Api,
   [switch]$SkipBuild,
   [switch]$DryRun,

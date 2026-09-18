@@ -17,7 +17,8 @@
 | | |
 | --- | --- |
 | GitHub 仓库 | `aethna/columbina-birthday-web`（**public**，默认分支 `main`，`main` 无分支保护） |
-| 线上站点 | http://47.102.116.172/ ，后台 http://47.102.116.172/#/admin |
+| 线上站点 | **https://columbina520.com/** ，后台 https://columbina520.com/#/admin |
+| 域名 / 证书 | `columbina520.com` + `www.columbina520.com`，Let's Encrypt（acme.sh 自动续签，详见 §3「域名与 HTTPS 证书」） |
 | 提交信息风格 | conventional commits + 中文描述，例：`feat(signup): 右上角「我要修改」…` |
 
 ---
@@ -48,6 +49,23 @@
 | nginx 扩展配置 | `/www/server/panel/vhost/nginx/extension/47.102.116.172/api.conf`（`/api/` 反代 8788） |
 | 系统 | Alibaba Cloud Linux 3 (OpenAnolis) / nginx 1.28.3 / MySQL 5.7.40 / 宝塔面板 `:8888` |
 | 备份惯例 | `/root/site-backup-<时间戳>.tgz`、`/root/site-dist-<时间戳>.tgz` |
+
+### 域名与 HTTPS 证书
+
+| 项 | 值 |
+| --- | --- |
+| 域名 | `columbina520.com`、`www.columbina520.com`（A 记录 → `47.102.116.172`） |
+| 证书 | Let's Encrypt（ECC），落地在 `/www/server/panel/vhost/cert/47.102.116.172/{fullchain,privkey}.pem` |
+| 续签 | **acme.sh**（`/root/.acme.sh`）+ root crontab：`19 3,9,15,21 * * * "/root/.acme.sh"/acme.sh --cron --home "/root/.acme.sh"`；webroot 验证目录 `/www/wwwroot/47.102.116.172`，续签成功后自动 `nginx -s reload` |
+| 强制跳转 | `/www/server/panel/vhost/nginx/extension/47.102.116.172/force-https.conf`（80 → 301 HTTPS，放行 `/.well-known/`，避免影响续签验证） |
+
+排障与回退：
+
+- **取消强制跳转**：删掉 `force-https.conf` 再 `nginx -s reload`。放在 `extension/` 里是为了不被宝塔重存站点配置时覆盖。
+- **手动续签**：`/root/.acme.sh/acme.sh --cron --home /root/.acme.sh`（acme.sh 走 ARI，实测会在证书到期前约 30 天自动换新）。
+- **不要改用宝塔面板的「自动续签」**：宝塔的续签脚本 `class/crontab_ssl.py` 读 `vhost/crontab.json`，而写入方 `class/panelLets.py` 写的是 `vhost/cert/crontab.json`，两边路径对不上，链路本来就是断的（面板申请时也没生成 `account_key.key`）。
+- 证书私钥 / 面板口令一律不要提交进仓库（仓库是 public）。
+
 
 ---
 
@@ -112,5 +130,5 @@ pwsh scripts/deploy.ps1 -DryRun         # 只构建/打包/上传/备份，不�
 | 预览产物 | `npm run preview` |
 | 本地跑后端 | `cd server && node index.js`（需本机 MySQL） |
 | 游戏本地预览 | 双击 `columbina-game\启动本地预览.bat` |
-| 线上健康检查 | `curl -s http://47.102.116.172/api/health` |
-| 线上站点自检 | `curl -s -o /dev/null -w '%{http_code}' -H 'Host: 47.102.116.172' http://127.0.0.1/`（服务器上执行） |
+| 线上健康检查 | `curl -s https://columbina520.com/api/health` |
+| 线上站点自检 | `curl -s -o /dev/null -w '%{http_code}' -H 'Host: columbina520.com' https://127.0.0.1/ -k`（服务器上执行） |
