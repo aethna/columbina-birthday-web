@@ -69,8 +69,8 @@
 
           <label class="field">
             <span class="label">参与人员昵称（选填）</span>
-            <input v-model.trim="form.nicknames" placeholder="填写所有参与人员的 QQ 或 B 站昵称，用顿号或逗号分隔" maxlength="500" />
-            <span class="hint">根据所选联系方式填写对应的 QQ / B 站昵称</span>
+            <input v-model.trim="form.nicknames" placeholder="填写所有参与人员的昵称，用顿号或逗号分隔" maxlength="500" />
+            <span class="hint">我们将根据填入的昵称展示参与制作人员的名单</span>
           </label>
 
           <!-- 投稿形式 -->
