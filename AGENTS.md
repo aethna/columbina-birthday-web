@@ -109,15 +109,30 @@ pwsh scripts/deploy.ps1 -DryRun         # 只构建/打包/上传/备份，不�
 9. 本机 `pwsh`（PowerShell 7）在受限 shell 里**不可用** → 用 `& ./scripts/deploy.ps1` 在会话内调用。
 10. **`npm run build` 需要 esbuild 以管道 spawn 子进程**，受限沙箱下报 `Error: spawn EPERM`（与坑 6 同源：沙箱禁止创建管道）→ 构建需在放宽权限下执行。
 11. 本机 git 默认 `http.sslBackend=schannel` 会握手失败（`SEC_E_NO_CREDENTIALS`）→ 加 `-c http.sslBackend=openssl`。
+12. **DSH 的 bash 工具会突然整个失效**（任何命令都报 `subprocess-local: command "C:\Program Files\Git\bin\bash.exe" is not an executable file`）：
+    DSH 进程的环境里记着 Git 的**旧安装路径**，而 Git 实际装在 `D:\Git`（PATH 里只有 `d:\Git\cmd`，没有 `Git\bin`）。修法一行（管理员 PowerShell）：
+    ```powershell
+    New-Item -ItemType Junction -Path 'C:\Program Files\Git' -Target 'D:\Git'
+    ```
+    建完 bash 工具**立刻恢复，不用重启 DSH**（它实时检查路径存在性）。回退：`cmd /c rmdir "C:\Program Files\Git"`。
+    另注意 `where bash` 命中 `C:\Windows\System32\bash.exe` 时那是 **WSL 的 bash**，不是 Git Bash，别拿它当替代。
 
 ### GitHub 写入（本机网络受限）
 
-12. `git push` 经常失败：`github.com:443` 21 秒超时或 `Connection was reset`（**GET 能过、POST 被重置**）；而 git 的凭据助手（GCM）要靠 `sh.exe` 启动，在沙箱下同样 `couldn't create signal pipe`。
+13. `git push` 经常失败：`github.com:443` 21 秒超时或 `Connection was reset`（**GET 能过、POST 被重置**）；而 git 的凭据助手（GCM）要靠 `sh.exe` 启动，在沙箱下同样 `couldn't create signal pipe`。
     **替代路径：走 GitHub REST API**（`api.github.com` 稳定可用）——
     `POST /git/blobs` → `POST /git/trees` → `POST /git/commits` → `POST /git/refs` → `POST /pulls` → `PUT /pulls/{n}/merge`；
     用 `gh api --input <json文件>` 传参（避免 PowerShell 把含空格/引号的参数拆坏）。
-13. 合并 PR 之后**先确认合并成功、再删 head 分支**：曾因合并命令参数被拆坏而失败、却紧接着删了分支，导致 PR 被 GitHub 自动关闭，只能重建分支重开 PR。
-14. **网络命令失败后绝不要继续执行破坏性 git 操作**：曾因 `git fetch` 超时未检查 exit code，紧接着 `git reset --hard origin/main`（用的还是旧的 origin/main）把刚合并的内容从本地工作区 reset 掉——远端安然无恙，本地白忙一场。凡 fetch/push 之后要 reset/checkout，先确认 `$LASTEXITCODE`。
+
+    **2026-09-18 复测更新**：上面的"GCM 起不来"在 bash 修好后（见坑 12）已不成立 —— `git push` / `git pull` 直接走 HTTPS 就能成功，
+    关键是**用 GCM 覆盖那个失效的 gh helper**：
+    `git -c credential.https://github.com.helper=manager -c http.sslBackend=openssl push -u origin <branch>`。
+    不覆盖会报 `could not read Username for 'https://github.com'`：全局 `credential.https://github.com.helper` 指向 `gh.exe auth git-credential`，而 `gh` 的 token 已失效（`gh auth status` 显示 invalid）。
+    `gh api` 同样要自己喂 token：
+    `export GH_TOKEN=$(printf 'protocol=https\nhost=github.com\n\n' | git -c credential.https://github.com.helper=manager credential fill | sed -n 's/^password=//p')`
+    （Git Bash 下 `gh api` 的 endpoint **不能带前导斜杠**，否则 MSYS 会把 `/repos/...` 改写成 `D:/Git/repos/...`；去掉前导斜杠即可。）
+14. 合并 PR 之后**先确认合并成功、再删 head 分支**：曾因合并命令参数被拆坏而失败、却紧接着删了分支，导致 PR 被 GitHub 自动关闭，只能重建分支重开 PR。
+15. **网络命令失败后绝不要继续执行破坏性 git 操作**：曾因 `git fetch` 超时未检查 exit code，紧接着 `git reset --hard origin/main`（用的还是旧的 origin/main）把刚合并的内容从本地工作区 reset 掉——远端安然无恙，本地白忙一场。凡 fetch/push 之后要 reset/checkout，先确认 `$LASTEXITCODE`。
 
 ---
 
