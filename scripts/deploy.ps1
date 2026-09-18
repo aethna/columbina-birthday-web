@@ -30,7 +30,8 @@
 [CmdletBinding()]
 param(
   [string]$SshHost   = 'aliyun',
-  [string]$SiteRoot  = '/www/wwwroot/47.102.116.172',
+  # 站点根留空 = 自动从线上 nginx 配置探测（站点目录名含服务器公网 IP，不写进 public 仓库）
+  [string]$SiteRoot  = '',
   [string]$ApiRoot   = '/www/wwwroot/columbina-birthday-api',
   [string]$Service   = 'columbina-birthday-api',
   [string]$PublicUrl = 'https://columbina520.com',
@@ -84,6 +85,25 @@ Say "预检：SSH 连通性（$SshHost）"
 $ping = Invoke-Remote -AllowFail -Script "whoami; hostname"
 if ($ping.Code -ne 0) { Die "无法连接服务器：`n$($ping.Output -join "`n")" }
 Ok "已连接：$(($ping.Output -join ' ').Trim())"
+
+# 站点根目录名里含服务器公网 IP，仓库是 public，所以不留默认值；留空时从线上 nginx 站点配置自动探测
+if ([string]::IsNullOrWhiteSpace($SiteRoot)) {
+  Say "探测站点根目录（读线上 nginx 站点配置）"
+  $probe = Invoke-Remote -AllowFail -Script @'
+DOMAIN=columbina520.com
+CONF=$(grep -l -- "$DOMAIN" /www/server/panel/vhost/nginx/*.conf 2>/dev/null | head -1)
+if [ -z "$CONF" ]; then echo "PROBE_FAILED"; exit 0; fi
+grep -m1 -oE '^[[:space:]]*root[[:space:]]+[^;]+' "$CONF" | sed 's/^[[:space:]]*root[[:space:]]*//'
+'@
+  # Invoke-Remote 里 ssh 的 stderr 被 2>&1 合并进来（post-quantum 警告等），
+  # 所以只认「以 / 开头的路径行」，避免把警告文本混进 $SiteRoot
+  $hit = @($probe.Output | Where-Object { $_ -match '^/\S' })
+  $SiteRoot = if ($hit.Count -gt 0) { ([string]$hit[0]).Trim() } else { '' }
+  if ([string]::IsNullOrWhiteSpace($SiteRoot)) {
+    Die "无法自动探测站点根目录。请显式指定：-SiteRoot /www/wwwroot/<公网IP>（服务器上 ls /www/wwwroot/ 查看）"
+  }
+  Ok "站点根（自动探测）：$SiteRoot"
+}
 
 # ============================================================ 2. 构建
 if ($SkipBuild) {

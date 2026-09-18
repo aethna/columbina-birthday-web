@@ -42,22 +42,26 @@
 
 | 项 | 值 |
 | --- | --- |
-| 服务器 | `47.102.116.172`，SSH 别名 **`ssh aliyun`**（`root`，密钥 `C:\Users\fang\.ssh\openclaw_aliyun`，`IdentitiesOnly yes`） |
+| 服务器 | `<公网IP>`，SSH 别名 **`ssh aliyun`**（`root`，密钥 `C:\Users\fang\.ssh\openclaw_aliyun`，`IdentitiesOnly yes`） |
 | 主机指纹 | `SHA256:0WCQQGewcRX9S/jXeaJey84tGVQviCei7X2F+K7YcCk`（ED25519）——**连接前先核对** |
-| 站点根 | `/www/wwwroot/47.102.116.172`（属主 `www:www`） |
+| 站点根 | `/www/wwwroot/<公网IP>`（属主 `www:www`） |
 | 后端 | `/www/wwwroot/columbina-birthday-api`，systemd 服务 `columbina-birthday-api`（`www` 用户，监听 `127.0.0.1:8788`） |
-| nginx 扩展配置 | `/www/server/panel/vhost/nginx/extension/47.102.116.172/api.conf`（`/api/` 反代 8788） |
+| nginx 扩展配置 | `/www/server/panel/vhost/nginx/extension/<公网IP>/api.conf`（`/api/` 反代 8788） |
 | 系统 | Alibaba Cloud Linux 3 (OpenAnolis) / nginx 1.28.3 / MySQL 5.7.40 / 宝塔面板 `:8888` |
 | 备份惯例 | `/root/site-backup-<时间戳>.tgz`、`/root/site-dist-<时间戳>.tgz` |
+
+> **关于 `<公网IP>`**：本仓库是 **public**，服务器公网 IP 一律不写进仓库，文档里统一用 `<公网IP>` 占位。
+> 需要实际值时：本机 `~/.ssh/config` 里 `Host aliyun` 的 `HostName`、`dig +short columbina520.com`，
+> 或在服务器上 `ls /www/wwwroot/`（宝塔按公网 IP 命名站点目录）；`scripts/deploy.ps1` 也会自动探测。
 
 ### 域名与 HTTPS 证书
 
 | 项 | 值 |
 | --- | --- |
-| 域名 | `columbina520.com`、`www.columbina520.com`（A 记录 → `47.102.116.172`） |
-| 证书 | Let's Encrypt（ECC），落地在 `/www/server/panel/vhost/cert/47.102.116.172/{fullchain,privkey}.pem` |
-| 续签 | **acme.sh**（`/root/.acme.sh`）+ root crontab：`19 3,9,15,21 * * * "/root/.acme.sh"/acme.sh --cron --home "/root/.acme.sh"`；webroot 验证目录 `/www/wwwroot/47.102.116.172`，续签成功后自动 `nginx -s reload` |
-| 强制跳转 | `/www/server/panel/vhost/nginx/extension/47.102.116.172/force-https.conf`（80 → 301 HTTPS，放行 `/.well-known/`，避免影响续签验证） |
+| 域名 | `columbina520.com`、`www.columbina520.com`（A 记录 → `<公网IP>`） |
+| 证书 | Let's Encrypt（ECC），落地在 `/www/server/panel/vhost/cert/<公网IP>/{fullchain,privkey}.pem` |
+| 续签 | **acme.sh**（`/root/.acme.sh`）+ root crontab：`19 3,9,15,21 * * * "/root/.acme.sh"/acme.sh --cron --home "/root/.acme.sh"`；webroot 验证目录 `/www/wwwroot/<公网IP>`，续签成功后自动 `nginx -s reload` |
+| 强制跳转 | `/www/server/panel/vhost/nginx/extension/<公网IP>/force-https.conf`（80 → 301 HTTPS，放行 `/.well-known/`，避免影响续签验证） |
 
 排障与回退：
 
@@ -79,6 +83,7 @@ pwsh scripts/deploy.ps1 -DryRun         # 只构建/打包/上传/备份，不�
 ```
 
 脚本行为：构建 → 打包 → `scp` → 线上备份 → 解包到 staging → 校验 → **原子切换**（失败自动回滚）→ HTTP 验证。
+站点根目录**默认自动从线上 nginx 站点配置探测**（`-SiteRoot` 可显式覆盖），因此仓库里不出现公网 IP。
 比早期"先 `rm -rf assets game audio` 再解包"的老流程安全：老流程在解包失败时会留下残缺站点。
 
 ---
@@ -95,7 +100,7 @@ pwsh scripts/deploy.ps1 -DryRun         # 只构建/打包/上传/备份，不�
    - `.htaccess`、`README.md`。
    `scripts/deploy.ps1` 已改为「保留旧目录里所有不在新包顶层的条目」，并在切换后补回 immutable。
 4. **部署后端必须排除 `server/data/`**——线上那里有真实投稿附件与密钥，覆盖 = 数据丢失 + 服务连不上数据库。
-5. 服务器上 `curl` 测站点路径**必须带** `-H 'Host: 47.102.116.172'`，否则落到默认站点返回 404。
+5. 服务器上 `curl` 测站点路径**必须带** `-H 'Host: <公网IP>'`，否则落到默认站点返回 404。
 
 ### 本机环境（Windows + 受限沙箱）
 
