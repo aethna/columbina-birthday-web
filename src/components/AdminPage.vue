@@ -44,7 +44,9 @@
           <button class="stat" :class="{ on: filter === 'file' }" type="button" @click="setFilter('file')">
             <b>{{ stats.withFiles }}</b><span>含附件</span>
           </button>
-          <div class="stat plain"><b>{{ stats.last24h }}</b><span>24 小时内</span></div>
+          <button class="stat" :class="{ on: filter === 'recent' }" type="button" @click="setFilter('recent')">
+            <b>{{ stats.last24h }}</b><span>24 小时内</span>
+          </button>
         </div>
 
         <div class="toolbar">

@@ -293,6 +293,8 @@ async function listForAdmin({ filter, q, limit, offset }) {
   const args = [];
   if (filter === 'favorite') where.push('favorite = 1');
   if (filter === 'file') where.push("preview_type = 'file'");
+  /* 24 小时内：与 adminStats() 的 last24h 同一时间窗口，保证卡片数字与列表条数一致 */
+  if (filter === 'recent') { where.push('created_at >= ?'); args.push(new Date(Date.now() - 86400 * 1000)); }
   if (q) {
     where.push('(title LIKE ? OR intro LIKE ? OR contact_value LIKE ? OR nicknames LIKE ?)');
     const like = `%${q}%`;
