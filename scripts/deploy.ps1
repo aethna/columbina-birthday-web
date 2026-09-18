@@ -213,15 +213,19 @@ fi
 set -e
 SITE='__SITE__'
 OLD='__OLD__'
-if [ ! -d "$OLD" ]; then echo "[remote] 找不到回滚目录 $OLD"; exit 1; fi
-rm -rf "$SITE"
+if [ ! -d "$OLD" ]; then echo "[remote] 找不到回滚目录 $OLD，保持现状（不冒险）"; exit 1; fi
+# 绝对不要用 rm -rf "$SITE"：站点根的 .user.ini 带 immutable(+i)，删到它就会中断，
+# 结果是「站点被清空、旧版本却没移回来」（2026-09-18 真实事故，全站 403）。
+# 改为把失败的版本改名保留，再原子换回旧版本。
+if [ -e "$SITE" ]; then mv "$SITE" "/www/wwwroot/.site-failed-$(date +%Y%m%d-%H%M%S)"; fi
 mv "$OLD" "$SITE"
-chown -R www:www "$SITE"
+chown -R www:www "$SITE" 2>/dev/null || true
+if [ -e "$SITE/.user.ini" ]; then chattr +i "$SITE/.user.ini" 2>/dev/null || true; fi
 echo "[remote] ROLLBACK_OK"
 '@
     $rr = Invoke-Remote -AllowFail -Script $rbt.Replace('__SITE__', $SiteRoot).Replace('__OLD__', $siteOld)
     $rr.Output | ForEach-Object { Warn ($_ -replace '^\[remote\]\s*','') }
-    Die "站点验证失败，已回滚到部署前状态"
+    Die "站点验证失败，已回滚到部署前状态（失败版本保留在 /www/wwwroot/.site-failed-*）"
   }
 }
 
