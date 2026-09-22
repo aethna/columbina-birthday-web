@@ -49,15 +49,19 @@ function evaluate() {
   if (isPhone.value && !portrait.value) dismiss()
 }
 
-/* 提示期间锁住页面滚动 */
+/* 提示期间锁住页面滚动；另外显示满 3 秒自动关闭——用户不理会时不必手动点 */
+const AUTO_DISMISS_MS = 3000
 let savedOverflow = ''
+let autoTimer = null
 watch(show, (value) => {
   const body = document.body
   if (value) {
     savedOverflow = body.style.overflow
     body.style.overflow = 'hidden'
+    autoTimer = setTimeout(() => { autoTimer = null; dismiss() }, AUTO_DISMISS_MS)
   } else {
     body.style.overflow = savedOverflow
+    if (autoTimer) { clearTimeout(autoTimer); autoTimer = null }
   }
 })
 
@@ -84,6 +88,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   removeListeners()
+  if (autoTimer) { clearTimeout(autoTimer); autoTimer = null }
   if (show.value) document.body.style.overflow = savedOverflow
 })
 </script>
