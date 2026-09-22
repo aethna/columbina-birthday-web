@@ -342,4 +342,19 @@ onBeforeUnmount(() => { requestId += 1; aiAbortController?.abort(); stopVoice() 
   .play-area{display:flex;width:100%;height:100%;min-height:0;flex-direction:column}
   .board-wrap{align-self:center;flex:1 1 auto;width:auto;height:auto;min-width:0;min-height:0;max-width:100%;max-height:100%;margin:auto;aspect-ratio:1}
 }
+
+/* ===== 高度锚定：弹窗高度绑定视口（fixed 遮罩），随视口高度等比缩放，任何屏幕完整可见且居中 ===== */
+.setup-dialog{max-height:calc(100vh - 36px);max-height:calc(100dvh - 36px);overflow-y:auto;padding:clamp(16px,4.2vh,38px)}
+.setup-dialog h2{margin:clamp(4px,1vh,8px) 0 clamp(8px,1.6vh,10px);font-size:clamp(22px,5vh,45px)}
+.setup-dialog>p:not(.board-kicker){margin:0 0 clamp(12px,3vh,27px);font-size:clamp(11px,1.7vh,13px)}
+.setup-dialog fieldset{margin-bottom:clamp(10px,2.4vh,22px)}
+.setup-dialog legend{margin-bottom:clamp(6px,1.2vh,10px);font-size:clamp(11px,1.7vh,13px)}
+.setup-dialog-actions{margin-top:clamp(14px,3.3vh,30px)}
+.setup-dialog-actions button{padding:clamp(9px,1.6vh,12px);font-size:clamp(12px,1.7vh,14px)}
+.option-row span{padding:clamp(6px,1.3vh,9px) 4px;font-size:clamp(10px,1.6vh,12px)}
+.board-kicker{font-size:clamp(9px,1.3vh,10px)}
+.board-result-overlay .result-panel{max-height:calc(100vh - 36px);max-height:calc(100dvh - 36px);overflow-y:auto;padding:clamp(18px,4vh,32px)}
+.board-result-overlay .result-panel>strong{font-size:clamp(24px,4.5vh,40px)}
+.board-result-overlay .result-panel>span{font-size:clamp(11px,1.6vh,12px)}
+.board-result-overlay .result-panel button{padding:clamp(9px,1.5vh,12px) clamp(14px,2.2vh,18px);font-size:clamp(12px,1.6vh,14px)}
 </style>

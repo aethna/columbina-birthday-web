@@ -271,8 +271,21 @@ function stageSize() {
   }
 }
 
+/* 舞台内容缩放系数：按舞台高度对设计基准 600px 取比，钳制在 [0.62, 1.2]。
+   分数栏/弹窗字号/角色大小/障碍宽度/跳跃物理全部乘它，保证内容与容器同比例，
+   而不是绑视口 vh（舞台往往只有视口一半高，vh 会显得过大）。 */
+const stageK = ref(1)
+function updateStageK() {
+  const { height } = stageSize()
+  stageK.value = Math.min(Math.max(height / 600, 0.62), 1.2)
+}
+function flapImpulse() {
+  return -480 * stageK.value
+}
+
 function resetGame() {
   cancelAnimationFrame(animationFrame)
+  updateStageK()
   const { height } = stageSize()
   gameStatus.value = 'ready'
   playerY.value = Math.max(90, height * 0.41)
@@ -346,7 +359,7 @@ function startGame() {
   resetGame()
   gameStatus.value = 'playing'
   addObstacle(true)
-  velocity = -480
+  velocity = flapImpulse()
   showJumpPose()
   animationFrame = requestAnimationFrame(gameLoop)
 }
@@ -366,7 +379,7 @@ function flap() {
     return
   }
 
-  velocity = -480
+  velocity = flapImpulse()
   playSfx('jump')
   playVoice(VOICE_EVENTS.RUNNER_JUMP, { chance: 0.24, cooldown: 7000 })
   showJumpPose()
@@ -379,15 +392,19 @@ function handleStagePress(event) {
 
 function addObstacle(isFirst = false) {
   const { width, height } = stageSize()
-  const gapHeight = Math.min(246, Math.max(194, height * 0.37))
-  const safeMargin = Math.min(118, Math.max(72, height * 0.15))
+  /* 短舞台（手机横屏）下地板值按高度收缩，并用 (height-gap)/2 封顶两侧留白，
+     保证 缺口+两侧留白 永远 ≤ 舞台高度，上下障碍都完整落在画面内 */
+  const gapHeight = Math.min(246 * stageK.value, Math.max(Math.min(194 * stageK.value, height * 0.5), height * 0.37))
+  const safeMargin = Math.min(118 * stageK.value, Math.max(Math.min(72 * stageK.value, height * 0.2), height * 0.15), (height - gapHeight) / 2)
   const available = Math.max(1, height - gapHeight - safeMargin * 2)
   const gapTop = safeMargin + Math.random() * available
+  /* 障碍宽度同时受舞台宽、高约束：小屏不再被 96px 下限撑满 */
+  const obstacleWidth = Math.round(Math.min(142 * stageK.value, Math.max(72, Math.min(width * 0.105, height * 0.22))))
 
   obstacles.value.push({
     id: obstacleId++,
     x: isFirst ? width + 42 : width + 110,
-    width: Math.min(142, Math.max(96, width * 0.105)),
+    width: obstacleWidth,
     gapTop,
     gapHeight,
     passed: false,
@@ -433,7 +450,7 @@ function gameLoop(timestamp) {
   lastFrame = timestamp
   const { width, height } = stageSize()
 
-  velocity += 1480 * delta
+  velocity += 1480 * stageK.value * delta
   playerY.value += velocity * delta
   spawnTimer += delta
 
@@ -471,6 +488,7 @@ function handleKeydown(event) {
 }
 
 function handleResize() {
+  updateStageK()
   if (screen.value === 'game' && gameStatus.value !== 'playing') resetGame()
   /* 横竖屏旋转改视口：canvas 跟着重设分辨率，下一帧循环会重画 */
   if (heroMotionActive) sizeHeroCanvas()
@@ -726,6 +744,7 @@ onBeforeUnmount(() => {
             ref="gameStage"
             class="game-stage"
             :class="{ 'is-playing': gameStatus === 'playing', 'is-over': gameStatus === 'over' }"
+            :style="{ '--k': stageK }"
             role="application"
             aria-label="哥伦比娅的云隙轻歌游戏区域"
             @pointerdown="handleStagePress"
