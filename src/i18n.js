@@ -47,7 +47,7 @@ const exact = new Map(Object.entries({
   '本企划为玩家自发组织的粉丝企划，与原神官方无关，不得用于任何商业用途。': 'This is a fan-organized project unaffiliated with Genshin Impact. It may not be used for commercial purposes.',
   '「哥伦比娅」角色版权归米哈游所有。': 'Columbina and Genshin Impact are the property of HoYoverse.',
   '为了更好的浏览体验，请将设备横过来': 'Rotate your device for the best viewing experience', '继续竖屏浏览': 'Continue in portrait',
-  '返回首页': 'Back to Home', '我要修改': 'Edit Submission', '我要报名': 'Sign Up',
+  '返回首页': 'Back to Home', '我要修改': 'Edit Submission',
   '把你的作品交给这场月夜——《新月再梦听羽生》哥伦比娅生日会征集中。': "Offer your work to this moonlit night—submissions are open for the Columbina Birthday Celebration, “Where Feathers Bloom in the New Moon's Dream.”",
   '投稿已更新': 'Submission Updated', '投稿已收到': 'Submission Received',
   '修改已覆盖到原投稿，编号保持不变 ❤️': 'Your original submission has been updated. Its ID remains unchanged. ❤️',

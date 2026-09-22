@@ -7,8 +7,8 @@
       </div>
 
       <header class="head">
-        <div class="eyebrow" style="justify-content:center">Sign up</div>
-        <h2>我要报名</h2>
+        <div class="eyebrow" style="justify-content:center">Join</div>
+        <h2>我要参与</h2>
         <p class="lead">把你的作品交给这场月夜——《新月再梦听羽生》哥伦比娅生日会征集中。</p>
       </header>
 
