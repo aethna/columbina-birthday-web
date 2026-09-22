@@ -570,7 +570,6 @@ onBeforeUnmount(() => {
         ref="stage"
         class="runner-stage"
         :class="{ 'is-running': status === 'playing', 'is-hit': isHit }"
-        :style="{ '--k': stageK }"
         role="application"
         aria-label="哥伦比娅无尽巡游游戏区域"
         @pointerdown="handleAction"
@@ -672,9 +671,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .runner-page {
   width: 100%;
-  height: 100vh;
-  height: 100svh;
-  height: 100dvh;
+  height: var(--app-vh, 900px);
   overflow: hidden;
   background: #eee9df;
   display: flex;
@@ -683,7 +680,7 @@ onBeforeUnmount(() => {
 
 .runner-header {
   min-height: 68px;
-  padding: 0 clamp(18px, 4vw, 72px);
+  padding: 0 24px;
   border-bottom: 2px solid #171717;
   background: #f7f4ed;
   display: grid;
@@ -736,7 +733,7 @@ onBeforeUnmount(() => {
 .runner-layout {
   min-height: 0;
   width: 100%;
-  padding: clamp(12px, 2.5vw, 34px);
+  padding: 16px;
   flex: 1;
 }
 
@@ -816,7 +813,7 @@ onBeforeUnmount(() => {
   z-index: 1;
   top: 11%;
   right: 10%;
-  width: clamp(58px, 7vw, 88px);
+  width: clamp(58px, 7cqw, 88px);
   aspect-ratio: 1;
   border: 2px solid #171717;
   border-radius: 50%;
@@ -940,7 +937,7 @@ onBeforeUnmount(() => {
 .runner-player {
   position: absolute;
   z-index: 7;
-  width: clamp(58px, 6vw, 82px);
+  width: 70px;
   transform: translateX(-50%);
   transform-origin: 50% 80%;
   will-change: top, transform;
@@ -1048,7 +1045,7 @@ onBeforeUnmount(() => {
 .runner-dialog {
   width: min(430px, 100%);
   border: 2px solid #171717;
-  padding: clamp(25px, 4vw, 43px);
+  padding: 36px;
   background: #f7f4ed;
   text-align: center;
   box-shadow: 8px 8px 0 #171717;
@@ -1063,7 +1060,7 @@ onBeforeUnmount(() => {
 
 .runner-dialog h2 {
   margin: 0 0 13px;
-  font-size: clamp(33px, 5vw, 48px);
+  font-size: 42px;
   letter-spacing: -0.07em;
 }
 
@@ -1134,7 +1131,7 @@ onBeforeUnmount(() => {
   to { opacity: 0; transform: scale(2.2) rotate(35deg); }
 }
 
-@media (max-width: 700px) {
+@container app (max-width: 700px) {
   .runner-header {
     min-height: 58px;
     padding: 0 14px;
@@ -1146,7 +1143,7 @@ onBeforeUnmount(() => {
   }
 
   .runner-layout {
-    height: calc(100dvh - 58px);
+    height: calc(var(--app-vh, 900px) - 58px);
     padding: 8px;
   }
 
@@ -1168,7 +1165,7 @@ onBeforeUnmount(() => {
   }
 
   .runner-player {
-    width: clamp(54px, 16vw, 72px);
+    width: 64px;
   }
 
   .runner-dialog {
@@ -1201,22 +1198,25 @@ onBeforeUnmount(() => {
 .runner-stage{width:100%;margin:0}
 .runner-background{background-repeat:no-repeat;background-size:cover;background-position:center}
 
-/* ===== 舞台内容随容器缩放（--k 由脚本按舞台高度写入；不用 vh——舞台≠视口） ===== */
-.runner-hud{top:calc(20px * var(--k,1));right:calc(24px * var(--k,1));left:calc(24px * var(--k,1))}
-.runner-score strong{font-size:calc(38px * var(--k,1))}
-.runner-score small,.jump-meter small{font-size:calc(9px * var(--k,1))}
-.jump-meter span{width:calc(13px * var(--k,1));height:calc(13px * var(--k,1))}
-.runner-player{width:calc(clamp(58px,6vw,82px) * var(--k,1))}
-.runner-overlay{padding:calc(20px * var(--k,1))}
-.runner-dialog{padding:calc(43px * var(--k,1));max-height:100%;overflow-y:auto}
-.runner-dialog>p{margin:0 0 calc(10px * var(--k,1));font-size:calc(9px * var(--k,1))}
-.runner-dialog h2{margin:0 0 calc(13px * var(--k,1));font-size:calc(48px * var(--k,1))}
-.runner-dialog>span{margin-bottom:calc(23px * var(--k,1));font-size:calc(13px * var(--k,1))}
-.runner-result{margin:calc(22px * var(--k,1)) 0;padding:calc(14px * var(--k,1)) 0}
-.runner-result span{font-size:calc(11px * var(--k,1))}
-.runner-result strong{font-size:calc(25px * var(--k,1))}
-.runner-dialog button{min-width:calc(150px * var(--k,1));padding:calc(13px * var(--k,1)) calc(20px * var(--k,1))}
-.runner-best strong{font-size:calc(17px * var(--k,1))}
-.runner-title{font-size:calc(14px * var(--k,1))}
-.runner-back{font-size:calc(12px * var(--k,1))}
+/* ===== 设计像素固定：画布由根 scale 统一缩放，不用 vh/vw（会跟浏览器缩放二次漂移） ===== */
+.runner-hud{top:20px;right:24px;left:24px}
+.runner-score strong{font-size:38px}
+.runner-score small,.jump-meter small{font-size:9px}
+.jump-meter{gap:5px}
+.jump-meter small{margin-right:3px}
+.jump-meter span{width:13px;height:13px}
+.runner-player{width:clamp(58px,6cqw,82px)}
+.runner-fallback{width:64px;height:64px}
+.effect-trail{font-size:20px}
+.effect-score{font-size:22px}
+.effect-hit{font-size:44px}
+.runner-overlay{padding:20px}
+.runner-dialog{width:min(430px,100%);padding:43px;max-height:100%;overflow-y:auto}
+.runner-dialog>p{margin:0 0 10px;font-size:9px}
+.runner-dialog h2{margin:0 0 13px;font-size:48px}
+.runner-dialog>span{margin-bottom:23px;font-size:13px}
+.runner-result{margin:22px 0;padding:14px 0;gap:3px}
+.runner-result span{font-size:11px}
+.runner-result strong{font-size:25px}
+.runner-dialog button{min-width:150px;padding:13px 20px;font-size:13px}
 </style>

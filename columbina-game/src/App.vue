@@ -548,6 +548,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <div class="app-root">
   <main class="app-shell" @copy.prevent @cut.prevent @contextmenu.prevent @dragstart.prevent>
     <Transition name="screen" mode="out-in">
       <section v-if="screen === 'lobby'" key="lobby" class="lobby-page">
@@ -744,7 +745,6 @@ onBeforeUnmount(() => {
             ref="gameStage"
             class="game-stage"
             :class="{ 'is-playing': gameStatus === 'playing', 'is-over': gameStatus === 'over' }"
-            :style="{ '--k': stageK }"
             role="application"
             aria-label="哥伦比娅的云隙轻歌游戏区域"
             @pointerdown="handleStagePress"
@@ -828,4 +828,5 @@ onBeforeUnmount(() => {
       </div>
     </section>
   </main>
+  </div>
 </template>
