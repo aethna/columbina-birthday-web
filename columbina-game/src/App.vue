@@ -110,8 +110,9 @@ function drawHeroFrame() {
   const scale = Math.max(cw / video.videoWidth, ch / video.videoHeight)
   const dw = video.videoWidth * scale
   const dh = video.videoHeight * scale
-  /* 窄屏 CSS 用 object-position:58% center，这里同步换算，保证画出来的构图一致 */
-  const posX = window.innerWidth <= 800 ? 0.58 : 0.5
+  /* 取景与 CSS 同步：仅竖屏窄屏对齐角色中心（64%），其余窄屏维持 58%，桌面居中 */
+  const posX =
+    window.innerWidth <= 800 ? (window.innerHeight >= window.innerWidth ? 0.64 : 0.58) : 0.5
   ctx.drawImage(video, (cw - dw) * posX, (ch - dh) * 0.5, dw, dh)
 }
 
