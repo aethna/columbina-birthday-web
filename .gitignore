@@ -21,6 +21,9 @@ site-dist-*.tgz
 api-src.tgz
 api-src-*.tgz
 
+# agent 的临时输出 / 试验构建产物（不进仓库）
+out/
+
 # 部署密钥 / 凭据（绝不入库，仓库是 public）
 .deploy-keys/
 *.pem

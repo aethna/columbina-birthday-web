@@ -70,6 +70,13 @@ foreach ($l in $lines) {
   $xy = $l.Substring(0, 2)
   $path = $l.Substring(3).Trim()
   if ($path -match ' -> ') { $path = ($path -split ' -> ')[-1] }
+  # 未跟踪的目录会以 "dir/" 形式出现，GitHub 的 tree API 接受不了以 / 结尾的 path（422）。
+  # 这类目录本该在 .gitignore 里；万一漏了，就跳过而不是让整个发布崩掉。
+  $full = Join-Path $Root ($path -replace '/', '\')
+  if (Test-Path -LiteralPath $full -PathType Container) {
+    Write-Host "    !   跳过目录（应在 .gitignore 里）：$path" -ForegroundColor Yellow
+    continue
+  }
   $changes += [pscustomobject]@{ XY = $xy; Path = $path }
 }
 foreach ($c in $changes) { Ok "$($c.XY)  $($c.Path)" }

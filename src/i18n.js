@@ -41,7 +41,7 @@ const exact = new Map(Object.entries({
   '全部产出正式公开。生日快乐！哥伦比娅！': 'All works are officially released. Happy birthday, Columbina!',
   '愿你也沐浴着月光': 'May Moonlight Shine Upon You, Too',
   '如果你也喜欢这位月之少女，欢迎加入这场企划——无论是投稿、赞助、留下祝福，还是仅仅在生日那天说一声「生日快乐」，都是月光的一部分。': 'If you love this moon maiden too, join our celebration. Whether you submit a work, support the project, leave a blessing, or simply say “Happy Birthday” on that day, you are part of the moonlight.',
-  '我要报名 →': 'Sign Up →', '我要报名': 'Sign Up', '添加q群 →': 'Join QQ Group →', '添加q群': 'Join QQ Group',
+  '我要参与 →': 'Join Us →', '我要参与': 'Join Us', '添加q群 →': 'Join QQ Group →', '添加q群': 'Join QQ Group',
   '添加 QQ 群': 'Join Our QQ Group', '哥伦比娅生日企划': 'Columbina Birthday Celebration', '新月再梦听羽生 · 哥伦比娅生日企划': "Where Feathers Bloom in the New Moon's Dream · Columbina Birthday Celebration",
   '复制 QQ 号': 'Copy QQ Number', '已复制 ✓': 'Copied ✓',
   '本企划为玩家自发组织的粉丝企划，与原神官方无关，不得用于任何商业用途。': 'This is a fan-organized project unaffiliated with Genshin Impact. It may not be used for commercial purposes.',
