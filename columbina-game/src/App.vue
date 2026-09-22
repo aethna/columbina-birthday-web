@@ -67,6 +67,89 @@ const assetGroups = {
 }
 const backgroundPreloadOrder = ['flightCore', 'runnerCore', 'tictactoeCore', 'gomokuCore', 'stageTwo', 'stageThree', 'stageFour']
 const currentStageBackground = computed(() => stageBackgrounds[Math.floor(score.value / 10) % stageBackgrounds.length])
+
+/* 部分国产浏览器（QQ / 夸克 / UC / 百度等）横屏时会把页面里的 <video> 劫持成
+   带控件的全屏播放器，x5 系属性声明（playsinline / h5-page / fullscreen=false）压不住。
+   仅对这些嗅探内核的安卓/鸿蒙端启用 Canvas 转绘：video 缩成 1px 藏起来继续解码，
+   画面每帧画到 canvas 上——视觉上仍是同一段 mp4 的实时画面（不是静态降级），
+   但页面里没有可见的视频元素可劫持。
+   其余浏览器（桌面端、iOS、原生安卓浏览器等）保持原生 video 渲染路径不变：
+   iOS 是 WKWebView 没有 X5 劫持问题，普通安卓浏览器实测也正常。 */
+const SNIFF_UA = /(QQBrowser|MQQBrowser|Quark|UCBrowser|UBrowser|Baidu|baiduboxapp|MicroMessenger|X5)/i
+const X5_PLATFORM_UA = /(Android|HarmonyOS)/i
+const useCanvasMotion =
+  typeof window !== 'undefined' &&
+  typeof navigator !== 'undefined' &&
+  X5_PLATFORM_UA.test(navigator.userAgent) &&
+  SNIFF_UA.test(navigator.userAgent)
+const prefersReducedMotion =
+  typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+const heroVideo = ref(null)
+const heroCanvas = ref(null)
+let heroMotionActive = false
+let heroMotionRaf = 0
+
+function sizeHeroCanvas() {
+  const canvas = heroCanvas.value
+  const host = canvas && canvas.parentElement
+  if (!canvas || !host) return
+  const dpr = Math.min(window.devicePixelRatio || 1, 2)
+  canvas.width = Math.max(1, Math.round(host.clientWidth * dpr))
+  canvas.height = Math.max(1, Math.round(host.clientHeight * dpr))
+}
+
+function drawHeroFrame() {
+  const video = heroVideo.value
+  const canvas = heroCanvas.value
+  if (!video || !canvas || video.readyState < 2 || !video.videoWidth) return
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  const cw = canvas.width
+  const ch = canvas.height
+  const scale = Math.max(cw / video.videoWidth, ch / video.videoHeight)
+  const dw = video.videoWidth * scale
+  const dh = video.videoHeight * scale
+  /* 窄屏 CSS 用 object-position:58% center，这里同步换算，保证画出来的构图一致 */
+  const posX = window.innerWidth <= 800 ? 0.58 : 0.5
+  ctx.drawImage(video, (cw - dw) * posX, (ch - dh) * 0.5, dw, dh)
+}
+
+function heroMotionTick() {
+  if (!heroMotionActive) return
+  drawHeroFrame()
+  heroMotionRaf = requestAnimationFrame(heroMotionTick)
+}
+
+function startHeroMotion() {
+  if (heroMotionActive || prefersReducedMotion) return
+  heroMotionActive = true
+  sizeHeroCanvas()
+  const video = heroVideo.value
+  if (video) {
+    /* Vue 的 :muted 绑定在部分内核上不写内部属性，这里显式补一道，保证自动播放放行 */
+    video.muted = true
+    video.defaultMuted = true
+    video.play().catch(() => {})
+  }
+  heroMotionTick()
+}
+
+function stopHeroMotion() {
+  heroMotionActive = false
+  cancelAnimationFrame(heroMotionRaf)
+}
+
+/* video / canvas 只在大厅屏挂载；进出大厅时启停绘制循环 */
+watch(
+  [heroVideo, heroCanvas],
+  ([video, canvas]) => {
+    if (useCanvasMotion && video && canvas) startHeroMotion()
+    else stopHeroMotion()
+  },
+  { flush: 'post' },
+)
+
 function applyBgm() {
   const index = Math.floor(score.value / 10)
   if (screen.value === 'lobby') setBgm(lobbyMusic)
@@ -388,6 +471,8 @@ function handleKeydown(event) {
 
 function handleResize() {
   if (screen.value === 'game' && gameStatus.value !== 'playing') resetGame()
+  /* 横竖屏旋转改视口：canvas 跟着重设分辨率，下一帧循环会重画 */
+  if (heroMotionActive) sizeHeroCanvas()
 }
 
 /* 离开页面立刻停声：手机浏览器会把页面放进 bfcache，
@@ -463,7 +548,9 @@ onBeforeUnmount(() => {
         <section class="hero" :style="{ '--hero-image': `url('${eventHero}')` }">
           <img class="hero-fallback" :src="eventHero" fetchpriority="high" alt="" aria-hidden="true" />
           <video
+            ref="heroVideo"
             class="hero-video"
+            :class="{ 'hero-video-hidden': useCanvasMotion }"
             autoplay
             :muted="true"
             loop
@@ -473,14 +560,16 @@ onBeforeUnmount(() => {
             x5-playsinline
             t7-video-player-type="inline"
             x5-video-player-type="h5-page"
+            x5-video-player-fullscreen="false"
             disablepictureinpicture
             disableremoteplayback
             controlslist="nodownload nofullscreen noremoteplayback"
-            preload="metadata"
+            preload="auto"
             aria-hidden="true"
           >
             <source :src="heroMotion" type="video/mp4" />
           </video>
+          <canvas v-if="useCanvasMotion" ref="heroCanvas" class="hero-canvas" aria-hidden="true"></canvas>
           <div class="hero-glow"></div>
           <div class="hero-content">
             <p class="hero-kicker">「新月再梦听羽生」主题游戏</p>
