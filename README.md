@@ -73,29 +73,29 @@ columbina-birthday/
 
 ## 修改指南
 
-| 要改的内容                | 去哪里改                                                                               |
-| -------------------- | ---------------------------------------------------------------------------------- |
-| 大标题「新月再梦听羽生」、副标题、装饰语 | `HeroSection.vue`                                                                  |
-| 企划介绍、角色档案卡           | `IntroSection.vue`                                                                 |
-| 产出预告卡片               | `WorksSection.vue`                                                                 |
-| 「一起玩游戏」入口模块          | `GameSection.vue`（按钮指向 `./game/index.html`，游戏文件在 `public/game/`）                   |
-| 时间线                  | `TimelineSection.vue`                                                              |
-| 参与区文案、按钮             | `CtaSection.vue`                                                                   |
-| 页脚声明                 | `SiteFooter.vue`                                                                   |
-| **弹窗 QQ 群号**         | `JoinModal.vue` 里的 `qq` ref（当前 `'1087063966'`），「复制 QQ 号」按钮自动跟随新号码                  |
-| 倒计时目标日期              | `src/composables/useCountdown.js` 里的 `TARGET`（当前 2027-01-14 零点）                    |
+| 要改的内容                | 去哪里改                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------- |
+| 大标题「新月再梦听羽生」、副标题、装饰语 | `HeroSection.vue`                                                                                       |
+| 企划介绍、角色档案卡           | `IntroSection.vue`                                                                                      |
+| 产出预告卡片               | `WorksSection.vue`                                                                                      |
+| 「一起玩游戏」入口模块          | `GameSection.vue`（按钮指向 `./game/index.html`，游戏文件在 `public/game/`）                                        |
+| 时间线                  | `TimelineSection.vue`                                                                                   |
+| 参与区文案、按钮             | `CtaSection.vue`                                                                                        |
+| 页脚声明                 | `SiteFooter.vue`                                                                                        |
+| **弹窗 QQ 群号**         | `JoinModal.vue` 里的 `qq` ref（当前 `'1087063966'`），「复制 QQ 号」按钮自动跟随新号码                                       |
+| 倒计时目标日期              | `src/composables/useCountdown.js` 里的 `TARGET`（当前 2027-01-14 零点）                                         |
 | 背景音乐文件               | 覆盖 `public/audio/nod-krai.bin` 即可（内容用 MP3/AAC，**别用 Ogg——Safari 不支持**；后缀保持 `.bin` 不要改，否则会被国产浏览器当作音频资源嗅探） |
-| 背景音乐音量               | `src/components/AudioToggle.vue` 里的 `VOLUME`（当前 0.5）                               |
-| 背景音乐何时开始播放           | `AudioToggle.vue`：进站不主动播放；页面**下滑**（超过 6px）或首次点击/按键后才开始，一直不动则保持安静                   |
-| 标题贴人物位置              | `HeroSection.vue` 里的 `NECK`（基于 4096×2304 原图的归一化坐标，当前 x: 0.5151, y: 0.44）           |
-| 换背景图                 | 覆盖 `src/assets/hero_4k.png` 即可；**换了尺寸记得同步改 `HeroSection.vue` 的 `ORIG_W / ORIG_H`** |
-| 配色 / 字体              | `src/styles/base.css` 的 `:root` 变量（--bg / --blue / --gold / --serif 等）             |
-| **报名按钮 / 表单字段**      | `src/components/SubmitPage.vue`（字段、下拉选项、必填规则都在这个文件里）                                   |
-| **投稿须知文案**           | `SubmitPage.vue` 里的 `NOTICE_TEXT`（改文案不用动后端）                                          |
-| 上传限制（大小 / 分片）        | `server/config.json` 的 `maxFileMB` / `defaultChunkMB`；前端提示文案在 `FileUploader.vue` 的 props          |
-| 提交频率限制               | `server/config.json` 的 `submitPerHour`（按 IP 每小时）                                    |
-| 粒子数量 / 星星数量          | `SkyCanvas.vue`（霜粒 46 个、星星 80 个）                                                   |
-| 区块增删                 | 在 `App.vue` 增删组件引用；新区块记得加 `class="reveal"` 才能有滚动浮现动画                               |
+| 背景音乐音量               | `src/components/AudioToggle.vue` 里的 `VOLUME`（当前 0.5）                                                    |
+| 背景音乐何时开始播放           | `AudioToggle.vue`：进站不主动播放；页面**下滑**（超过 6px）或首次点击/按键后才开始，一直不动则保持安静                                        |
+| 标题贴人物位置              | `HeroSection.vue` 里的 `NECK`（基于 4096×2304 原图的归一化坐标，当前 x: 0.5151, y: 0.44）                                |
+| 换背景图                 | 覆盖 `src/assets/hero_4k.png` 即可；**换了尺寸记得同步改 `HeroSection.vue` 的 `ORIG_W / ORIG_H`**                      |
+| 配色 / 字体              | `src/styles/base.css` 的 `:root` 变量（--bg / --blue / --gold / --serif 等）                                  |
+| **报名按钮 / 表单字段**      | `src/components/SubmitPage.vue`（字段、下拉选项、必填规则都在这个文件里）                                                    |
+| **投稿须知文案**           | `SubmitPage.vue` 里的 `NOTICE_TEXT`（改文案不用动后端）                                                             |
+| 上传限制（大小 / 分片）        | `server/config.json` 的 `maxFileMB` / `defaultChunkMB`；前端提示文案在 `FileUploader.vue` 的 props                |
+| 提交频率限制               | `server/config.json` 的 `submitPerHour`（按 IP 每小时）                                                        |
+| 粒子数量 / 星星数量          | `SkyCanvas.vue`（霜粒 46 个、星星 80 个）                                                                        |
+| 区块增删                 | 在 `App.vue` 增删组件引用；新区块记得加 `class="reveal"` 才能有滚动浮现动画                                                    |
 
 ---
 
@@ -150,6 +150,16 @@ nginx 反代与 systemd 常驻的配置样例见 [`deploy/`](deploy/)；数据�
 
 站点内置了小游戏（源码在 `columbina-game/`），入口是 Works 与时间线之间的「与哥伦比娅一起玩游戏」模块，点击后**在新标签页**打开。
 
+当前包含五款：
+
+| 游戏     | 简介                          |
+| ------ | --------------------------- |
+| 云隙轻歌   | 点击控制角色飞行，穿过上下障碍物之间的空隙       |
+| 无尽巡游   | 横版无限跑酷，一段 / 二段 / 三段跳        |
+| 月亮棋    | 只保留最近五枚有效棋子的特殊棋类对局          |
+| 星月五子棋  | 15 × 15 棋盘，对哥伦比娅 AI         |
+| 提瓦特战力党 | 十二位提瓦特角色，投骰、选骰、重投，在攻防之间决出胜负 |
+
 - 游戏源码：`columbina-game/`（独立的 Vue 3 + Vite 项目，不参与本站构建流程）
 - 发布产物：`public/game/`（`npm run build` 时由 Vite 原样复制到 `dist/game/`）
 - 游戏更新后，重新构建并同步产物：
@@ -203,3 +213,4 @@ Copy-Item .\dist\* ..\public\game -Recurse
 | 点了「一起玩游戏」白屏 / 404 | 确认 `public/game/` 存在并已重新 `npm run build`（产物应在 `dist/game/`）          |
 
 ---
+

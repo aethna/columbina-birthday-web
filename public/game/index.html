@@ -10,10 +10,18 @@
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <meta name="description" content="哥伦比娅主题的轻量小游戏合集。" />
     <title>哥伦比娅的梦境游廊</title>
-    <script type="module" crossorigin src="./assets/index-B8tpbkik.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-CD5yCWv7.css">
+    <script type="module" crossorigin src="./assets/index-Cq8iFT79.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-Ylpi4APR.css">
   </head>
   <body>
+    <script>
+      /* 首屏前判定移动端，避免闪一下桌面布局 */
+      (function () {
+        var m = window.matchMedia('(pointer: coarse)').matches
+          || /\b(Mobi|Android|iPhone|iPad|iPod|HarmonyOS)\b/i.test(navigator.userAgent);
+        if (m) document.documentElement.classList.add('app-scale-on');
+      })();
+    </script>
     <div id="app"></div>
     <script>
       if (window.location.protocol === 'file:') {

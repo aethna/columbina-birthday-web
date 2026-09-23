@@ -12,6 +12,14 @@
     <title>哥伦比娅的梦境游廊</title>
   </head>
   <body>
+    <script>
+      /* 首屏前判定移动端，避免闪一下桌面布局 */
+      (function () {
+        var m = window.matchMedia('(pointer: coarse)').matches
+          || /\b(Mobi|Android|iPhone|iPad|iPod|HarmonyOS)\b/i.test(navigator.userAgent);
+        if (m) document.documentElement.classList.add('app-scale-on');
+      })();
+    </script>
     <div id="app"></div>
     <script>
       if (window.location.protocol === 'file:') {
