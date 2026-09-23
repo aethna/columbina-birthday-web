@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import characterIdle from '../p/columbina-idle.png'
 import characterJump from '../p/columbina-jump.png'
 import flightIdle from '../p/columbina-flight-tap.png'
@@ -29,17 +29,38 @@ import gomokuWorkerUrl from './games/gomoku.worker.js?worker&url'
 import { playSfx } from './games/sound.js'
 import { resumeBgm, setBgm, stopBgm, suspendBgm } from './games/bgm.js'
 import { playVoice, stopVoice, VOICE_EVENTS } from './games/voice.js'
-import { loadAssetGroup } from './games/resourceLoader.js'
-import RunnerGame from './components/RunnerGame.vue'
-import BoardGame from './components/BoardGame.vue'
-import TeyvatDiceGame from './components/TeyvatDiceGame.vue'
+import {
+  cancelAllResourceLoads,
+  demoteAssetGroup,
+  loadAssetGroup,
+  promoteAssetGroup,
+  setBackgroundDownloadsPaused,
+} from './games/resourceLoader.js'
 import { DICE_ASSETS, DICE_COVER } from './games/teyvatDice.js'
 import { isEnglish } from './i18n.js'
+
+// These views are never part of the first lobby paint. Code-splitting also prevents
+// their worker/game setup from being evaluated until the selected game is mounted.
+const RunnerGame = defineAsyncComponent(() => import('./components/RunnerGame.vue'))
+const BoardGame = defineAsyncComponent(() => import('./components/BoardGame.vue'))
+const TeyvatDiceGame = defineAsyncComponent(() => import('./components/TeyvatDiceGame.vue'))
 
 const eventLogo = isEnglish ? './english-logo.png' : eventLogoZh
 
 const screen = ref('lobby')
-const assetLoading = ref({ active: false, title: '', loaded: 0, total: 0, error: '' })
+const assetLoading = ref({
+  active: false,
+  title: '',
+  loaded: 0,
+  total: 0,
+  state: 'queued',
+  bytesReceived: 0,
+  totalBytes: null,
+  error: '',
+  longWait: false,
+})
+const heroVideoEnabled = ref(false)
+const soundEnabled = ref(false)
 const gameStatus = ref('ready')
 const gameStage = ref(null)
 const playerElement = ref(null)
@@ -58,6 +79,9 @@ const boardStats = ref(savedStats || emptyStats())
 const stageBackgrounds = [stageOne, stageTwo, stageThree, stageFour]
 const stageMusic = [stageMusicOne, stageMusicTwo, stageMusicThree, stageMusicFour]
 const loadedAssetGroups = new Set()
+// Automatic prefetch is opt-in because it competes with visible lobby cards on a
+// constrained connection. When enabled, only core groups run and only one at a time.
+const BACKGROUND_PREFETCH_ENABLED = import.meta.env.VITE_GAME_BACKGROUND_PREFETCH === 'true'
 const assetGroups = {
   flightCore: [flightIdle, flightJump, moonObstacle, stageOne, stageMusicOne],
   runnerCore: [characterIdle, characterJump, characterRun, moonObstacle, stageOne, stageMusicOne],
@@ -68,93 +92,10 @@ const assetGroups = {
   stageFour: [stageFour, stageMusicFour],
   diceCore: DICE_ASSETS,
 }
-const backgroundPreloadOrder = ['flightCore', 'runnerCore', 'tictactoeCore', 'gomokuCore', 'stageTwo', 'stageThree', 'stageFour', 'diceCore']
+const backgroundPreloadOrder = ['flightCore', 'runnerCore', 'tictactoeCore', 'gomokuCore']
 const currentStageBackground = computed(() => stageBackgrounds[Math.floor(score.value / 10) % stageBackgrounds.length])
-
-/* 部分国产浏览器（QQ / 夸克 / UC / 百度等）横屏时会把页面里的 <video> 劫持成
-   带控件的全屏播放器，x5 系属性声明（playsinline / h5-page / fullscreen=false）压不住。
-   仅对这些嗅探内核的安卓/鸿蒙端启用 Canvas 转绘：video 缩成 1px 藏起来继续解码，
-   画面每帧画到 canvas 上——视觉上仍是同一段 mp4 的实时画面（不是静态降级），
-   但页面里没有可见的视频元素可劫持。
-   其余浏览器（桌面端、iOS、原生安卓浏览器等）保持原生 video 渲染路径不变：
-   iOS 是 WKWebView 没有 X5 劫持问题，普通安卓浏览器实测也正常。 */
-const SNIFF_UA = /(QQBrowser|MQQBrowser|Quark|UCBrowser|UBrowser|Baidu|baiduboxapp|MicroMessenger|X5)/i
-const X5_PLATFORM_UA = /(Android|HarmonyOS)/i
-const useCanvasMotion =
-  typeof window !== 'undefined' &&
-  typeof navigator !== 'undefined' &&
-  X5_PLATFORM_UA.test(navigator.userAgent) &&
-  SNIFF_UA.test(navigator.userAgent)
-const prefersReducedMotion =
-  typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-
-const heroVideo = ref(null)
-const heroCanvas = ref(null)
-let heroMotionActive = false
-let heroMotionRaf = 0
-
-function sizeHeroCanvas() {
-  const canvas = heroCanvas.value
-  const host = canvas && canvas.parentElement
-  if (!canvas || !host) return
-  const dpr = Math.min(window.devicePixelRatio || 1, 2)
-  canvas.width = Math.max(1, Math.round(host.clientWidth * dpr))
-  canvas.height = Math.max(1, Math.round(host.clientHeight * dpr))
-}
-
-function drawHeroFrame() {
-  const video = heroVideo.value
-  const canvas = heroCanvas.value
-  if (!video || !canvas || video.readyState < 2 || !video.videoWidth) return
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return
-  const cw = canvas.width
-  const ch = canvas.height
-  const scale = Math.max(cw / video.videoWidth, ch / video.videoHeight)
-  const dw = video.videoWidth * scale
-  const dh = video.videoHeight * scale
-  /* 取景与 CSS 同步：仅竖屏窄屏对齐角色中心（64%），其余窄屏维持 58%，桌面居中 */
-  const posX =
-    window.innerWidth <= 800 ? (window.innerHeight >= window.innerWidth ? 0.64 : 0.58) : 0.5
-  ctx.drawImage(video, (cw - dw) * posX, (ch - dh) * 0.5, dw, dh)
-}
-
-function heroMotionTick() {
-  if (!heroMotionActive) return
-  drawHeroFrame()
-  heroMotionRaf = requestAnimationFrame(heroMotionTick)
-}
-
-function startHeroMotion() {
-  if (heroMotionActive || prefersReducedMotion) return
-  heroMotionActive = true
-  sizeHeroCanvas()
-  const video = heroVideo.value
-  if (video) {
-    /* Vue 的 :muted 绑定在部分内核上不写内部属性，这里显式补一道，保证自动播放放行 */
-    video.muted = true
-    video.defaultMuted = true
-    video.play().catch(() => {})
-  }
-  heroMotionTick()
-}
-
-function stopHeroMotion() {
-  heroMotionActive = false
-  cancelAnimationFrame(heroMotionRaf)
-}
-
-/* video / canvas 只在大厅屏挂载；进出大厅时启停绘制循环 */
-watch(
-  [heroVideo, heroCanvas],
-  ([video, canvas]) => {
-    if (useCanvasMotion && video && canvas) startHeroMotion()
-    else stopHeroMotion()
-  },
-  { flush: 'post' },
-)
-
 function applyBgm() {
+  if (!soundEnabled.value) return
   const index = Math.floor(score.value / 10)
   if (screen.value === 'lobby') setBgm(lobbyMusic)
   else if (screen.value === 'game') setBgm(stageMusic[index % 4])
@@ -172,56 +113,171 @@ let obstacleId = 0
 let poseTimer = 0
 const assetGroupTasks = new Map()
 const assetGroupProgress = new Map()
-const preloadTimers = new Set()
 let launchToken = 0
 let foregroundGroup = ''
 let pendingLaunch = null
+let activeLaunch = null
+let longWaitTimer = 0
+let backgroundIdleHandle = 0
+let deferredMediaHandle = 0
+let backgroundPreloadCursor = 0
 
 const playerImage = computed(() => (isJumping.value ? flightJump : flightIdle))
 const loadingPercent = computed(() => {
   if (!assetLoading.value.total) return 0
   return Math.round(assetLoading.value.loaded / assetLoading.value.total * 100)
 })
+const loadingStatusText = computed(() => ({
+  queued: '排队中',
+  requesting: '请求中',
+  downloading: '下载中',
+  decoding: '解码中',
+  complete: '资源已准备',
+  failed: '下载失败',
+  cancelled: '已取消',
+}[assetLoading.value.state] || '准备中'))
 
-function startAssetGroup(group) {
+function formatBytes(value) {
+  if (!Number.isFinite(value) || value < 0) return ''
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function cancelIdle(handle) {
+  if (!handle) return
+  if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(handle)
+  else window.clearTimeout(handle)
+}
+
+function scheduleIdle(callback, timeout = 3000) {
+  if (typeof window.requestIdleCallback === 'function') return window.requestIdleCallback(callback, { timeout })
+  return window.setTimeout(callback, timeout)
+}
+
+function startAssetGroup(group, { priority = 'foreground', background = false } = {}) {
   if (loadedAssetGroups.has(group)) return Promise.resolve()
-  if (assetGroupTasks.has(group)) return assetGroupTasks.get(group).promise
+  if (assetGroupTasks.has(group)) {
+    const existing = assetGroupTasks.get(group)
+    if (priority === 'foreground') {
+      existing.priority = 'foreground'
+      promoteAssetGroup(group)
+    }
+    return existing.promise
+  }
 
   const controller = new AbortController()
-  const progress = { loaded: 0, total: assetGroups[group].length }
+  const progress = {
+    loaded: 0,
+    total: assetGroups[group].length,
+    state: 'queued',
+    bytesReceived: 0,
+    totalBytes: null,
+  }
   assetGroupProgress.set(group, progress)
-  const timeout = window.setTimeout(() => controller.abort('timeout'), 120000)
   const task = {
     controller,
-    promise: loadAssetGroup(assetGroups[group], {
+    priority,
+    background,
+    foregroundTokens: new Set(),
+    promise: null,
+  }
+  task.promise = loadAssetGroup(assetGroups[group], {
       signal: controller.signal,
       concurrency: 1,
-      onProgress(loaded, total) {
-        progress.loaded = loaded
-        progress.total = total
-        if (foregroundGroup === group) assetLoading.value = { ...assetLoading.value, loaded, total }
+      group,
+      priority: () => task.priority,
+      onProgress(event) {
+        progress.loaded = event.completed
+        progress.total = event.total
+        progress.state = event.state
+        progress.bytesReceived = event.bytesReceived
+        progress.totalBytes = event.totalBytes
+        if (foregroundGroup === group) {
+          assetLoading.value = {
+            ...assetLoading.value,
+            loaded: event.completed,
+            total: event.total,
+            state: event.state,
+            bytesReceived: event.bytesReceived || 0,
+            totalBytes: event.totalBytes ?? null,
+          }
+        }
       },
     }).then(() => {
       loadedAssetGroups.add(group)
     }).finally(() => {
-      window.clearTimeout(timeout)
       if (assetGroupTasks.get(group) === task) assetGroupTasks.delete(group)
-    }),
-  }
+    })
   assetGroupTasks.set(group, task)
   return task.promise
 }
 
-function beginBackgroundPreload() {
-  backgroundPreloadOrder.forEach((group, index) => {
-    const timer = window.setTimeout(() => {
-      preloadTimers.delete(timer)
-      startAssetGroup(group).catch((error) => {
-        if (import.meta.env.DEV) console.warn(`[AssetPreload:${group}]`, error)
+function scheduleBackgroundPreload() {
+  if (!BACKGROUND_PREFETCH_ENABLED || document.hidden || foregroundGroup || backgroundIdleHandle) return
+  if ([...assetGroupTasks.values()].some((task) => task.background && task.priority === 'background')) return
+  setBackgroundDownloadsPaused(false)
+  backgroundIdleHandle = scheduleIdle(() => {
+    backgroundIdleHandle = 0
+    if (document.hidden || foregroundGroup) return
+    const group = backgroundPreloadOrder.find((name, index) => index >= backgroundPreloadCursor && !loadedAssetGroups.has(name) && !assetGroupTasks.has(name))
+    if (!group) return
+    backgroundPreloadCursor = backgroundPreloadOrder.indexOf(group) + 1
+    startAssetGroup(group, { priority: 'background', background: true })
+      .catch((error) => {
+        // Speculative work never creates a foreground error. It may be retried from
+        // the next idle period or superseded by a foreground request.
+        if (import.meta.env.DEV && error?.reason !== 'preempted-by-foreground') console.warn(`[AssetPreload:${group}]`, error)
       })
-    }, 300 + index * 650)
-    preloadTimers.add(timer)
+      .finally(scheduleBackgroundPreload)
   })
+}
+
+function suspendBackgroundPreload() {
+  cancelIdle(backgroundIdleHandle)
+  backgroundIdleHandle = 0
+  setBackgroundDownloadsPaused(true)
+}
+
+function releaseLaunch(launch, reason = 'cancelled') {
+  const task = assetGroupTasks.get(launch.group)
+  if (!task) return
+  task.foregroundTokens.delete(launch.token)
+  if (task.foregroundTokens.size) return
+  if (task.background) {
+    task.priority = 'background'
+    demoteAssetGroup(launch.group)
+    scheduleBackgroundPreload()
+  } else {
+    task.controller.abort(reason)
+  }
+}
+
+function clearLongWaitTimer() {
+  window.clearTimeout(longWaitTimer)
+  longWaitTimer = 0
+}
+
+function armLongWaitTimer(token) {
+  clearLongWaitTimer()
+  longWaitTimer = window.setTimeout(() => {
+    if (activeLaunch?.token === token) assetLoading.value = { ...assetLoading.value, longWait: true }
+  }, 30_000)
+}
+
+function resetAssetLoading() {
+  clearLongWaitTimer()
+  assetLoading.value = {
+    active: false,
+    title: '',
+    loaded: 0,
+    total: 0,
+    state: 'queued',
+    bytesReceived: 0,
+    totalBytes: null,
+    error: '',
+    longWait: false,
+  }
 }
 
 async function prepareAssetGroup(group, title, onReady) {
@@ -230,25 +286,54 @@ async function prepareAssetGroup(group, title, onReady) {
     return
   }
 
+  if (activeLaunch?.group === group) return
+  if (activeLaunch) releaseLaunch(activeLaunch, 'superseded')
   const token = ++launchToken
+  startAssetGroup(group, { priority: 'foreground' })
+  const task = assetGroupTasks.get(group)
+  task.foregroundTokens.add(token)
   pendingLaunch = { group, title, onReady }
+  activeLaunch = { token, group }
   foregroundGroup = group
   const progress = assetGroupProgress.get(group) || { loaded: 0, total: assetGroups[group].length }
-  assetLoading.value = { active: true, title, loaded: progress.loaded, total: progress.total, error: '' }
+  suspendBackgroundPreload()
+  assetLoading.value = {
+    active: true,
+    title,
+    loaded: progress.loaded,
+    total: progress.total,
+    state: progress.state || 'queued',
+    bytesReceived: progress.bytesReceived || 0,
+    totalBytes: progress.totalBytes ?? null,
+    error: '',
+    longWait: false,
+  }
+  armLongWaitTimer(token)
 
   try {
-    await startAssetGroup(group)
+    await task.promise
     if (token !== launchToken) return
     foregroundGroup = ''
     pendingLaunch = null
-    assetLoading.value = { active: false, title: '', loaded: 0, total: 0, error: '' }
+    activeLaunch = null
+    resetAssetLoading()
+    scheduleBackgroundPreload()
     onReady()
   } catch (error) {
     if (token !== launchToken) return
+    clearLongWaitTimer()
+    activeLaunch = null
+    foregroundGroup = ''
     assetLoading.value = {
       ...assetLoading.value,
       active: true,
-      error: error?.name === 'AbortError' ? '下载时间过长，请检查网络后重试。' : '部分资源下载失败，请重试。',
+      error: error?.reason === 'body-idle-timeout'
+        ? '资源下载长时间没有进展，请重试。'
+        : error?.reason === 'response-header-timeout'
+          ? '请求长时间未获得响应，请重试。'
+          : error?.reason === 'absolute-timeout'
+            ? '单个资源下载超过上限，请重试。'
+            : '部分资源下载失败，请重试。',
     }
     if (import.meta.env.DEV) console.error(`[AssetLoader:${group}]`, error)
   }
@@ -257,14 +342,24 @@ async function prepareAssetGroup(group, title, onReady) {
 function cancelAssetLoading() {
   launchToken += 1
   stopVoice()
+  if (activeLaunch) releaseLaunch(activeLaunch)
+  activeLaunch = null
   foregroundGroup = ''
   pendingLaunch = null
-  assetLoading.value = { active: false, title: '', loaded: 0, total: 0, error: '' }
+  resetAssetLoading()
+  scheduleBackgroundPreload()
 }
 
 function retryAssetLoading() {
   if (!pendingLaunch) return
   const { group, title, onReady } = pendingLaunch
+  prepareAssetGroup(group, title, onReady)
+}
+
+function restartAssetLoading() {
+  if (!pendingLaunch) return
+  const { group, title, onReady } = pendingLaunch
+  cancelAssetLoading()
   prepareAssetGroup(group, title, onReady)
 }
 
@@ -275,21 +370,8 @@ function stageSize() {
   }
 }
 
-/* 舞台内容缩放系数：按舞台高度对设计基准 600px 取比，钳制在 [0.62, 1.2]。
-   分数栏/弹窗字号/角色大小/障碍宽度/跳跃物理全部乘它，保证内容与容器同比例，
-   而不是绑视口 vh（舞台往往只有视口一半高，vh 会显得过大）。 */
-const stageK = ref(1)
-function updateStageK() {
-  const { height } = stageSize()
-  stageK.value = Math.min(Math.max(height / 600, 0.62), 1.2)
-}
-function flapImpulse() {
-  return -480 * stageK.value
-}
-
 function resetGame() {
   cancelAnimationFrame(animationFrame)
-  updateStageK()
   const { height } = stageSize()
   gameStatus.value = 'ready'
   playerY.value = Math.max(90, height * 0.41)
@@ -381,7 +463,7 @@ function startGame() {
   resetGame()
   gameStatus.value = 'playing'
   addObstacle(true)
-  velocity = flapImpulse()
+  velocity = -480
   showJumpPose()
   animationFrame = requestAnimationFrame(gameLoop)
 }
@@ -401,7 +483,7 @@ function flap() {
     return
   }
 
-  velocity = flapImpulse()
+  velocity = -480
   playSfx('jump')
   playVoice(VOICE_EVENTS.RUNNER_JUMP, { chance: 0.24, cooldown: 7000 })
   showJumpPose()
@@ -414,19 +496,15 @@ function handleStagePress(event) {
 
 function addObstacle(isFirst = false) {
   const { width, height } = stageSize()
-  /* 短舞台（手机横屏）下地板值按高度收缩，并用 (height-gap)/2 封顶两侧留白，
-     保证 缺口+两侧留白 永远 ≤ 舞台高度，上下障碍都完整落在画面内 */
-  const gapHeight = Math.min(246 * stageK.value, Math.max(Math.min(194 * stageK.value, height * 0.5), height * 0.37))
-  const safeMargin = Math.min(118 * stageK.value, Math.max(Math.min(72 * stageK.value, height * 0.2), height * 0.15), (height - gapHeight) / 2)
+  const gapHeight = Math.min(246, Math.max(194, height * 0.37))
+  const safeMargin = Math.min(118, Math.max(72, height * 0.15))
   const available = Math.max(1, height - gapHeight - safeMargin * 2)
   const gapTop = safeMargin + Math.random() * available
-  /* 障碍宽度同时受舞台宽、高约束：小屏不再被 96px 下限撑满 */
-  const obstacleWidth = Math.round(Math.min(142 * stageK.value, Math.max(72, Math.min(width * 0.105, height * 0.22))))
 
   obstacles.value.push({
     id: obstacleId++,
     x: isFirst ? width + 42 : width + 110,
-    width: obstacleWidth,
+    width: Math.min(142, Math.max(96, width * 0.105)),
     gapTop,
     gapHeight,
     passed: false,
@@ -472,7 +550,7 @@ function gameLoop(timestamp) {
   lastFrame = timestamp
   const { width, height } = stageSize()
 
-  velocity += 1480 * stageK.value * delta
+  velocity += 1480 * delta
   playerY.value += velocity * delta
   spawnTimer += delta
 
@@ -510,15 +588,13 @@ function handleKeydown(event) {
 }
 
 function handleResize() {
-  updateStageK()
   if (screen.value === 'game' && gameStatus.value !== 'playing') resetGame()
-  /* 横竖屏旋转改视口：canvas 跟着重设分辨率，下一帧循环会重画 */
-  if (heroMotionActive) sizeHeroCanvas()
 }
 
 /* 离开页面立刻停声：手机浏览器会把页面放进 bfcache，
    Web Audio 的 AudioContext 不会自己停，返回主站后音乐还在响 */
 function handleLeavePage() {
+  suspendBackgroundPreload()
   stopBgm()
   suspendBgm()
 }
@@ -536,11 +612,27 @@ function handleVisibility() {
   else {
     resumeBgm()
     applyBgm()
+    scheduleBackgroundPreload()
+    scheduleDeferredLobbyMedia()
   }
 }
 
+function enableSound() {
+  soundEnabled.value = true
+  applyBgm()
+}
+
+function scheduleDeferredLobbyMedia() {
+  if (heroVideoEnabled.value || deferredMediaHandle || document.hidden) return
+  deferredMediaHandle = scheduleIdle(() => {
+    deferredMediaHandle = 0
+    if (!document.hidden) heroVideoEnabled.value = true
+  }, 3500)
+}
+
 onMounted(() => {
-  beginBackgroundPreload()
+  scheduleBackgroundPreload()
+  scheduleDeferredLobbyMedia()
   window.addEventListener('keydown', handleKeydown)
   window.addEventListener('resize', handleResize)
   window.addEventListener('pagehide', handleLeavePage)
@@ -548,14 +640,17 @@ onMounted(() => {
   window.addEventListener('unload', handleLeavePage)
   window.addEventListener('pageshow', handleReturnPage)
   document.addEventListener('visibilitychange', handleVisibility)
-  window.addEventListener('pointerdown', () => setBgm(lobbyMusic), { capture: true, once: true })
+  window.addEventListener('pointerdown', enableSound, { capture: true, once: true })
 })
 
 onBeforeUnmount(() => {
   launchToken += 1
   stopVoice()
-  preloadTimers.forEach((timer) => window.clearTimeout(timer))
-  assetGroupTasks.forEach(({ controller }) => controller.abort())
+  clearLongWaitTimer()
+  cancelIdle(backgroundIdleHandle)
+  cancelIdle(deferredMediaHandle)
+  assetGroupTasks.forEach(({ controller }) => controller.abort('unmount'))
+  cancelAllResourceLoads('unmount')
   cancelAnimationFrame(animationFrame)
   clearTimeout(poseTimer)
   window.removeEventListener('keydown', handleKeydown)
@@ -565,12 +660,12 @@ onBeforeUnmount(() => {
   window.removeEventListener('unload', handleLeavePage)
   window.removeEventListener('pageshow', handleReturnPage)
   document.removeEventListener('visibilitychange', handleVisibility)
+  window.removeEventListener('pointerdown', enableSound, { capture: true })
   stopBgm()
 })
 </script>
 
 <template>
-  <div class="app-root">
   <main class="app-shell" @copy.prevent @cut.prevent @contextmenu.prevent @dragstart.prevent>
     <Transition name="screen" mode="out-in">
       <section v-if="screen === 'lobby'" key="lobby" class="lobby-page">
@@ -590,9 +685,8 @@ onBeforeUnmount(() => {
         <section class="hero" :style="{ '--hero-image': `url('${eventHero}')` }">
           <img class="hero-fallback" :src="eventHero" fetchpriority="high" alt="" aria-hidden="true" />
           <video
-            ref="heroVideo"
+            v-if="heroVideoEnabled"
             class="hero-video"
-            :class="{ 'hero-video-hidden': useCanvasMotion }"
             autoplay
             :muted="true"
             loop
@@ -602,16 +696,14 @@ onBeforeUnmount(() => {
             x5-playsinline
             t7-video-player-type="inline"
             x5-video-player-type="h5-page"
-            x5-video-player-fullscreen="false"
             disablepictureinpicture
             disableremoteplayback
             controlslist="nodownload nofullscreen noremoteplayback"
-            preload="auto"
+            preload="none"
             aria-hidden="true"
           >
             <source :src="heroMotion" type="video/mp4" />
           </video>
-          <canvas v-if="useCanvasMotion" ref="heroCanvas" class="hero-canvas" aria-hidden="true"></canvas>
           <div class="hero-glow"></div>
           <div class="hero-content">
             <p class="hero-kicker">「新月再梦听羽生」主题游戏</p>
@@ -647,7 +739,7 @@ onBeforeUnmount(() => {
                 }"
               >
                 <span class="cover-vignette"></span>
-                <img class="cover-character flight-cover-character" :src="characterJump" alt="飞行中的哥伦比娅" />
+                <img class="cover-character flight-cover-character" :src="flightIdle" alt="飞行中的哥伦比娅" />
                 <span class="play-orbit"><span>01</span><b>进入</b></span>
               </div>
               <div class="card-body">
@@ -877,13 +969,19 @@ onBeforeUnmount(() => {
           <span :style="{ width: `${loadingPercent}%` }"></span>
         </div>
         <strong v-if="!assetLoading.error">{{ loadingPercent }}% · {{ assetLoading.loaded }}/{{ assetLoading.total }}</strong>
+        <small v-if="!assetLoading.error" class="asset-load-status">
+          {{ loadingStatusText }}
+          <template v-if="assetLoading.totalBytes !== null"> · {{ formatBytes(assetLoading.bytesReceived) }} / {{ formatBytes(assetLoading.totalBytes) }}</template>
+          <template v-else-if="assetLoading.bytesReceived"> · {{ formatBytes(assetLoading.bytesReceived) }} · 大小未知</template>
+        </small>
         <p v-else class="asset-load-error">{{ assetLoading.error }}</p>
+        <p v-if="assetLoading.longWait && !assetLoading.error" class="asset-load-wait">仍在{{ loadingStatusText }}，可继续等待、取消或重新开始。</p>
         <div class="asset-loader-actions">
           <button v-if="assetLoading.error" type="button" @click="retryAssetLoading">重新下载</button>
+          <button v-else-if="assetLoading.longWait" type="button" @click="restartAssetLoading">重新开始</button>
           <button type="button" @click="cancelAssetLoading">返回大厅</button>
         </div>
       </div>
     </section>
   </main>
-  </div>
 </template>

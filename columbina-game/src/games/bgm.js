@@ -1,3 +1,5 @@
+import { getPreparedAssetBlob } from './resourceLoader.js'
+
 let audioContext
 let current
 let activeSource = ''
@@ -13,7 +15,20 @@ function context() {
 }
 
 async function loadBuffer(source, ctx) {
-  if (!buffers.has(source)) buffers.set(source, fetch(source).then((response) => response.arrayBuffer()).then((data) => ctx.decodeAudioData(data)))
+  if (!buffers.has(source)) {
+    buffers.set(source, (async () => {
+      // The game resource scheduler retains completed BGM bytes. Reuse them here so
+      // "prepared" audio does not immediately trigger a second full fetch for decode.
+      const prepared = getPreparedAssetBlob(source)
+      const data = prepared
+        ? await prepared.arrayBuffer()
+        : await fetch(source).then((response) => {
+          if (!response.ok) throw new Error(`BGM 下载失败：${response.status}`)
+          return response.arrayBuffer()
+        })
+      return ctx.decodeAudioData(data)
+    })())
+  }
   return buffers.get(source)
 }
 

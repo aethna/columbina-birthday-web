@@ -10,14 +10,9 @@
 export const DICE_DIR = `${import.meta.env.BASE_URL}teyvat-dice/`
 export const DICE_ENTRY = `${DICE_DIR}index.html`
 
-/**
- * 素材缓存戳。必须和 public/teyvat-dice/index.html 里的 ASSET_V 完全一致：
- * 游戏内所有图片都走那个后缀，这里预热时用同样的 URL，浏览器才会命中同一份缓存，
- * iframe 打开时就是瞬开。改了素材就把两边一起改（否则等于白预热一遍）。
- */
-export const DICE_ASSET_V = '?v=1'
-
-const asset = (name) => `${DICE_DIR}assets/${name}${DICE_ASSET_V}`
+// Keep iframe consumption and optional prefetch on the exact deployed URL.
+// Load diagnostics only record data; they never manufacture a cache-key query.
+const asset = (name) => `${DICE_DIR}assets/${name}`
 
 /** 卡片封面：游戏自己的开局对阵图（1600×900，主体在画面 25%~60% 高度处） */
 export const DICE_COVER = asset('bg-start.jpg')
