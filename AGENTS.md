@@ -1,6 +1,6 @@
 # AGENTS.md — 本项目的常驻工作约定
 
-> 给在本仓库 / 本工作区（`D:\program\columbina-birthday`）里工作的 AI 编码代理，以及未来的自己看。
+> 给在本仓库 / 本工作区（`D:\program\columbina-birthday`）里工作的 AI 编码代理，以及未来的自己看。该文档仅在当前设备为Windows的场景下生效，若当前设备不是Windows系统，则忽视该文档的所有内容。
 > 授权确认：**2026-09-17，由用户（aethna / 方培源）明确下达**。
 
 ---
