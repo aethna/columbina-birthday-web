@@ -927,13 +927,9 @@ const PATH = {
   menu:'assets/bg-menu.jpg', start:'assets/bg-start.jpg',
   coin:'assets/bg-coin2.png', board:'assets/bg-board.png', ace:'assets/die-ace.png',
 };
-/* 站点集成版：固定版本号，让浏览器能缓存素材。
-   原来是 '?v=' + Date.now()（开发期方便，改完素材刷新就能看到），
-   但放到站点上意味着每次进游戏都重下全部 3.9MB。
-   必须和 src/games/teyvatDice.js 里的 DICE_ASSET_V 完全一致，
-   否则大厅预热的那份缓存对不上，等于白预热。换素材时两边一起 +1。 */
-const ASSET_V = '?v=1';
-const asset = p => (p.startsWith('data:') ? p : p + ASSET_V);
+/* 大厅预热与 iframe 始终使用同一个规范资源 URL。诊断模式只记录事件，
+   不再通过 query 改变缓存键或制造第二份请求。 */
+const asset = p => p;
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => {
   document.head.insertAdjacentHTML('beforeend',
     '<style>' +
