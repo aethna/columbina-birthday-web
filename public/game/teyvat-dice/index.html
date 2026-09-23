@@ -88,6 +88,11 @@ button{font-family:inherit}
 .die.off{opacity:.3;filter:grayscale(.8)}
 .die.click{cursor:pointer}
 .die.click:hover{transform:translateY(-.25cqh)}
+@keyframes rerollPick{
+  0%,100%{filter:drop-shadow(0 0 .55cqh var(--cyan)) brightness(1.12);transform:translateY(-.25cqh) scale(1.02)}
+  50%{filter:drop-shadow(0 0 1.35cqh var(--cyan)) brightness(1.42);transform:translateY(-.65cqh) scale(1.08)}
+}
+.die.reroll{opacity:1;animation:rerollPick 1.05s ease-in-out infinite}
 .diceRow{display:flex;gap:.7cqh;flex-wrap:wrap;align-items:center;justify-content:center}
 
 /* ---------- 选卡 ---------- */
@@ -228,9 +233,23 @@ h1{font-family:var(--font-title);font-size:2.6cqh;margin:0 0 .2cqh;text-align:ce
 .diceZone.acting{background:rgba(245,199,74,.12);
   box-shadow:0 0 0 .18cqh rgba(245,199,74,.6),0 0 3cqh rgba(245,199,74,.28)}
 #stageDice{display:none}
+/* 中央两处数值固定按屏幕位置表达语义：上方敌方、下方我方。 */
+.sumVal{position:absolute;z-index:8;left:20%;width:58%;pointer-events:none;
+  display:flex;align-items:baseline;justify-content:center;gap:.55cqh;
+  font-family:var(--font-title);font-size:4.9cqh;font-weight:900;line-height:1;
+  color:#2f66c4;text-shadow:0 .25cqh .45cqh rgba(255,255,255,.55)}
+.sumVal .sumSide{font-family:var(--font-ui);font-size:1.45cqh;font-weight:800;color:#53658c;
+  text-shadow:none;white-space:nowrap}
+.sumVal .sumNum{font-variant-numeric:tabular-nums}
+.sumVal .sumTail{font-family:var(--font-ui);font-size:1.35cqh;font-weight:700;color:#53658c;
+  text-shadow:none;white-space:nowrap}
+.sumVal.dim{color:#9fb0cf}
+.sumVal.dim .sumSide,.sumVal.dim .sumTail{color:#8e9bb7}
+#oppTotal{top:34.5%}
+#myTotal{top:53.5%}
 #bigVal{font-family:var(--font-title);font-size:8.4cqh;font-weight:900;line-height:1;color:#2f66c4;
   font-variant-numeric:tabular-nums;display:flex;align-items:baseline;gap:.3cqh;
-  text-shadow:0 .3cqh 0 rgba(255,255,255,.5)}
+  text-shadow:0 .3cqh 0 rgba(255,255,255,.5);display:none}
 #bigVal .plus{font-size:4.4cqh;color:#e0a020}
 #bigVal.dim{color:#9fb0cf}
 #bigVal.dim .plus{color:#b9a888}
@@ -459,7 +478,9 @@ h1{font-family:var(--font-title);font-size:2.6cqh;margin:0 0 .2cqh;text-align:ce
   font-weight:800;letter-spacing:.08em;color:#e8eeff;
   text-shadow:0 .2cqh .5cqh rgba(0,0,0,.75)}
 #rerollTxt{left:85.31%;top:70.30%;width:12.31%;height:9.89%;font-size:1.85cqh}
+#rerollCount{font-size:1.2cqh;color:#8da0c9;min-height:1.6cqh;text-align:center;line-height:1.4}
 #okTxt{left:83.26%;top:88.22%;width:15.94%;height:11.22%;font-size:1.85cqh}
+#selectCount{font-size:1.2cqh;color:#8da0c9;min-height:1.6cqh;text-align:center;line-height:1.4}
 .hot:disabled + .btnTxt,.btnTxt.dim{color:#6b7690;text-shadow:none}
 /* =====================================================================
    Combat VFX: rolling dice, attack beam, defence shield that shatters
@@ -775,9 +796,13 @@ h1{font-family:var(--font-title);font-size:2.6cqh;margin:0 0 .2cqh;text-align:ce
       <div id="ram"></div>
       <div id="poolRow"></div>
       <div id="poolMine"></div>
+      <div id="oppTotal" class="sumVal dim"><span class="sumSide">对方</span><span class="sumNum">0</span><span class="sumTail">点数和</span></div>
+      <div id="myTotal" class="sumVal dim"><span class="sumSide">我方</span><span class="sumNum">0</span><span class="sumTail">点数和</span></div>
       <div id="midBox">
-        <div id="bigVal" class="dim">0</div>
+        <div id="bigVal" class="dim" aria-hidden="true">0</div>
         <div id="vsLine"></div>
+        <div id="selectCount"></div>
+        <div id="rerollCount"></div>
         <div id="stageDice"></div>
         <div id="hintTxt"></div>
       </div>
@@ -831,7 +856,7 @@ h1{font-family:var(--font-title);font-size:2.6cqh;margin:0 0 .2cqh;text-align:ce
 /* =====================================================================
    提瓦特战力党 —— 单文件人机对战（骰池版 / 16:9 全屏）
    机制：每张卡有固定骰池，攻击/防御时投出整池，自选不超过 atkCap / defCap 颗，
-        和值即攻/防值；每阶段可重投一次（重投当前选中的骰子）。
+        和值即攻/防值；每阶段可重投一次（进入重投模式后任选骰子）。
    数值经 66 组对局 × 39600 局校准，12 张卡 45%~55%
    ===================================================================== */
 
@@ -890,6 +915,9 @@ const CARDS = {
   columb:{ name:'哥伦比娅', role:'蓄力', hp:21, pool:[4,4,6,6], atkCap:3, defCap:2,
     skill:'万古潮汐', skillText:'每次攻击后积累 1 层引力值（最多 3 层）。满 3 层消耗，额外加 2 颗六面骰，和值无视防御。',
     ace:'空月归乡', aceText:'最低两颗攻击骰 → 5' },
+  trilune:{ name:'三月完全体·哥伦比娅·希珀塞莱尼娅', role:'爆发', hp:21, pool:[4,6,8], atkCap:2, defCap:2,
+    skill:'霜月 / 虹月 / 恒月权能', skillText:'攻击选骰含最大面时连击；和值为 3 的倍数时无视防御；若防御骰和值更高，将所有攻击骰变为最大面。各效果都会积累新月。新月 ≥3 时可用「新月终临」永久强化骰池、攻击或防御。',
+    ace:'玉牌骰【三月交汇】', aceText:'本阶段临时获得 3 颗四面骰（攻、防阶段均可使用）' },
 };
 const IDS = Object.keys(CARDS);
 
@@ -901,6 +929,7 @@ const ACES = {
   nahida:{type:'atk',kind:'lowTwoTo',n:4},
   neuvil:{type:'atk',kind:'lowTo',n:6},  columb:{type:'atk',kind:'lowTwoTo',n:5},
   ganyu:{type:'def',kind:'lowTo',n:4},
+  trilune:{type:'both',kind:'add',n:3,face:4},
 };
 
 /* 楠板瓙绮剧伒鍥撅細浠庡師浣滄埅鍥鹃噷鎶犲嚭鏉ョ殑褰㈢姸锛岀偣鏁扮敱 CSS 鍙犲湪涓婇潰 */
@@ -914,6 +943,7 @@ const AVA_IMG = {
   venti:'assets/av-venti.png',     ayaka:'assets/av-ayaka.png',
   nahida:'assets/av-nahida.png',   neuvil:'assets/av-neuvil.png',
   ganyu:'assets/av-ganyu.png',     columb:'assets/av-columb.png',
+  trilune:'assets/av- ColumbinaHyposelenia.png',
 };
 function avaInner(id){
   const s = AVA_IMG[id];
@@ -969,7 +999,9 @@ function mkSide(id, human){
   const c=CARDS[id];
   return { id, human, name:c.name, hp:c.hp, maxHp:c.hp,
     stacks:0, marks:0, bonusDice:[], atkPenalty:0, defPenalty:0,
-    xiaoStreak:0, aceLeft:TUNE.aceUses, shield:0 };
+    xiaoStreak:0, aceLeft:TUNE.aceUses, shield:0,
+    permanentDice:[], atkBonus:0, defBonus:0, moonStacks:0,
+    moonChoices:{ dice:false, atk:false, def:false } };
 }
 function healSide(s,amt){ const r=Math.max(0,Math.min(s.maxHp,s.hp+amt)-s.hp); s.hp+=r; return r; }
 function buildPool(A, kind, useXiao){
@@ -983,7 +1015,7 @@ function buildPool(A, kind, useXiao){
     }
     for (const f of A.bonusDice) extra.push(f);
   }
-  let all = c.pool.concat(extra);
+  let all = c.pool.concat(A.permanentDice, extra);
   const penalty = kind==='atk' ? A.atkPenalty : A.defPenalty;
   for (let i=0;i<penalty && all.length>1;i++){
     let bi=0; for (let k=1;k<all.length;k++) if (all[k]>all[bi]) bi=k;
@@ -1003,7 +1035,7 @@ function resolve(A, D, atkDice, defDice, ctx){
   const ev=[], CA=CARDS[A.id], CD=CARDS[D.id];
   const av = vals(atkDice);
   let atkVal=sum(av), defVal=sumDice(defDice);
-  let dmgMul=1, flat=0, pierce=0;
+  let dmgMul=1, flat=0, pierce=0, ignoreDefense=false;
 
   if (A.id==='hutao'){
     if (av.filter(v=>v%2===1).length >= TUNE.hutaoOdd && A.hp > TUNE.hutaoSelf){
@@ -1022,6 +1054,26 @@ function resolve(A, D, atkDice, defDice, ctx){
     }
   }
   let hold=false;
+  if (A.id==='trilune'){
+    if (!ctx.frostFollowup && atkDice.some(d=>d.v===d.f)){
+      hold=true; A.moonStacks++;
+      ev.push('「霜月权能」发动 · 选中最大面，本次攻击后立即再攻击一次；新月 +1');
+    }
+    if (atkVal%3===0){
+      ignoreDefense=true; A.moonStacks++;
+      ev.push('「虹月权能」发动 · 攻击和值为 3 的倍数，无视本次防御；新月 +1');
+    }
+    if (defVal>atkVal){
+      let changed=0;
+      atkDice.forEach(d=>{
+        if (d.v<d.f){ d.v=d.f; changed++; }
+      });
+      if (changed){
+        atkVal=sumDice(atkDice); A.moonStacks+=changed;
+        ev.push(`「恒月权能」发动 · ${changed} 颗攻击骰变为最大面；新月 +${changed}`);
+      }
+    }
+  }
   if (A.id==='venti'){
     const ok = TUNE.ventiCond==='pair' ? hasPair(av) : hasGap(av);
     if (ok){ dmgMul*=TUNE.ventiHalve; hold=true;
@@ -1052,7 +1104,8 @@ function resolve(A, D, atkDice, defDice, ctx){
     ev.push(`「${CD.skill}」发动 · 防御 +${TUNE.zhongliDef}，石化对手`);
   }
 
-  const dmg = Math.max(0, Math.floor(Math.max(0,atkVal-defVal)*dmgMul)+flat+pierce);
+  const effectiveDefVal = ignoreDefense ? 0 : defVal;
+  const dmg = Math.max(0, Math.floor(Math.max(0,atkVal-effectiveDefVal)*dmgMul)+flat+pierce);
   const absorbed = Math.min(D.shield, dmg);
   D.shield-=absorbed; D.hp-=(dmg-absorbed);
   if (absorbed) ev.push(`护盾抵消 ${absorbed} 点伤害`);
@@ -1063,7 +1116,7 @@ function resolve(A, D, atkDice, defDice, ctx){
   if (A.id==='columb') A.stacks=Math.min(3,A.stacks+1);
   if (A.id==='nahida' && hit){ D.marks=Math.min(3,D.marks+1); ev.push(`对手被挂上蕴种印（${D.marks} 层）`); }
 
-  if (D.id==='xingqiu' && defVal>=atkVal){
+  if (D.id==='xingqiu' && effectiveDefVal>=atkVal){
     for (let i=0;i<TUNE.xingqiuDice;i++) D.bonusDice.push(6);
     ev.push(`「${CD.skill}」防御成功 · 下回合骰池 +${TUNE.xingqiuDice} 颗六面骰`);
   }
@@ -1072,7 +1125,7 @@ function resolve(A, D, atkDice, defDice, ctx){
     ev.push(`「${CD.skill}」发动 · 下次攻击骰池 +1 颗六面骰`);
   }
   if (A.id!=='xiao') A.xiaoStreak=0;
-  return { atkVal, defVal, dmg, absorbed, ev, hold };
+  return { atkVal, defVal:effectiveDefVal, rawDefVal:defVal, ignoreDefense, dmg, absorbed, ev, hold };
 }
 function previewBonus(A, D, dice){
   const av=vals(dice), s=sum(av);
@@ -1093,7 +1146,7 @@ function aiWantReroll(A, D, dice, diff, isAtk){
     const sel = dice.filter(d => d.sel !== false);
     return sel.some(d => d.v < (d.f + 1) / 2);
   }
-  const cap = CARDS[A.id][isAtk?'atkCap':'defCap'];
+  const cap = CARDS[A.id][isAtk?'atkCap':'defCap'] + (isAtk ? A.atkBonus : A.defBonus);
   const avg = dice.slice().sort((a,b)=>b.v-a.v).slice(0, cap).reduce((a,d)=>a+(d.f+1)/2,0);
   const th = diff==='normal' ? 0.86 : (diff==='hard' ? 0.94 : 1.04);   // crazy 最激进
   return cur < avg*th;
@@ -1104,7 +1157,8 @@ function aiWantReroll(A, D, dice, diff, isAtk){
    ===================================================================== */
 const $ = id => document.getElementById(id);
 const S = { diff:'easy', battleDiff:'easy', mode:'free', stage:0, leyPref:'none',
-            you:null, ai:null, attacker:0, round:1, ley:null, over:false, busy:false, second:null, lastHuman:null, lastAi:null };
+            you:null, ai:null, attacker:0, round:1, ley:null, over:false, busy:false, second:null,
+            lastHuman:null, lastAi:null, lastHumanSelected:null, lastAiSelected:null };
 
 /* 姣忎釜鐢婚潰閰嶄竴寮犮€屽悓灞忓簳鍥俱€嶏紝鐢ㄤ簬濉厖闈?16:9 鏃剁殑榛戣竟 */
 const BLEED_SRC = {
@@ -1125,7 +1179,7 @@ function dieEl(d, opts){
   opts = opts || {};
   const el = document.createElement('div');
   const sp = DIE_SPRITE[d.f];
-  el.className = `die ${dshape(d.f)} sz-l` + (sp?' sp':'') + (d.sel===false?' off':' sel') + (opts.click?' click':'');
+  el.className = `die ${dshape(d.f)} sz-l` + (sp?' sp':'') + (d.sel===false?' off':' sel') + (d.reroll?' reroll':'') + (opts.click?' click':'');
   if (sp) el.style.backgroundImage = `url('${asset(sp)}')`;
   el.textContent = d.v;
   if (opts.i != null) el.style.animationDelay = (opts.i * 0.055).toFixed(3) + 's';
@@ -1150,6 +1204,14 @@ function buffsHTML(s){
   if (s.id==='raiden') b.push(`<span class="bf st">愿力 ${s.stacks}/2</span>`);
   if (s.id==='neuvil') b.push(`<span class="bf st">水痕 ${s.stacks}/3</span>`);
   if (s.id==='columb') b.push(`<span class="bf st">引力 ${s.stacks}/3</span>`);
+  if (s.id==='trilune'){
+    b.push(`<span class="bf st">新月 ${s.moonStacks}</span>`);
+    const chosen=[];
+    if (s.moonChoices.dice) chosen.push('骰池');
+    if (s.moonChoices.atk) chosen.push('攻击');
+    if (s.moonChoices.def) chosen.push('防御');
+    if (chosen.length) b.push(`<span class="bf st">终临：${chosen.join('、')}</span>`);
+  }
   if (s.id==='xiao' && s.xiaoStreak>0) b.push(`<span class="bf st">傩舞 ${s.xiaoStreak}/3</span>`);
   if (s.marks>0) b.push(`<span class="bf hd">蕴种印 ${s.marks}</span>`);
   if (s.bonusDice.length) b.push(`<span class="bf st">下回合 +${s.bonusDice.length} 骰</span>`);
@@ -1177,6 +1239,19 @@ function setVal(base, plus, dim){
   const el=$('bigVal');
   el.className=dim?'dim':'';
   el.innerHTML = plus ? `${base}<span class="plus">+${plus}</span>` : `${base}`;
+}
+function setBattleSums(opponent, player){
+  const write = (id, side, value) => {
+    const el=$(id);
+    const n = Number.isFinite(value) ? value : 0;
+    el.classList.toggle('dim', !Number.isFinite(value));
+    el.innerHTML = `<span class="sumSide">${side}</span><span class="sumNum">${n}</span><span class="sumTail">点数和</span>`;
+  };
+  write('oppTotal', '对方', opponent);
+  write('myTotal', '我方', player);
+}
+function sumSnapshot(list){
+  return Array.isArray(list) ? list.reduce((s,d)=>s+(Number.isFinite(d.v)?d.v:0),0) : null;
 }
 /* avatar centres in stage percent */
 const AVA_PT = { top:{x:26.1,y:8.7}, bot:{x:73.1,y:88.1} };
@@ -1324,7 +1399,13 @@ document.querySelectorAll('[data-ley]').forEach(b=>b.onclick=()=>{
 });
 
 /* ---------- 流程 ---------- */
-function prepare(youId){
+async function prepare(youId){
+  if (youId==='trilune'){
+    await askModal(
+      '该角色过于强力，请谨慎选择。',
+      [{key:'ack',label:'我知道了',pri:true}]
+    );
+  }
   let aiId, diff;
   if (S.mode==='story'){
     const st = STORY[S.stage];
@@ -1349,6 +1430,9 @@ function prepare(youId){
     if (ley==='shenjing') s.aceLeft=0;
   }
   S.second=null;
+  S.lastHuman=null; S.lastAi=null;
+  S.lastHumanSelected=null; S.lastAiSelected=null;
+  setBattleSums(null, null);
 
   $('startYouAva').innerHTML=avaInner(S.you.id); $('startYouName').textContent=S.you.name;
   $('startYouRole').textContent=CARDS[youId].role;
@@ -1405,10 +1489,38 @@ function askModal(msg, opts){
 }
 
 /* ---------- 回合 ---------- */
+async function triggerNewMoon(A){
+  if (A.id!=='trilune' || A.moonStacks<3) return;
+  const available = [
+    { key:'dice', label:'获得一个六面骰', desc:'骰池永久 +1 颗六面骰' },
+    { key:'atk', label:'攻击层数 +1', desc:'攻击选骰上限永久 +1' },
+    { key:'def', label:'防御层数 +1', desc:'防御选骰上限永久 +1' },
+  ].filter(o=>!A.moonChoices[o.key]);
+  if (!available.length) return;
+
+  A.moonStacks-=3;
+  let choice=available[0].key;
+  if (A.human){
+    choice=await askModal(
+      '「新月终临」发动<br>消耗 <b>3</b> 层新月，选择一项本局永久强化（已选项不会再次出现）。',
+      available.map((o,i)=>({ key:o.key, label:o.label, pri:i===0 }))
+    );
+  } else {
+    choice=available[0].key;
+  }
+  A.moonChoices[choice]=true;
+  if (choice==='dice') A.permanentDice.push(6);
+  if (choice==='atk') A.atkBonus++;
+  if (choice==='def') A.defBonus++;
+}
+
 async function beginTurn(){
   if (S.over) return;
   const A = S.attacker===0 ? S.you : S.ai;
   const D = S.attacker===0 ? S.ai : S.you;
+  paint();
+
+  await triggerNewMoon(A);
   paint();
 
   let useXiao=false;
@@ -1435,12 +1547,13 @@ async function beginTurn(){
 
 async function selectPhase(A, D, dice, kind, ctx){
   const isAtk = kind==='atk';
-  const cap = CARDS[A.id][isAtk?'atkCap':'defCap'];
+  const cap = CARDS[A.id][isAtk?'atkCap':'defCap'] + (isAtk ? A.atkBonus : A.defBonus);
   let rerolls = TUNE.rerolls;
   let aceUsed = false;
+  let rerollMode = false;
   const yourTurn = A.human;
   const label = isAtk ? '攻击' : '防御';
-  const aceTypeOk = ACES[A.id].type === kind;
+  const aceTypeOk = ACES[A.id].type === kind || ACES[A.id].type === 'both';
 
   autoSelect(dice, cap);
 
@@ -1454,7 +1567,8 @@ async function selectPhase(A, D, dice, kind, ctx){
     const paintZone = (zone, side, tag, isActor) => {
       zone.className = 'diceZone' + (isActor ? ' acting' : '');
       const lab = document.createElement('span'); lab.className = 'plabel';
-      lab.textContent = `${tag} · ${side.name} 骰池 ${CARDS[side.id].pool.length} 颗`;
+      const poolSize = isActor ? dice.length : CARDS[side.id].pool.length + side.permanentDice.length;
+      lab.textContent = `${tag} · ${side.name} 骰池 ${poolSize} 颗`;
       zone.appendChild(lab);
       const out = [];
       if (isActor) {
@@ -1473,28 +1587,62 @@ async function selectPhase(A, D, dice, kind, ctx){
     const myEls  = paintZone(myZone,  me,  '我方', yourTurn);
     const els = yourTurn ? myEls : oppEls;
     curEls = els;
-    if (opts && opts.roll) rollAnim(dice, els);
+    if (opts && opts.roll){
+      const rolledDice = opts.rolledDice || dice;
+      const rolledEls = rolledDice.map(d=>els[dice.indexOf(d)]).filter(Boolean);
+      rollAnim(rolledDice, rolledEls);
+    }
 
     const sel = dice.filter(d=>d.sel!==false);
+    const selectedSnap = sel.map(d => ({ f:d.f, v:d.v }));
+    if (A.human) S.lastHumanSelected = selectedSnap;
+    else S.lastAiSelected = selectedSnap;
+    const opponentSum = yourTurn ? sumSnapshot(S.lastAiSelected || S.lastAi) : sumDice(sel);
+    const playerSum = yourTurn ? sumDice(sel) : sumSnapshot(S.lastHumanSelected || S.lastHuman);
+    setBattleSums(opponentSum, playerSum);
     setVal(sumDice(sel), previewBonus(A,D,sel), sel.length===0);
     $('vsLine').textContent = yourTurn
-      ? `已选 ${sel.length} / ${cap}　·　骰池 ${dice.length} 颗`
+      ? (rerollMode
+        ? `已选择 ${dice.filter(d=>d.reroll).length} 颗骰子重新投掷　·　骰池 ${dice.length} 颗`
+        : `已选 ${sel.length} / ${cap}　·　骰池 ${dice.length} 颗`)
       : `${A.name} 正在选择${label}骰…`;
 
     if (yourTurn){
-      $('hintTxt').innerHTML = `点击骰子切换选中（最多 <b>${cap}</b> 颗）　·　重投会重投<b>选中的骰子</b>`;
+      const pickedForReroll = dice.filter(d=>d.reroll).length;
+      $('rerollTxt').textContent = rerollMode
+        ? (pickedForReroll ? '确认投掷' : '取消重新投掷')
+        : '重新投掷';
+      $('rerollCount').textContent = `${rerolls}/${TUNE.rerolls}`;
+      $('selectCount').textContent = rerollMode ? '' : `${sel.length}/${cap}`;
+      $('hintTxt').innerHTML = rerollMode
+        ? '点击任意骰子选择重投；确认后仅选中的骰子会重新投掷。'
+        : `点击骰子切换选中（最多 <b>${cap}</b> 颗）　·　可先点击重新投掷，再选择任意骰子。`;
       setAce({ top: aceTypeOk ? CARDS[A.id].ace : '', cnt: A.aceLeft,
                sub: aceTypeOk ? CARDS[A.id].aceText : '本回合不可用' });
-      setHot('hotAce',   { disabled: !aceTypeOk||aceUsed||A.aceLeft<=0, title: aceUsed?'已使用':CARDS[A.id].ace });
-      setHot('hotReroll',{ disabled: rerolls<=0, title:`重新投掷（剩余 ${rerolls}）` });
-      setHot('hotOk',    { disabled: sel.length===0, title:'确认使用' });
+      setHot('hotAce',   { disabled: rerollMode||!aceTypeOk||aceUsed||A.aceLeft<=0, title: aceUsed?'已使用':CARDS[A.id].ace });
+      setHot('hotReroll',{ disabled: rerollMode ? false : rerolls<=0,
+        title: rerollMode ? (pickedForReroll ? '确认投掷' : '取消重新投掷') : `重新投掷（剩余 ${rerolls}）` });
+      setHot('hotOk',    { disabled: rerollMode||sel.length===0, title:'确认使用' });
     } else {
       $('hintTxt').textContent = `${A.name} 行动中…`;
+      $('rerollTxt').textContent = '重新投掷';
+      $('rerollCount').textContent = '';
+      $('selectCount').textContent = '';
       setAce({ top:'', cnt:'', sub:'' });
       setHot('hotAce',{disabled:true}); setHot('hotReroll',{disabled:true}); setHot('hotOk',{disabled:true});
     }
   };
   const toggle = d => {
+    if (rerollMode){
+      d.reroll=!d.reroll;
+      curEls.forEach((el,i)=>el.classList.toggle('reroll', !!dice[i].reroll));
+      const rerollCount=dice.filter(x=>x.reroll).length;
+      $('vsLine').textContent=`已选择 ${rerollCount} 颗骰子重新投掷　·　骰池 ${dice.length} 颗`;
+      $('selectCount').textContent='';
+      $('rerollTxt').textContent = rerollCount ? '确认投掷' : '取消重新投掷';
+      setHot('hotReroll',{disabled:false, title:rerollCount ? '确认投掷' : '取消重新投掷'});
+      return;
+    }
     if (d.sel===false){
       const sel = dice.filter(x=>x.sel!==false);
       if (sel.length >= cap){
@@ -1509,31 +1657,51 @@ async function selectPhase(A, D, dice, kind, ctx){
       el.classList.toggle('sel', dice[i].sel !== false);
     });
     const selNow = dice.filter(x=>x.sel!==false);
+    setBattleSums(sumSnapshot(S.lastAiSelected || S.lastAi), sumDice(selNow));
     setVal(sumDice(selNow), previewBonus(A,D,selNow), selNow.length===0);
     $('vsLine').textContent = `已选 ${selNow.length} / ${cap}　·　骰池 ${dice.length} 颗`;
+    $('selectCount').textContent = `${selNow.length}/${cap}`;
     setHot('hotOk', { disabled: selNow.length===0 });
   };
   const rerollNow = () => {
-    if (rerolls<=0) return;
-    const sel = dice.filter(d=>d.sel!==false);
-    if (!sel.length) return;
-    rerolls--;
-    sel.forEach(d => { d.v = R(d.f); });
+    if (!rerollMode){
+      if (rerolls<=0) return;
+      dice.forEach(d=>{ d.reroll=false; d.sel=false; });
+      rerollMode=true;
+      refresh();
+      return;
+    }
+    const targets=dice.filter(d=>d.reroll);
+    if (!targets.length){
+      rerollMode=false;
+      dice.forEach(d=>{ d.reroll=false; });
+      refresh();
+      return;
+    }
+    rerolls--; rerollMode=false;
+    targets.forEach(d => { d.v = R(d.f); d.reroll=false; });
     autoSelect(dice, cap);
-    refresh({roll:true, pool:false});
+    refresh({roll:true, rolledDice:targets});
   };
   const useAceNow = () => {
     if (aceUsed || A.aceLeft<=0) return;
+    const oldDice=new Set(dice);
     applyAce(A.id, dice); A.aceLeft--; aceUsed=true;
     autoSelect(dice, cap);
-    refresh({roll:true, pool:false});
+    const addedDice=dice.filter(d=>!oldDice.has(d));
+    refresh(addedDice.length ? {roll:true, rolledDice:addedDice} : undefined);
   };
   let done=null, resolveAsk=null;
   const waitAsk = new Promise(res=>{ resolveAsk=res; });
   const answer = () => { const f=resolveAsk; resolveAsk=null; if (f) f(); };
   $('hotReroll').onclick = rerollNow;
   $('hotAce').onclick = useAceNow;
-  $('hotOk').onclick = () => { done = { dice: dice.filter(d=>d.sel!==false) }; answer(); };
+  $('hotOk').onclick = () => {
+    const selected=dice.filter(d=>d.sel!==false);
+    $('selectCount').textContent = `${selected.length}/${cap}`;
+    done = { dice: selected };
+    answer();
+  };
 
   refresh({roll:true});
 
@@ -1568,64 +1736,84 @@ async function endTurn(A, D, atkRes, ctx){
   void shieldEl.offsetWidth;
   shieldEl.classList.add('on');
   const defRes = await selectPhase(D, A, dice, 'def', {});
-  await wait(120);
-  fireBeam(A.human, A.id);
-  await wait(3800);
+  // 最终展示区域固定按屏幕位置表达语义：上方永远是对方，下方永远是我方。
+  // 行动方变化时，只交换骰子来源和角色信息，不交换两个区域。
+  const opponentSide = A.human ? D : A;
+  const playerSide = A.human ? A : D;
+  const opponentDice = A.human ? defRes.dice : atkRes.dice;
+  const playerDice = A.human ? atkRes.dice : defRes.dice;
 
-  const res = resolve(A, D, atkRes.dice, defRes.dice, ctx);
-
-  // after the round, each zone keeps its OWN final dice -- never merge the two
-  const meF  = A.human ? A : D;
-  const foeF = A.human ? D : A;
   const paintFinal = (zone, side, tag, arr) => {
     zone.className = 'diceZone';
     zone.innerHTML = '';
     const lab = document.createElement('span'); lab.className = 'plabel';
-    lab.textContent = `${tag} · ${side.name} 投出 ${arr.reduce((s,d)=>s+d.v,0)}`;
+    lab.textContent = `${tag} · ${side.name} ${arr.reduce((s,d)=>s+d.v,0)} 点数和`;
     zone.appendChild(lab);
     arr.forEach(d => zone.appendChild(dieMini(d.f, d.v)));
   };
-  paintFinal($('poolRow'),  foeF, '对方', A.human ? defRes.dice : atkRes.dice);
-  paintFinal($('poolMine'), meF,  '我方', A.human ? atkRes.dice : defRes.dice);
 
-  $('stageDice').innerHTML='';
-  setVal(res.atkVal, 0, false);
-  $('vsLine').textContent = res.dmg>0
-    ? `${A.name} 攻 ${res.atkVal} − ${D.name} 防 ${res.defVal}`
-    : `${A.name} 攻 ${res.atkVal} ≤ ${D.name} 防 ${res.defVal} · 完全挡下`;
-  $('hintTxt').innerHTML = res.ev.length ? res.ev.join('<br>') : '';
-  setAce({top:'',cnt:'',sub:''});
-  setHot('hotAce',{disabled:true}); setHot('hotReroll',{disabled:true}); setHot('hotOk',{disabled:true});
-  paint();
+  const playAttack = async (attackDice, isFollowup) => {
+    if (isFollowup){
+      shieldEl.classList.remove('brk','fade','on');
+      void shieldEl.offsetWidth;
+      shieldEl.classList.add('on');
+    }
+    fireBeam(A.human, A.id);
+    await wait(3800);
+    const res = resolve(A, D, attackDice, defRes.dice, { ...ctx, frostFollowup:isFollowup });
 
-  const atkFx  = A.human ? $('glowBot') : $('glowTop');
-  const defFx  = D.human ? $('glowBot') : $('glowTop');
-  atkFx.classList.add('lunge');
-  setTimeout(()=>atkFx.classList.remove('lunge'), 900);
-  if (res.dmg>0){
-    // attack beat defence -> the shield SHATTERS
-    shieldEl.classList.remove('on');
-    shieldEl.classList.add('brk');
-    defFx.classList.add('hit');
-    $('board').classList.add('quake');
-    setTimeout(()=>{ defFx.classList.remove('hit'); $('board').classList.remove('quake'); }, 540);
-    $('flashNum').textContent='-' + res.dmg;
-    $('flash').classList.add('on');
-    setTimeout(()=>$('flash').classList.remove('on'), 1500);
-    await wait(1400);
-  } else {
-    // fully blocked -> shield holds, no damage number at all
-    shieldEl.classList.remove('on');
-    shieldEl.classList.add('fade');
-    defFx.classList.add('blocked');
-    setTimeout(()=>defFx.classList.remove('blocked'), 900);
-    setTimeout(()=>shieldEl.classList.remove('fade'), 1400);
-    await wait(1400);
+    paintFinal($('poolRow'),  opponentSide, '对方', opponentDice);
+    paintFinal($('poolMine'), playerSide, '我方', playerDice);
+    setBattleSums(sumDice(opponentDice), sumDice(playerDice));
+    $('stageDice').innerHTML='';
+    setVal(res.atkVal, 0, false);
+    $('vsLine').textContent = res.ignoreDefense
+      ? `${A.name} 攻 ${res.atkVal} · 无视 ${D.name} 防御（${res.rawDefVal}）`
+      : res.dmg>0
+      ? `${A.name} 攻 ${res.atkVal} − ${D.name} 防 ${res.defVal}`
+      : `${A.name} 攻 ${res.atkVal} ≤ ${D.name} 防 ${res.defVal} · 完全挡下`;
+    $('hintTxt').innerHTML = (isFollowup ? '<b>霜月追击 · 相同骰值再次攻击</b><br>' : '') + (res.ev.length ? res.ev.join('<br>') : '');
+    setAce({top:'',cnt:'',sub:''});
+    setHot('hotAce',{disabled:true}); setHot('hotReroll',{disabled:true}); setHot('hotOk',{disabled:true});
+    paint();
+
+    const atkFx  = A.human ? $('glowBot') : $('glowTop');
+    const defFx  = D.human ? $('glowBot') : $('glowTop');
+    atkFx.classList.add('lunge');
+    setTimeout(()=>atkFx.classList.remove('lunge'), 900);
+    if (res.dmg>0){
+      shieldEl.classList.remove('on');
+      shieldEl.classList.add('brk');
+      defFx.classList.add('hit');
+      $('board').classList.add('quake');
+      setTimeout(()=>{ defFx.classList.remove('hit'); $('board').classList.remove('quake'); }, 540);
+      $('flashNum').textContent='-' + res.dmg;
+      $('flash').classList.add('on');
+      setTimeout(()=>$('flash').classList.remove('on'), 1500);
+      await wait(1400);
+    } else {
+      shieldEl.classList.remove('on');
+      shieldEl.classList.add('fade');
+      defFx.classList.add('blocked');
+      setTimeout(()=>defFx.classList.remove('blocked'), 900);
+      setTimeout(()=>shieldEl.classList.remove('fade'), 1400);
+      await wait(1400);
+    }
+    await wait(1150);
+    return res;
+  };
+
+  const first = await playAttack(atkRes.dice, false);
+  let frostFollowupDone = false;
+  if (first.hold && A.id==='trilune'){
+    // 霜月追击复用第一次攻击和防御的相同点数，不再重投或重新选择。
+    await playAttack(atkRes.dice, true);
+    frostFollowupDone = true;
   }
-  await wait(1150);
-
   if (S.you.hp<=0 || S.ai.hp<=0){ finish(); return; }
-  if (!res.hold) S.attacker=1-S.attacker;
+  // 霜月两次攻击属于同一个回合；追击结束后必须把行动方交给防守方。
+  // 其他仍使用 hold 的技能保留原有行为。
+  if (!first.hold || frostFollowupDone) S.attacker=1-S.attacker;
   S.round++;
   await wait(220);
   beginTurn();
@@ -1686,7 +1874,7 @@ const LV_NAME = { easy:'简单', normal:'中等', hard:'困难', crazy:'疯狂' 
 const AVA_COLOR = {
   hutao:'#c2453a', xiao:'#3aa6a0', zhongli:'#b08a3c', raiden:'#8b5fd0', bennett:'#d4743a',
   xingqiu:'#3a7fd0', venti:'#4fbf8f', ayaka:'#7fb8e8', nahida:'#6fbf5a', neuvil:'#3f6fd0',
-  ganyu:'#8fd0e8', columb:'#a06fd0',
+  ganyu:'#8fd0e8', columb:'#a06fd0', trilune:'#d0d8ff',
 };
 function avaStyle(id){
   const c = AVA_COLOR[id] || '#4b5c86';
@@ -1716,7 +1904,7 @@ function renderCodex(){
         <li><b>骰池</b>：每名角色有固定骰池，当前 12 名角色都是 ${d4}${d4}${d6}${d6}（2 颗四面骰 + 2 颗六面骰）。</li>
         <li><b>可用上限</b>：攻击和防御各有上限（攻 2~3 / 防 2~3）。投出整池后，你只能从中<b>挑不超过上限的颗数</b>。</li>
         <li><b>和值</b>：选中骰子的点数之和，就是本次的攻击值 / 防御值，显示在中央的大数字上。</li>
-        <li><b>重投</b>：每个阶段可重投 <b>1</b> 次，重投的是<b>当前选中的骰子</b>（不是全部），也可能变得更差。</li>
+        <li><b>重投</b>：每个阶段可重投 <b>1</b> 次。先点“重新投掷”，再任选需要重投的骰子并点“确认投掷”；未选骰子不会重投，也不会播放投掷动画。</li>
         <li><b>骰面</b>：${d4} 四面骰 1~4　${d6} 六面骰 1~6　${d8} 八面骰 1~8（目前仅部分技能会临时加入）。</li>
       </ul>
     </div>
