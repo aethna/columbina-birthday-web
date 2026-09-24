@@ -657,6 +657,14 @@ h1{font-family:var(--font-title);font-size:2.6cqh;margin:0 0 .2cqh;text-align:ce
 .cxInfo .diceRow{display:inline-flex;gap:.5cqh;align-items:center;vertical-align:middle;
   margin:0 .5cqh}
 .cxInfo .tag{display:inline-block;min-width:11cqh;font-weight:800;color:var(--purple)}
+
+/* 图鉴英文（中英双语并排：中文一行，英文紧随其下一行，小一号、暗一档）。
+   不依赖语言开关，iframe 里也稳定。 */
+.en{display:block;font-size:.92em;line-height:1.45;color:var(--dim);margin-top:.25cqh}
+.en b{color:var(--txt);font-weight:700}
+.en em{font-style:normal;color:#9fd8ee}
+.cxInfo .en{margin-top:.15cqh}
+.cxSk .en,.cxAce .en{font-size:.88em;margin-top:.15cqh}
 /* 选人页复用图鉴的卡片样式，两列排布 + 可点 */
 #roster{display:grid;grid-template-columns:repeat(2,1fr);gap:1.2cqh;
   max-width:80%;margin:1.6cqh auto 0;padding-bottom:2cqh}
@@ -920,6 +928,57 @@ const CARDS = {
     ace:'玉牌骰【三月交汇】', aceText:'本阶段临时获得 3 颗四面骰（攻、防阶段均可使用）' },
 };
 const IDS = Object.keys(CARDS);
+
+/* 图鉴英文（只用于图鉴页；选卡页仍是纯中文）。
+   中英双语并排展示，因此这里只是给 .en 用的对照文本，不影响任何玩法数值。 */
+const EN_NAME = {
+  hutao:'Hu Tao', xiao:'Xiao', zhongli:'Zhongli', raiden:'Raiden Shogun',
+  bennett:'Bennett', xingqiu:'Xingqiu', venti:'Venti', ayaka:'Kamisato Ayaka',
+  nahida:'Nahida', neuvil:'Neuvillette', ganyu:'Ganyu', columb:'Columbina',
+  trilune:'Trilune Sovereign · Columbina Hyposelenia',
+};
+const EN_ROLE = {
+  '主C':'Main DPS', '坦克':'Tank', '均衡':'Balanced', '控制':'Control',
+  '蓄力':'Charge', '爆发':'Burst',
+};
+const EN_SKILL = {
+  hutao:'Guide to Afterlife', xiao:'Bane of All Evil', zhongli:'Dominus Lapidis',
+  raiden:'Musou Shinsetsu', bennett:'Fantastic Voyage', xingqiu:'Guhua Sword: Raincutter',
+  venti:'Skyward Sonnet', ayaka:'Kamisato Art: Soumetsu', nahida:'Seeds of Skandha',
+  neuvil:'Heir to the Ancient Sea', ganyu:'Frostflake Arrow',
+  columb:'Tides of Antiquity', trilune:'Frost Moon / Rainbow Moon / Constant Moon',
+};
+const EN_SKILLTEXT = {
+  hutao:'When at least 2 attack dice are odd, lose 1 HP to deal ×1.5 +2 damage this round; if HP is then ≤10, +2 more.',
+  xiao:'At the start of a round you may lose 2 HP to add 3 extra D4 to this round\u2019s pool; on the 3rd consecutive use, +4 extra damage.',
+  zhongli:'When the defence dice total ≥10, add +2 defence and petrify the opponent (their next round\u2019s attack dice −1).',
+  raiden:'Each time you deal damage, gain 1 stack of Resolve (max 2). Before attacking, spend all stacks to add 2 extra D6 each.',
+  bennett:'When the attack dice total ≤6, heal 2 HP; when it is ≥12, deal +3 damage this round.',
+  xingqiu:'When a defence succeeds (defence ≥ attack), add 1 extra D6 to next round\u2019s pool.',
+  venti:'When the attack dice show consecutive values, this round\u2019s damage is halved, but you may attack once more immediately.',
+  ayaka:'When the attack dice contain at least one pair, deal +1 damage and reduce the opponent\u2019s next round\u2019s defence dice by 1.',
+  nahida:'Each hit puts 1 stack of Skandha Mark on the opponent (max 3). A pair among the attack dice detonates it: 2 damage per stack, ignoring defence.',
+  neuvil:'Each attack adds 1 stack of Water Mark. The 3rd stack is consumed automatically for 4 fixed damage and 2 HP healed.',
+  ganyu:'When at least 2 defence dice are even, add 1 extra D6 to your next attack pool.',
+  columb:'Each attack builds 1 stack of Gravity (max 3). At 3 stacks they are consumed to add 2 extra D6 whose total ignores defence.',
+  trilune:'Attack combos when a selected die shows its maximum face; totals divisible by 3 ignore defence; if the defence total is higher, all attack dice become their maximum face. Each effect builds New Moon. At ≥3 New Moons, \u201cNew Moon Advent\u201d permanently empowers your pool, attack or defence.',
+};
+const EN_ACE = {
+  hutao:'Butterfly\u2019s Embrace', xiao:'Demon\u2019s Bane', zhongli:'Planet Befall',
+  raiden:'Musou no Hitotachi', bennett:'Inspiration', xingqiu:'Rain Cutter',
+  venti:'Skyward Poem', ayaka:'Thin Ice', nahida:'Maya\u2019s Sanctum',
+  neuvil:'Equity', ganyu:'Ice Lotus', columb:'Homeward Moon',
+  trilune:'Jade Tile Die [Trilune Convergence]',
+};
+const EN_ACETEXT = {
+  hutao:'Lowest attack die → 5', xiao:'Add 2 extra D6 to the pool',
+  zhongli:'Lowest defence die → 5', raiden:'Lowest attack die → 5',
+  bennett:'Lowest attack die → 4', xingqiu:'Two lowest defence dice → 3',
+  venti:'Lowest defence die → 6', ayaka:'Lowest attack die → 4',
+  nahida:'Two lowest attack dice → 4', neuvil:'Lowest attack die → 6',
+  ganyu:'Lowest defence die → 4', columb:'Two lowest attack dice → 5',
+  trilune:'Temporarily gain 3 D4 this phase (usable in attack or defence)',
+};
 
 const ACES = {
   hutao:{type:'atk',kind:'lowTo',n:5},   xiao:{type:'atk',kind:'add',n:2,face:6},
@@ -1367,24 +1426,31 @@ function setAce(a){
 }
 
 /* ---------- 选卡 ---------- */
+/* 角色卡 HTML。showEn=true 时在图鉴里追加英文（中英双语并排）；
+   选卡页（renderRoster）不传，保持原样 —— 英文只加在图鉴。 */
+function cardHTML(id, showEn){
+  const c=CARDS[id];
+  const en = (s)=> showEn ? s : '';
+  return `<div class="cxAva">${avaInner(id)}</div>
+      <div class="cxBody">
+        <div class="cxName">${c.name}<em>${c.role}</em>${en(`<span class="en">${EN_NAME[id]||''}<em>${EN_ROLE[c.role]||''}</em></span>`)}</div>
+        <div class="cxStats">
+          <span>生命 <b>${c.hp}</b>${en(`<span class="en">HP <b>${c.hp}</b></span>`)}</span>
+          <span>骰池 <b>${c.pool.length} 颗</b>（${c.pool.map(f=>f+'面').join(' + ')}）${en(`<span class="en">Pool <b>${c.pool.length} dice</b> (${c.pool.map(f=>'D'+f).join(' + ')})</span>`)}</span>
+          <span>攻击上限 <b>${c.atkCap}</b>${en(`<span class="en">Attack cap <b>${c.atkCap}</b></span>`)}</span>
+          <span>防御上限 <b>${c.defCap}</b>${en(`<span class="en">Defence cap <b>${c.defCap}</b></span>`)}</span>
+        </div>
+        <div class="cxSk"><b>${c.skill}</b>　${c.skillText}${en(`<span class="en"><b>${EN_SKILL[id]||''}</b>　${EN_SKILLTEXT[id]||''}</span>`)}</div>
+        <div class="cxAce"><b>王牌骰「${c.ace}」</b>　${c.aceText}<span style="color:var(--dim)">　（每局 ${TUNE.aceUses} 次）</span>${en(`<span class="en"><b>Ace Die “${EN_ACE[id]||''}”</b>　${EN_ACETEXT[id]||''}　(uses per match: ${TUNE.aceUses})</span>`)}</div>
+      </div>`;
+}
+
 function renderRoster(){
   const box=$('roster'); box.innerHTML='';
   for (const id of IDS){
-    const c=CARDS[id];
     const el=document.createElement('div');
     el.className='cxCard';
-    el.innerHTML=`<div class="cxAva">${avaInner(id)}</div>
-      <div class="cxBody">
-        <div class="cxName">${c.name}<em>${c.role}</em></div>
-        <div class="cxStats">
-          <span>生命 <b>${c.hp}</b></span>
-          <span>骰池 <b>${c.pool.length} 颗</b>（${c.pool.map(f=>f+'面').join(' + ')}）</span>
-          <span>攻击上限 <b>${c.atkCap}</b></span>
-          <span>防御上限 <b>${c.defCap}</b></span>
-        </div>
-        <div class="cxSk"><b>${c.skill}</b>　${c.skillText}</div>
-        <div class="cxAce"><b>王牌骰「${c.ace}」</b>　${c.aceText}<span style="color:var(--dim)">　（每局 ${TUNE.aceUses} 次）</span></div>
-      </div>`;
+    el.innerHTML=cardHTML(id, false);
     el.onclick=()=>prepare(id);
     box.appendChild(el);
   }
@@ -1888,65 +1954,53 @@ function renderCodex(){
   const d8 = `<span class="diceRow"><span class="die f8 sz-s sp" style="background-image:url('${asset('assets/die-d8.png')}')"></span></span>`;
   box.insertAdjacentHTML('beforeend', `
     <div class="cxInfo">
-      <h3>规则说明</h3>
+      <h3>规则说明<span class="en">Rules</span></h3>
       <ul>
-        <li>每局双方各选 <b>1</b> 名角色，<b>不能选同一名</b>。</li>
-        <li>开局投币定先后手，<b>后手方额外 +2 生命值</b>作为补偿。</li>
-        <li>每回合由攻击方先投攻击骰，防御方再投防御骰，双方各自选骰。</li>
-        <li>伤害 = <b>max(0, 攻击值 − 防御值)</b>。防御值 ≥ 攻击值即完全挡下，不掉血。</li>
-        <li>任一方生命降到 <b>0</b> 即落败。平均一局约 14~15 回合。</li>
-        <li>地脉异常（可选）会在开局给双方附加额外规则，见对局前的选项。</li>
+        <li>每局双方各选 <b>1</b> 名角色，<b>不能选同一名</b>。<span class="en">Each side picks <b>1</b> character per match, and the two <b>must differ</b>.</span></li>
+        <li>开局投币定先后手，<b>后手方额外 +2 生命值</b>作为补偿。<span class="en">A coin toss at the start decides who moves first; the <b>second player gets +2 HP</b> as compensation.</span></li>
+        <li>每回合由攻击方先投攻击骰，防御方再投防御骰，双方各自选骰。<span class="en">Each round the attacker rolls attack dice first, then the defender rolls defence dice; both pick their own dice.</span></li>
+        <li>伤害 = <b>max(0, 攻击值 − 防御值)</b>。防御值 ≥ 攻击值即完全挡下，不掉血。<span class="en">Damage = <b>max(0, attack − defence)</b>. If defence ≥ attack the hit is fully blocked and no HP is lost.</span></li>
+        <li>任一方生命降到 <b>0</b> 即落败。平均一局约 14~15 回合。<span class="en">A side loses when its HP reaches <b>0</b>. An average match lasts about 14–15 rounds.</span></li>
+        <li>地脉异常（可选）会在开局给双方附加额外规则，见对局前的选项。<span class="en">Leyline anomalies (optional) add an extra rule for both sides at the start — see the pre-match options.</span></li>
       </ul>
     </div>
     <div class="cxInfo">
-      <h3>骰子</h3>
+      <h3>骰子<span class="en">Dice</span></h3>
       <ul>
-        <li><b>骰池</b>：每名角色有固定骰池，当前 12 名角色都是 ${d4}${d4}${d6}${d6}（2 颗四面骰 + 2 颗六面骰）。</li>
-        <li><b>可用上限</b>：攻击和防御各有上限（攻 2~3 / 防 2~3）。投出整池后，你只能从中<b>挑不超过上限的颗数</b>。</li>
-        <li><b>和值</b>：选中骰子的点数之和，就是本次的攻击值 / 防御值，显示在中央的大数字上。</li>
-        <li><b>重投</b>：每个阶段可重投 <b>1</b> 次。先点“重新投掷”，再任选需要重投的骰子并点“确认投掷”；未选骰子不会重投，也不会播放投掷动画。</li>
-        <li><b>骰面</b>：${d4} 四面骰 1~4　${d6} 六面骰 1~6　${d8} 八面骰 1~8（目前仅部分技能会临时加入）。</li>
+        <li><b>骰池</b>：每名角色有固定骰池，当前 12 名角色都是 ${d4}${d4}${d6}${d6}（2 颗四面骰 + 2 颗六面骰）。<span class="en"><b>Dice pool</b>: every character has a fixed pool — currently all 12 characters use ${d4}${d4}${d6}${d6} (2×D4 + 2×D6).</span></li>
+        <li><b>可用上限</b>：攻击和防御各有上限（攻 2~3 / 防 2~3）。投出整池后，你只能从中<b>挑不超过上限的颗数</b>。<span class="en"><b>Selection cap</b>: attack and defence each have a cap (attack 2–3 / defence 2–3). After rolling the whole pool you may only <b>pick up to that many</b>.</span></li>
+        <li><b>和值</b>：选中骰子的点数之和，就是本次的攻击值 / 防御值，显示在中央的大数字上。<span class="en"><b>Total</b>: the sum of the dice you selected is this round's attack / defence value, shown as the big number in the centre.</span></li>
+        <li><b>重投</b>：每个阶段可重投 <b>1</b> 次。先点“重新投掷”，再任选需要重投的骰子并点“确认投掷”；未选骰子不会重投，也不会播放投掷动画。<span class="en"><b>Reroll</b>: once per phase. Press “Reroll”, then pick the dice you want to reroll and press “Confirm”; unselected dice are not rerolled and play no roll animation.</span></li>
+        <li><b>骰面</b>：${d4} 四面骰 1~4　${d6} 六面骰 1~6　${d8} 八面骰 1~8（目前仅部分技能会临时加入）。<span class="en"><b>Faces</b>: ${d4} D4 1–4　${d6} D6 1–6　${d8} D8 1–8 (currently only some skills add them temporarily).</span></li>
       </ul>
     </div>
     <div class="cxInfo">
-      <h3>王牌骰子</h3>
+      <h3>王牌骰子<span class="en">Ace Dice</span></h3>
       <ul>
-        <li>每名角色有 <b>1 个专属王牌骰</b>，每局可使用 <b>${TUNE.aceUses} 次</b>。</li>
-        <li>在攻击或防御阶段，点右侧<b>黄色圆</b>上的王牌骰按钮发动，发动后会重投骰子。</li>
-        <li>王牌骰<b>分攻 / 防两种</b>：攻击型只能在攻击阶段用，防御型只能在防御阶段用。</li>
-        <li>多数效果是<b>把最低的点数抬到某个值</b>，也有<b>直接加骰子</b>的类型。</li>
-        <li>地脉异常会影响次数：<b>风起地</b> −1 次，<b>深境回响</b> 直接禁用。</li>
-        <li>各角色的具体王牌骰效果见下方卡片。</li>
+        <li>每名角色有 <b>1 个专属王牌骰</b>，每局可使用 <b>${TUNE.aceUses} 次</b>。<span class="en">Each character has <b>1 signature Ace Die</b>, usable <b>${TUNE.aceUses} times</b> per match.</span></li>
+        <li>在攻击或防御阶段，点右侧<b>黄色圆</b>上的王牌骰按钮发动，发动后会重投骰子。<span class="en">During the attack or defence phase, press the Ace button on the <b>yellow circle</b> at the right; using it rerolls your dice.</span></li>
+        <li>王牌骰<b>分攻 / 防两种</b>：攻击型只能在攻击阶段用，防御型只能在防御阶段用。<span class="en">Ace Dice come in <b>attack and defence types</b>: attack-only in the attack phase, defence-only in the defence phase.</span></li>
+        <li>多数效果是<b>把最低的点数抬到某个值</b>，也有<b>直接加骰子</b>的类型。<span class="en">Most effects <b>raise your lowest dice to a set value</b>; some <b>add extra dice</b> instead.</span></li>
+        <li>地脉异常会影响次数：<b>风起地</b> −1 次，<b>深境回响</b> 直接禁用。<span class="en">Leyline anomalies change the uses: <b>Windrise</b> −1 use, <b>Abyssal Echo</b> disables them entirely.</span></li>
+        <li>各角色的具体王牌骰效果见下方卡片。<span class="en">See the cards below for each character's specific Ace Die effect.</span></li>
       </ul>
     </div>
     <div class="cxInfo">
-      <h3>地脉异常</h3>
+      <h3>地脉异常<span class="en">Leyline Anomalies</span></h3>
       <ul>
-        <li>选卡页可以把地脉设为<b>随机</b>，本局会附加一条，<b>双方同时受影响</b>。</li>
-        <li><b>地脉平涌</b> —— 双方生命值上限 <b>+4</b>，并立刻回复 4 点。整体变肉，对局拉长。</li>
-        <li><b>岩脉共振</b> —— 双方开局各获得 <b>4 点护盾</b>。伤害先扣盾再扣血，前期几刀打不疼。</li>
-        <li><b>风起地</b> —— 双方王牌骰可用次数 <b>−1</b>（2 次降为 1 次），名额更金贵。</li>
-        <li><b>深境回响</b> —— 本局双方 <b>都不能使用王牌骰</b>，纯拼骰运与选骰。</li>
-        <li>带地脉后平均回合数会变化：平涌 / 岩脉共振约 <b>16 回合</b>，风起地 / 深境回响约 <b>14.5 回合</b>，无地脉约 14 回合。</li>
+        <li>选卡页可以把地脉设为<b>随机</b>，本局会附加一条，<b>双方同时受影响</b>。<span class="en">On the character-select page you can set the leyline to <b>random</b>; one is applied for the match and <b>affects both sides</b>.</span></li>
+        <li><b>地脉平涌</b> —— 双方生命值上限 <b>+4</b>，并立刻回复 4 点。整体变肉，对局拉长。<span class="en"><b>Surging Leyline</b> — both sides gain <b>+4 max HP</b> and heal 4 immediately. Tankier overall, longer matches.</span></li>
+        <li><b>岩脉共振</b> —— 双方开局各获得 <b>4 点护盾</b>。伤害先扣盾再扣血，前期几刀打不疼。<span class="en"><b>Resonant Stone</b> — both sides start with <b>4 shield</b>. Damage eats the shield first, so early hits barely hurt.</span></li>
+        <li><b>风起地</b> —— 双方王牌骰可用次数 <b>−1</b>（2 次降为 1 次），名额更金贵。<span class="en"><b>Windrise</b> — Ace Die uses <b>−1</b> for both sides (2 becomes 1), making each use count.</span></li>
+        <li><b>深境回响</b> —— 本局双方 <b>都不能使用王牌骰</b>，纯拼骰运与选骰。<span class="en"><b>Abyssal Echo</b> — <b>neither side may use Ace Dice</b> this match; pure luck and selection.</span></li>
+        <li>带地脉后平均回合数会变化：平涌 / 岩脉共振约 <b>16 回合</b>，风起地 / 深境回响约 <b>14.5 回合</b>，无地脉约 14 回合。<span class="en">Average rounds shift with the leyline: Surging / Resonant about <b>16 rounds</b>, Windrise / Abyssal Echo about <b>14.5</b>, none about 14.</span></li>
       </ul>
     </div>
   `);
   for (const id of IDS){
-    const c=CARDS[id];
     const el=document.createElement('div');
     el.className='cxCard';
-    el.innerHTML=`<div class="cxAva">${avaInner(id)}</div>
-      <div class="cxBody">
-        <div class="cxName">${c.name}<em>${c.role}</em></div>
-        <div class="cxStats">
-          <span>生命 <b>${c.hp}</b></span>
-          <span>骰池 <b>${c.pool.length} 颗</b>（${c.pool.map(f=>f+'面').join(' + ')}）</span>
-          <span>攻击上限 <b>${c.atkCap}</b></span>
-          <span>防御上限 <b>${c.defCap}</b></span>
-        </div>
-        <div class="cxSk"><b>${c.skill}</b>　${c.skillText}</div>
-        <div class="cxAce"><b>王牌骰「${c.ace}」</b>　${c.aceText}<span style="color:var(--dim)">　（每局 ${TUNE.aceUses} 次）</span></div>
-      </div>`;
+    el.innerHTML=cardHTML(id, true);
     box.appendChild(el);
   }
 }
