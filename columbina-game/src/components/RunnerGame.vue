@@ -47,20 +47,31 @@ let entityId = 0
 let effectId = 0
 const effectTimers = new Set()
 
-const speed = computed(() => Math.min(405, 265 + Math.max(0, score.value - 4) * 4.2))
-const stageBackgrounds = [stageOne, stageTwo, stageThree, stageFour]
-const stageMusic = [stageMusicOne, stageMusicTwo, stageMusicThree, stageMusicFour]
-const currentStageBackground = computed(() => stageBackgrounds[Math.floor(score.value / 10) % stageBackgrounds.length])
-watch(() => Math.floor(score.value / 10), (index) => setBgm(stageMusic[index % 4]), { immediate: true })
-function preloadStage(index) { const image = new Image(); image.src = stageBackgrounds[index % stageBackgrounds.length] }
-watch(score, (value) => { if (value > 0 && value % 10 === 9) preloadStage(Math.floor(value / 10) + 1) })
-
 function stageSize() {
   return {
     width: stage.value?.clientWidth || 1100,
     height: stage.value?.clientHeight || 650,
   }
 }
+
+/* 舞台缩放系数：对设计基准 650px 高取比，钳制 [0.55, 1.3]。
+   世界长度（缺口/落脚点/障碍）、滚动速度、跳跃力/重力、HUD/弹窗字号 全部乘它，
+   保证小屏上障碍与跳跃等比缩小、穿越耗时不变；不要用视口 vh——舞台≠视口。 */
+const stageK = ref(1)
+function updateStageK() {
+  const { height } = stageSize()
+  stageK.value = Math.min(Math.max(height / 650, 0.55), 1.3)
+}
+/* 世界单位换算：生成关卡时把设计像素乘上当前舞台系数 */
+const w = (n) => Math.round(n * stageK.value)
+
+const speed = computed(() => Math.min(405, 265 + Math.max(0, score.value - 4) * 4.2) * stageK.value)
+const stageBackgrounds = [stageOne, stageTwo, stageThree, stageFour]
+const stageMusic = [stageMusicOne, stageMusicTwo, stageMusicThree, stageMusicFour]
+const currentStageBackground = computed(() => stageBackgrounds[Math.floor(score.value / 10) % stageBackgrounds.length])
+watch(() => Math.floor(score.value / 10), (index) => setBgm(stageMusic[index % 4]), { immediate: true })
+function preloadStage(index) { const image = new Image(); image.src = stageBackgrounds[index % stageBackgrounds.length] }
+watch(score, (value) => { if (value > 0 && value % 10 === 9) preloadStage(Math.floor(value / 10) + 1) })
 
 function playerSize() {
   return {
@@ -87,24 +98,24 @@ function addChallenge(scoreX, kind) {
 
 function gapWidth(kind, level) {
   const levelSpeed = Math.min(405, 265 + Math.max(0, level - 4) * 4.2)
-  if (kind === 'short') return Math.round(Math.min(155, levelSpeed * 0.52))
-  if (kind === 'medium') return Math.round(Math.min(245, levelSpeed * 0.83))
-  return Math.round(Math.min(350, levelSpeed * 1.13))
+  if (kind === 'short') return w(Math.min(155, levelSpeed * 0.52))
+  if (kind === 'medium') return w(Math.min(245, levelSpeed * 0.83))
+  return w(Math.min(350, levelSpeed * 1.13))
 }
 
 function createGap(kind, level, landingLength) {
   const start = generatedUntil
   const width = gapWidth(kind, level)
   const landingStart = start + width
-  const landing = landingLength || (level < 6 ? 720 : level < 16 ? 630 : 560)
+  const landing = w(landingLength || (level < 6 ? 720 : level < 16 ? 630 : 560))
   addPlatform(landingStart, landingStart + landing)
-  addChallenge(landingStart + Math.min(130, landing * 0.24), `${kind}-gap`)
+  addChallenge(landingStart + Math.min(w(130), landing * 0.24), `${kind}-gap`)
   generatedUntil = landingStart + landing
 }
 
 function createGroundObstacle(height, level, kind) {
   const sectionStart = generatedUntil
-  const sectionLength = level < 16 ? 820 : 700
+  const sectionLength = w(level < 16 ? 820 : 700)
   const asset = level % 2 === 0 ? 'vertical-one' : 'vertical-two'
   const assetRatio = asset === 'vertical-one' ? 226 / 400 : 173 / 383
   addPlatform(sectionStart, sectionStart + sectionLength)
@@ -112,7 +123,7 @@ function createGroundObstacle(height, level, kind) {
     id: entityId++,
     type: 'tower',
     kind,
-    x: sectionStart + Math.min(330, sectionLength * 0.42) + (asset === 'vertical-one' ? -8 : 8),
+    x: sectionStart + Math.min(w(330), sectionLength * 0.42) + (asset === 'vertical-one' ? -w(8) : w(8)),
     width: Math.round(height * assetRatio),
     height,
     bottomGap: 0,
@@ -124,63 +135,63 @@ function createGroundObstacle(height, level, kind) {
 
 function createLowTunnel(level) {
   const sectionStart = generatedUntil
-  const lead = 190
+  const lead = w(190)
   const width = gapWidth('short', level)
   const gapStart = sectionStart + lead
   const landingStart = gapStart + width
   addPlatform(sectionStart, gapStart)
-  addPlatform(landingStart, landingStart + 650)
+  addPlatform(landingStart, landingStart + w(650))
   const asset = level % 2 === 0 ? 'horizontal-one' : 'horizontal-two'
-  const obstacleWidth = width + 205
+  const obstacleWidth = width + w(205)
   const assetRatio = asset === 'horizontal-one' ? 383 / 377 : 400 / 333
   hazards.value.push({
     id: entityId++,
     type: 'ceiling',
     kind: 'low-route',
-    x: gapStart - 58 + (asset === 'horizontal-one' ? -8 : 8),
+    x: gapStart - w(58) + (asset === 'horizontal-one' ? -w(8) : w(8)),
     width: obstacleWidth,
     height: Math.round(obstacleWidth / assetRatio),
-    clearance: 158,
+    clearance: w(158),
     asset,
   })
-  addChallenge(landingStart + 180, 'short-gap-low-ceiling')
-  generatedUntil = landingStart + 650
+  addChallenge(landingStart + w(180), 'short-gap-low-ceiling')
+  generatedUntil = landingStart + w(650)
 }
 
 function createDoubleGap(level) {
   const firstStart = generatedUntil
   const firstWidth = gapWidth('short', level)
   const islandStart = firstStart + firstWidth
-  const islandWidth = 220
+  const islandWidth = w(220)
   const secondStart = islandStart + islandWidth
   const secondWidth = gapWidth(level > 38 ? 'medium' : 'short', level)
   const landingStart = secondStart + secondWidth
   addPlatform(islandStart, secondStart)
-  addPlatform(landingStart, landingStart + 680)
-  addChallenge(landingStart + 150, 'double-gap')
-  generatedUntil = landingStart + 680
+  addPlatform(landingStart, landingStart + w(680))
+  addChallenge(landingStart + w(150), 'double-gap')
+  generatedUntil = landingStart + w(680)
 }
 
 function createGapThenObstacle(level) {
   const start = generatedUntil
   const width = gapWidth(level > 25 ? 'medium' : 'short', level)
   const landingStart = start + width
-  const landingLength = 850
+  const landingLength = w(850)
   addPlatform(landingStart, landingStart + landingLength)
   const asset = level % 2 === 0 ? 'vertical-two' : 'vertical-one'
-  const obstacleHeight = 130
+  const obstacleHeight = w(130)
   const assetRatio = asset === 'vertical-one' ? 226 / 400 : 173 / 383
   hazards.value.push({
     id: entityId++,
     type: 'tower',
     kind: 'double',
-    x: landingStart + 310 + (asset === 'vertical-one' ? -8 : 8),
+    x: landingStart + w(310) + (asset === 'vertical-one' ? -w(8) : w(8)),
     width: Math.round(obstacleHeight * assetRatio),
     height: obstacleHeight,
     bottomGap: 0,
     asset,
   })
-  addChallenge(landingStart + 560, 'gap-mid-obstacle')
+  addChallenge(landingStart + w(560), 'gap-mid-obstacle')
   generatedUntil = landingStart + landingLength
 }
 
@@ -223,9 +234,9 @@ function generateChallenge(level) {
 
   if (pattern === 'safe') {
     const start = generatedUntil
-    addPlatform(start, start + 720)
-    addChallenge(start + 520, 'safe-run')
-    generatedUntil = start + 720
+    addPlatform(start, start + w(720))
+    addChallenge(start + w(520), 'safe-run')
+    generatedUntil = start + w(720)
     return
   }
   if (pattern === 'short' || pattern === 'medium' || pattern === 'long') {
@@ -237,15 +248,15 @@ function generateChallenge(level) {
     return
   }
   if (pattern === 'singleBlock') {
-    createGroundObstacle(72, level, 'single')
+    createGroundObstacle(w(72), level, 'single')
     return
   }
   if (pattern === 'doubleBlock') {
-    createGroundObstacle(132, level, 'double')
+    createGroundObstacle(w(132), level, 'double')
     return
   }
   if (pattern === 'tripleBlock') {
-    createGroundObstacle(192, level, 'triple')
+    createGroundObstacle(w(192), level, 'triple')
     return
   }
   if (pattern === 'doubleGap') {
@@ -281,6 +292,7 @@ function addEffect(type, level = 0, x = playerX(), y = playerY.value) {
 function prepareGame(nextStatus) {
   cancelAnimationFrame(animationFrame)
   clearEffectTimers()
+  updateStageK()
   status.value = nextStatus
   distance.value = 0
   score.value = 0
@@ -296,7 +308,7 @@ function prepareGame(nextStatus) {
   effects.value = []
 
   const { width } = stageSize()
-  const initialEnd = Math.max(1100, width * 1.18)
+  const initialEnd = Math.max(w(1100), width * 1.18)
   addPlatform(-300, initialEnd)
   generatedUntil = initialEnd
   ensureWorld()
@@ -321,7 +333,7 @@ function jump() {
 
   const jumpForces = [-525, -510, -495]
   const level = jumpsUsed.value + 1
-  playerVelocity = jumpForces[jumpsUsed.value]
+  playerVelocity = jumpForces[jumpsUsed.value] * stageK.value
   playSfx('jump')
   /* 开局那一下不喊，避免和开场台词撞车 */
   if (!startedNow) playVoice(VOICE_EVENTS.RUNNER_JUMP, { chance: 0.24, cooldown: 7000 })
@@ -422,7 +434,7 @@ function updateScore() {
 }
 
 function cleanWorld() {
-  const cutoff = distance.value - 450
+  const cutoff = distance.value - w(450)
   platforms.value = platforms.value.filter((platform) => platform.end > cutoff)
   hazards.value = hazards.value.filter((hazard) => hazard.x + hazard.width > cutoff)
   challenges.value = challenges.value.filter((challenge) => !challenge.scored || challenge.scoreX > cutoff)
@@ -444,11 +456,11 @@ function gameLoop(timestamp) {
   } else {
     if (onGround.value && !supported) {
       onGround.value = false
-      playerVelocity = Math.max(playerVelocity, 35)
+      playerVelocity = Math.max(playerVelocity, 35 * stageK.value)
     }
 
     const previousBottom = playerY.value + size.height
-    playerVelocity += 1580 * delta
+    playerVelocity += 1580 * stageK.value * delta
     playerY.value += playerVelocity * delta
     const currentBottom = playerY.value + size.height
 
@@ -464,7 +476,7 @@ function gameLoop(timestamp) {
 
   if (playerY.value < 7) {
     playerY.value = 7
-    playerVelocity = Math.max(90, playerVelocity)
+    playerVelocity = Math.max(90 * stageK.value, playerVelocity)
   }
 
   ensureWorld()
@@ -491,6 +503,7 @@ function handleKeydown(event) {
 }
 
 function handleResize() {
+  updateStageK()
   if (status.value !== 'playing') {
     nextTick(resetGame)
     return
@@ -658,9 +671,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .runner-page {
   width: 100%;
-  height: 100vh;
-  height: 100svh;
-  height: 100dvh;
+  height: var(--app-vh, 900px);
   overflow: hidden;
   background: #eee9df;
   display: flex;
@@ -669,7 +680,7 @@ onBeforeUnmount(() => {
 
 .runner-header {
   min-height: 68px;
-  padding: 0 clamp(18px, 4vw, 72px);
+  padding: 0 24px;
   border-bottom: 2px solid #171717;
   background: #f7f4ed;
   display: grid;
@@ -722,7 +733,7 @@ onBeforeUnmount(() => {
 .runner-layout {
   min-height: 0;
   width: 100%;
-  padding: clamp(12px, 2.5vw, 34px);
+  padding: 16px;
   flex: 1;
 }
 
@@ -730,7 +741,7 @@ onBeforeUnmount(() => {
   position: relative;
   width: min(1480px, 100%);
   height: 100%;
-  min-height: 450px;
+  min-height: 0;
   margin: 0 auto;
   overflow: hidden;
   border: 2px solid #171717;
@@ -802,7 +813,7 @@ onBeforeUnmount(() => {
   z-index: 1;
   top: 11%;
   right: 10%;
-  width: clamp(58px, 7vw, 88px);
+  width: clamp(58px, 7cqw, 88px);
   aspect-ratio: 1;
   border: 2px solid #171717;
   border-radius: 50%;
@@ -926,7 +937,7 @@ onBeforeUnmount(() => {
 .runner-player {
   position: absolute;
   z-index: 7;
-  width: clamp(58px, 6vw, 82px);
+  width: 70px;
   transform: translateX(-50%);
   transform-origin: 50% 80%;
   will-change: top, transform;
@@ -1021,8 +1032,9 @@ onBeforeUnmount(() => {
   inset: 0;
   padding: 20px;
   background: rgba(184, 220, 244, 0.48);
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   backdrop-filter: blur(3px);
 }
 
@@ -1033,7 +1045,7 @@ onBeforeUnmount(() => {
 .runner-dialog {
   width: min(430px, 100%);
   border: 2px solid #171717;
-  padding: clamp(25px, 4vw, 43px);
+  padding: 36px;
   background: #f7f4ed;
   text-align: center;
   box-shadow: 8px 8px 0 #171717;
@@ -1048,7 +1060,7 @@ onBeforeUnmount(() => {
 
 .runner-dialog h2 {
   margin: 0 0 13px;
-  font-size: clamp(33px, 5vw, 48px);
+  font-size: 42px;
   letter-spacing: -0.07em;
 }
 
@@ -1119,7 +1131,7 @@ onBeforeUnmount(() => {
   to { opacity: 0; transform: scale(2.2) rotate(35deg); }
 }
 
-@media (max-width: 700px) {
+@container app (max-width: 700px) {
   .runner-header {
     min-height: 58px;
     padding: 0 14px;
@@ -1131,7 +1143,7 @@ onBeforeUnmount(() => {
   }
 
   .runner-layout {
-    height: calc(100dvh - 58px);
+    height: calc(var(--app-vh, 900px) - 58px);
     padding: 8px;
   }
 
@@ -1153,7 +1165,7 @@ onBeforeUnmount(() => {
   }
 
   .runner-player {
-    width: clamp(54px, 16vw, 72px);
+    width: 64px;
   }
 
   .runner-dialog {
@@ -1185,4 +1197,26 @@ onBeforeUnmount(() => {
 /* Do not cap the playfield on ultrawide or fullscreen displays. */
 .runner-stage{width:100%;margin:0}
 .runner-background{background-repeat:no-repeat;background-size:cover;background-position:center}
+
+/* ===== 设计像素固定：画布由根 scale 统一缩放，不用 vh/vw（会跟浏览器缩放二次漂移） ===== */
+.runner-hud{top:20px;right:24px;left:24px}
+.runner-score strong{font-size:38px}
+.runner-score small,.jump-meter small{font-size:9px}
+.jump-meter{gap:5px}
+.jump-meter small{margin-right:3px}
+.jump-meter span{width:13px;height:13px}
+.runner-player{width:clamp(58px,6cqw,82px)}
+.runner-fallback{width:64px;height:64px}
+.effect-trail{font-size:20px}
+.effect-score{font-size:22px}
+.effect-hit{font-size:44px}
+.runner-overlay{padding:20px}
+.runner-dialog{width:min(430px,100%);padding:43px;max-height:100%;overflow-y:auto}
+.runner-dialog>p{margin:0 0 10px;font-size:9px}
+.runner-dialog h2{margin:0 0 13px;font-size:48px}
+.runner-dialog>span{margin-bottom:23px;font-size:13px}
+.runner-result{margin:22px 0;padding:14px 0;gap:3px}
+.runner-result span{font-size:11px}
+.runner-result strong{font-size:25px}
+.runner-dialog button{min-width:150px;padding:13px 20px;font-size:13px}
 </style>
