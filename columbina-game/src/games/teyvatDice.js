@@ -17,10 +17,11 @@ const asset = (name) => `${DICE_DIR}assets/${name}`
 /** 卡片封面：游戏自己的开局对阵图（1600×900，主体在画面 25%~60% 高度处） */
 export const DICE_COVER = asset('bg-start.jpg')
 
-/** 运行时素材清单（12 头像 + 4 背景 + 4 骰子），供大厅后台预热用 */
+/** 运行时素材清单（13 头像 + 4 背景 + 4 骰子），供大厅后台预热用 */
 export const DICE_ASSETS = [
   'av-ayaka.png', 'av-bennett.png', 'av-columb.png', 'av-ganyu.png',
   'av-hutao.png', 'av-nahida.png', 'av-neuvil.png', 'av-raiden.png',
+  'av-trilune.png',
   'av-venti.png', 'av-xiao.png', 'av-xingqiu.png', 'av-zhongli.png',
   'bg-board.png', 'bg-coin2.png', 'bg-menu.jpg', 'bg-start.jpg',
   'die-ace.png', 'die-d4.png', 'die-d6.png', 'die-d8.png',
