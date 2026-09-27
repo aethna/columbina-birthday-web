@@ -541,12 +541,15 @@ function pistonRotation(symbol) {
   return ({ P: Math.PI, D: 0, R: Math.PI / 2, L: -Math.PI / 2 })[symbol] ?? 0
 }
 
-function directionRotation(direction) {
+function springRotation(direction) {
+  // The Blockbench spring animation hinges its top plate on the local -X
+  // edge and raises the free +X edge by rotating around local Z. Rotate that
+  // native +X launch axis onto the mechanism's world-space direction.
   return ({
-    up: Math.PI,
-    down: 0,
-    right: Math.PI / 2,
-    left: -Math.PI / 2,
+    up: Math.PI / 2,
+    down: -Math.PI / 2,
+    right: 0,
+    left: Math.PI,
   })[direction] ?? 0
 }
 
@@ -596,7 +599,7 @@ function addMechanisms(map) {
       group.scale.set(footprintScale / asset.size.x, scaleY, footprintScale / asset.size.z)
     }
     if (kind === 'piston') group.rotation.y = pistonRotation(tile.symbol)
-    if (kind === 'spring') group.rotation.y = directionRotation(tile.mechanism.direction)
+    if (kind === 'spring') group.rotation.y = springRotation(tile.mechanism.direction)
     const top = heightAt(map, tile.position.x, tile.position.y) * unitHeight
     const baseY = kind === 'bomb'
       ? top + 0.28
