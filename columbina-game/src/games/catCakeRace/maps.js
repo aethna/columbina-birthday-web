@@ -6,6 +6,7 @@ import {
   TERRAIN_TYPE,
   TileMechanism,
   canJumpBetweenHeights,
+  tileStandingHeight,
 } from './domain.js'
 
 export const MAP_WIDTH = 10
@@ -123,7 +124,8 @@ function isGuaranteedSpring(map, springTile) {
   let travelled = 0
   for (let step = 0; step < distance; step += 1) {
     const next = map.getTile(current.move(springTile.mechanism.direction))
-    const heightBlocksLaunch = distance > 1 && next?.baseHeight > springTile.baseHeight
+    const heightBlocksLaunch = distance > 1 && next
+      && tileStandingHeight(next) > tileStandingHeight(springTile)
     if (!next || next.terrainType === TERRAIN_TYPE.WALL || !next.canJumpIn || heightBlocksLaunch) break
     if (
       next.terrainType !== TERRAIN_TYPE.NORMAL
@@ -183,7 +185,7 @@ function findRoute(map, canUseTile) {
     Object.values(DIRECTION).forEach((direction) => {
       const next = map.getTile(tile.position.move(direction))
       if (!next || visited.has(next.position.key) || !canUseTile(map, next)) return
-      if (!canJumpBetweenHeights(tile.baseHeight, next.baseHeight)) return
+      if (!canJumpBetweenHeights(tileStandingHeight(tile), tileStandingHeight(next))) return
       visited.add(next.position.key)
       previous.set(next.position.key, tile.position.key)
       queue.push(next)

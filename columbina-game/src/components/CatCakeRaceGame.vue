@@ -169,6 +169,13 @@ function showCenterPrompt(message) {
   }, 1800)
 }
 
+function describeDeathReason(reason) {
+  return ({
+    pit: '掉进坑里',
+    spikes: '碰到地刺',
+  })[reason] ?? '意外'
+}
+
 function syncPlayerPrompt() {
   const signature = playerStackSignature()
   if (!previousPlayerStackSignature) {
@@ -182,16 +189,16 @@ function syncPlayerPrompt() {
     if (player.value.stack.role === STACK_ROLE.TOP) {
       const partner = session.value.getContestant(player.value.stack.partnerId)
       showCenterPrompt(partner?.controllerType === CONTROLLER_TYPE.AI
-        ? '你堆叠了其他猫猫糕！'
-        : '发生双层堆叠！')
+        ? '已跳上其他猫猫糕'
+        : '已形成双层堆叠')
     } else if (player.value.stack.role === STACK_ROLE.BOTTOM) {
-      showCenterPrompt('其他 AI 猫猫糕跳到了你的头上！')
+      showCenterPrompt('有猫猫糕叠上来了')
     } else if (previousRole !== STACK_ROLE.NONE) {
-      showCenterPrompt('堆叠已解除。')
+      showCenterPrompt('堆叠已解除')
     }
   }
   if (!previousPlayerGlueActive && player.value.glue.active) {
-    showCenterPrompt('被胶水粘住了！连续按方向键挣脱。')
+    showCenterPrompt('被胶水粘住，按方向键挣脱')
   }
   previousPlayerGlueActive = player.value.glue.active
 }
@@ -199,7 +206,10 @@ function syncPlayerPrompt() {
 function processMechanismEvents() {
   const events = session.value.mechanismEvents.slice(processedEventCount.value)
   processedEventCount.value = session.value.mechanismEvents.length
-  const relevant = events.filter((event) => event.affectedCatIds?.includes(player.value.id)).at(-1)
+  const playerEvents = events.filter((event) => event.affectedCatIds?.includes(player.value.id))
+  const deathEvent = playerEvents.filter((event) => event.type === 'cat-death').at(-1)
+  if (deathEvent) showCenterPrompt(`因为${describeDeathReason(deathEvent.reason)}死亡`)
+  const relevant = playerEvents.filter((event) => event.type !== 'cat-death').at(-1)
   if (!relevant) return
   if (relevant.type === 'tractor-bomb-explosion') actionMessage.value = '牵引炸弹爆炸，玩家位置已重新结算。'
   if (relevant.type === 'piston-activation') actionMessage.value = '活塞启动，玩家被强制推动。'
@@ -395,6 +405,6 @@ onBeforeUnmount(() => {
 .cat-race-content{width:min(1180px,calc(100% - 34px));margin:0 auto;padding:clamp(32px,5cqw,64px) 0}.race-intro{display:flex;align-items:end;justify-content:space-between;gap:28px;margin-bottom:26px}.phase-tag{margin:0 0 8px}.race-intro h1{margin:0 0 10px;font-family:var(--serif);font-size:clamp(38px,5cqw,60px);font-weight:600;letter-spacing:.08em}.race-intro>div>p:last-child{max-width:720px;margin:0;color:rgba(237,243,255,.66);font-size:13px;line-height:1.8}.race-actions{display:flex;flex-shrink:0;gap:10px}.race-actions button{border:1px solid rgba(255,255,255,.65);border-radius:999px;padding:10px 20px;background:#f4f8ff;color:#101638;cursor:pointer}.race-actions .secondary{background:rgba(255,255,255,.06);color:#fff}.race-actions button:disabled{cursor:not-allowed;opacity:.4}
 .race-stage{border:1px solid rgba(211,232,255,.22);padding:clamp(14px,2.5cqw,26px);background:linear-gradient(145deg,rgba(30,45,94,.72),rgba(11,17,53,.86));box-shadow:0 20px 70px rgba(0,0,25,.24)}.stage-toolbar{display:flex;align-items:end;justify-content:space-between;gap:18px;margin-bottom:13px}.stage-selectors{display:grid;gap:8px}.map-tabs,.difficulty-tabs{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.difficulty-tabs small{margin-right:3px;color:rgba(225,239,255,.52);font-size:8px;letter-spacing:.08em}.map-tabs button,.difficulty-tabs button{border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:7px 12px;background:rgba(255,255,255,.05);color:rgba(255,255,255,.65);cursor:pointer;font-size:9px}.map-tabs button.active,.difficulty-tabs button.active{border-color:rgba(171,225,255,.72);background:rgba(125,202,255,.18);color:#fff}.map-tabs button:disabled,.difficulty-tabs button:disabled{cursor:not-allowed;opacity:.45}.stage-meta{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:5px 14px;color:rgba(225,239,255,.52);font-size:9px}.stage-meta strong{width:100%;color:#fff;font-family:var(--serif);font-size:12px;text-align:right}.board-wrap{position:relative;overflow:hidden;border:1px solid rgba(223,238,255,.18)}.countdown-overlay,.ready-overlay,.finish-overlay,.stack-overlay{position:absolute;z-index:10;inset:0;display:grid;place-content:center;text-align:center;background:rgba(6,8,26,.38);backdrop-filter:blur(2px);pointer-events:none}.countdown-overlay{font:700 clamp(64px,12cqw,130px)/1 var(--serif);text-shadow:0 0 35px rgba(179,222,255,.9)}.ready-overlay{color:#d9efff;font-size:14px;letter-spacing:.08em}.finish-overlay small{color:#9fe5ff;letter-spacing:.3em}.finish-overlay strong{margin-top:8px;font-family:var(--serif);font-size:44px}.stack-overlay{inset:35% 10%;border:1px solid rgba(189,235,255,.55);border-radius:16px;color:#fff;background:rgba(19,30,69,.82);box-shadow:0 12px 50px rgba(0,0,0,.35);font:600 clamp(18px,3cqw,30px)/1.3 var(--serif);text-shadow:0 2px 16px rgba(125,202,255,.8)}.play-hud{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:20px;margin-top:15px}.controls-card{display:flex;align-items:center;gap:14px}.direction-pad{display:flex;flex-direction:column;align-items:center;gap:4px}.direction-pad>div{display:flex;gap:4px}.direction-pad button{width:42px;height:36px;border:1px solid rgba(255,255,255,.34);border-radius:5px;background:rgba(255,255,255,.08);color:#fff;cursor:pointer;font-size:18px}.direction-pad button:hover:not(:disabled){background:rgba(158,220,255,.2)}.direction-pad button:disabled{opacity:.28}.control-copy small{color:#93dfff;font-size:8px;letter-spacing:.16em}.control-copy strong{display:block;margin:3px 0;font-size:12px}.control-copy p{max-width:410px;margin:0;color:rgba(235,243,255,.5);font-size:9px;line-height:1.55}.action-message{justify-self:end;margin:0;color:#d9efff;font-size:11px;text-align:right}
 .ready-overlay{place-items:center;pointer-events:auto}.ready-overlay button{margin-top:14px;border:1px solid rgba(255,255,255,.78);border-radius:999px;padding:11px 30px;background:#f4f8ff;color:#101638;font-weight:700;cursor:pointer;letter-spacing:.08em}.ready-overlay button:disabled{cursor:not-allowed;opacity:.45}
-.stack-overlay{inset:auto;top:50%;left:50%;width:min(420px,calc(100% - 40px));padding:10px 16px;transform:translate(-50%,-50%);border-radius:999px;font:600 clamp(12px,1.6cqw,16px)/1.35 var(--serif);white-space:normal}
+.stack-overlay{inset:auto;top:50%;left:50%;width:auto;max-width:210px;padding:4px 8px;transform:translate(-50%,-50%);border-radius:999px;border-color:rgba(189,235,255,.36);background:rgba(19,30,69,.62);box-shadow:0 4px 15px rgba(0,0,0,.2);font:600 clamp(9px,1cqw,11px)/1.15 var(--serif);white-space:nowrap;text-shadow:0 1px 6px rgba(125,202,255,.55)}
 @container app (max-width:800px){.cat-race-header{grid-template-columns:1fr auto}.brand{display:none}.header-status{gap:5px}.header-status span{padding:6px 8px}.cat-race-content{width:min(100% - 20px,1180px)}.race-intro{align-items:start;flex-direction:column}.stage-toolbar{align-items:start;flex-direction:column}.stage-meta{justify-content:flex-start}.stage-meta strong{text-align:left}.play-hud{grid-template-columns:1fr}.action-message{justify-self:stretch;text-align:center}.control-copy{display:none}.controls-card{justify-content:center}}
 </style>

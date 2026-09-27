@@ -304,6 +304,12 @@ export class MapTile {
   }
 }
 
+export function tileStandingHeight(tile) {
+  if (!(tile instanceof MapTile)) throw new TypeError('tile must be a MapTile')
+  const mechanismHeight = tile.mechanism?.type === MECHANISM_TYPE.PISTON ? 1 : 0
+  return tile.baseHeight + mechanismHeight
+}
+
 export class RaceMap {
   constructor({ width, height, tiles }) {
     assertInteger(width, 'width')
@@ -392,7 +398,12 @@ export class CatCake {
   }
 
   activateCheckpoint(position) {
+    if (!(position instanceof GridPosition)) throw new TypeError('position must be a GridPosition')
+    // Maps run from the lower rows toward row 0. Once a checkpoint has been
+    // reached, being pushed back across an older line must not lose progress.
+    if (position.y > this.respawnLine.y) return false
     this.respawnLine.updateAnchor(position)
+    return true
   }
 
   resetStack() {
@@ -571,7 +582,8 @@ export class RaceSession {
     for (let step = 0; step < distance; step += 1) {
       const next = current.move(direction)
       const tile = this.map.getTile(next)
-      const heightBlocksMultiTileSpring = distance > 1 && tile?.baseHeight > springTile.baseHeight
+      const heightBlocksMultiTileSpring = distance > 1 && tile
+        && tileStandingHeight(tile) > tileStandingHeight(springTile)
       if (!tile || tile.terrainType === TERRAIN_TYPE.WALL || !tile.canJumpIn || heightBlocksMultiTileSpring) break
       path.push(next)
       current = next
@@ -605,11 +617,27 @@ export class RaceSession {
     cat.resetStack()
     this.syncHeight(cat)
 
+    const landingIndex = path.findIndex((pathPosition) => pathPosition.equals(position))
+    if (landingIndex >= 0) {
+      path.slice(0, landingIndex + 1).forEach((pathPosition) => {
+        const traversedTile = this.map.getTile(pathPosition)
+        if (traversedTile?.isCheckpoint) cat.activateCheckpoint(pathPosition)
+      })
+    }
     const tile = this.map.getTile(position)
     if (tile.isCheckpoint) cat.activateCheckpoint(position)
     if (tile.terrainType === TERRAIN_TYPE.PIT || tile.terrainType === TERRAIN_TYPE.SPIKES) {
       const danger = tile.terrainType
-      const respawned = this.killAndRespawn(cat, now)
+      if (danger === TERRAIN_TYPE.SPIKES) {
+        this.mechanismEvents.push({
+          type: 'spike-activation',
+          at: now,
+          position: tile.position.clone(),
+          catId: cat.id,
+          affectedCatIds: [cat.id],
+        })
+      }
+      const respawned = this.killAndRespawn(cat, now, danger)
       return {
         outcome: respawned ? `respawned-after-${danger}` : 'waiting-for-respawn-space',
         position: cat.position.clone(),
@@ -736,7 +764,7 @@ export class RaceSession {
         !tile
         || tile.terrainType === TERRAIN_TYPE.WALL
         || !tile.canJumpIn
-        || tile.baseHeight > movementHeight
+        || tileStandingHeight(tile) > movementHeight
       ) break
       path.push(next)
       current = next
@@ -895,12 +923,14 @@ export class RaceSession {
         finishTile = current.tile
         break
       }
-      const currentHeight = current.tile.position.key === startKey ? cat.currentHeight : current.tile.baseHeight
+      const currentHeight = current.tile.position.key === startKey
+        ? cat.currentHeight
+        : tileStandingHeight(current.tile)
       const directions = [DIRECTION.UP, DIRECTION.LEFT, DIRECTION.RIGHT, DIRECTION.DOWN]
       directions.forEach((direction) => {
         const next = this.map.getTile(current.tile.position.move(direction))
         if (!next || next.terrainType === TERRAIN_TYPE.WALL || next.terrainType === TERRAIN_TYPE.PIT) return
-        if (!next.canJumpIn || !next.canStand || !canJumpBetweenHeights(currentHeight, next.baseHeight)) return
+        if (!next.canJumpIn || !next.canStand || !canJumpBetweenHeights(currentHeight, tileStandingHeight(next))) return
         if (this.contestantsAt(next.position, cat.id).length >= 2) return
         if (safeOnly && !next.isFinish && !this.isAiSafeTile(next)) return
         const nextCost = current.cost + this.aiTileCost(cat, next, cat.aiSafeMode)
@@ -932,7 +962,7 @@ export class RaceSession {
         && tile.terrainType !== TERRAIN_TYPE.PIT
         && tile.canJumpIn
         && tile.canStand
-        && canJumpBetweenHeights(cat.currentHeight, tile.baseHeight)
+        && canJumpBetweenHeights(cat.currentHeight, tileStandingHeight(tile))
         && this.contestantsAt(tile.position, cat.id).length < 2
     })
   }
@@ -1053,7 +1083,7 @@ export class RaceSession {
   syncHeight(cat) {
     const tile = this.map.getTile(cat.position)
     if (!tile) throw new Error(`${cat.name} is not standing on a map tile`)
-    cat.currentHeight = tile.baseHeight + (cat.stack.role === STACK_ROLE.TOP ? 1 : 0)
+    cat.currentHeight = tileStandingHeight(tile) + (cat.stack.role === STACK_ROLE.TOP ? 1 : 0)
   }
 
   detachTopCat(cat) {
@@ -1159,7 +1189,7 @@ export class RaceSession {
     if (occupants.length >= 2) return this.fail('target-stack-full')
     const bottom = occupants[0] ?? null
     if (bottom && (bottom.stack.role !== STACK_ROLE.NONE || bottom.finish.reached)) return this.fail('target-stack-full')
-    const targetHeight = targetTile.baseHeight + (bottom ? 1 : 0)
+    const targetHeight = tileStandingHeight(targetTile) + (bottom ? 1 : 0)
     if (!canJumpBetweenHeights(cat.currentHeight, targetHeight)) return this.fail('height-difference')
 
     if (bottom) this.stackOn(cat, bottom, targetTile)
@@ -1172,12 +1202,19 @@ export class RaceSession {
 
     if (targetTile.isCheckpoint) cat.activateCheckpoint(targetPosition)
     if (targetTile.terrainType === TERRAIN_TYPE.PIT) {
-      const respawned = this.killAndRespawn(cat, now)
+      const respawned = this.killAndRespawn(cat, now, TERRAIN_TYPE.PIT)
       return { ok: true, outcome: respawned ? 'respawned-after-pit' : 'waiting-for-respawn-space', cat }
     }
     if (targetTile.terrainType === TERRAIN_TYPE.SPIKES) {
+      this.mechanismEvents.push({
+        type: 'spike-activation',
+        at: now,
+        position: targetTile.position.clone(),
+        catId: cat.id,
+        affectedCatIds: [cat.id],
+      })
       if (now < cat.invincibleUntil) return { ok: true, outcome: 'moved-while-invincible', cat }
-      const respawned = this.killAndRespawn(cat, now)
+      const respawned = this.killAndRespawn(cat, now, TERRAIN_TYPE.SPIKES)
       return { ok: true, outcome: respawned ? 'respawned-after-spikes' : 'waiting-for-respawn-space', cat }
     }
     if (targetTile.isFinish) {
@@ -1208,8 +1245,9 @@ export class RaceSession {
     return { ok: true, outcome: bottom ? 'stacked' : 'moved', cat }
   }
 
-  killAndRespawn(cat, now) {
-    const deathPositionKey = cat.position.key
+  killAndRespawn(cat, now, reason = 'unknown') {
+    const deathPosition = cat.position.clone()
+    const deathPositionKey = deathPosition.key
     cat.repeatedDeathCount = cat.lastDeathPositionKey === deathPositionKey ? cat.repeatedDeathCount + 1 : 1
     cat.lastDeathPositionKey = deathPositionKey
     this.detachTopCat(cat)
@@ -1227,6 +1265,15 @@ export class RaceSession {
       }
     }
     const respawnPosition = this.findOpenRespawnPosition(cat)
+    this.mechanismEvents.push({
+      type: 'cat-death',
+      at: now,
+      position: deathPosition,
+      reason,
+      catId: cat.id,
+      affectedCatIds: [cat.id],
+      respawnPosition: respawnPosition?.clone() ?? null,
+    })
     if (!respawnPosition) {
       cat.actionState = CAT_ACTION_STATE.RESPAWNING
       cat.lastAction = 'waiting-for-respawn-space'

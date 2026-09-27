@@ -75,9 +75,9 @@ function mechanismKind(tile) {
 
 function usesMechanismAsset(tile) {
   const kind = mechanismKind(tile)
-  // Bombs float and pistons stand on top of a complete ground block. Springs
-  // and spikes still replace the uppermost terrain cube.
-  return Boolean(kind && !['bomb', 'piston'].includes(kind) && mechanismAssets[kind])
+  // Springs sit inside the upper terrain level, while pistons remain a solid
+  // extra level above a complete ground block.
+  return Boolean(['spring', 'spikes'].includes(kind) && mechanismAssets[kind])
 }
 
 function terrainStyle(tile) {
@@ -131,6 +131,10 @@ function heightAt(map, x, z) {
   // H0 is still a playable ground block; only pits and walls leave a gap.
   if (!tile || tile.terrainType === 'pit' || tile.terrainType === 'wall') return 0
   return Math.max(1, tile.baseHeight + 1)
+}
+
+function mechanismStandingLevels(tile) {
+  return tile?.mechanism?.type === 'piston' ? 1 : 0
 }
 
 function colorBrightness(color) {
@@ -356,7 +360,15 @@ function addCatSprite(cat) {
   marker.rotation.x = -Math.PI / 2
   marker.position.y = -spriteSize / 2 + 0.03
   group.add(marker, sprite)
-  group.userData = { catId: cat.id, lastPositionKey: null, movedAt: 0, spriteSize }
+  group.userData = {
+    baseRenderOrder: cat.controllerType === 'player' ? 5 : 4,
+    catId: cat.id,
+    lastPositionKey: null,
+    marker,
+    movedAt: 0,
+    sprite,
+    spriteSize,
+  }
   scene.add(group)
   catSpriteGroups.set(cat.id, group)
 }
@@ -381,13 +393,26 @@ function syncCatSprites(timeMs) {
       group.userData.movedAt = timeMs
     }
     const top = heightAt(props.map, cat.position.x, cat.position.y) * unitHeight
+    const tile = props.map.getTile(cat.position)
     const elapsed = Math.min(1, (timeMs - group.userData.movedAt) / 300)
     const jump = Math.sin(elapsed * Math.PI) * 0.42
-    const stackOffset = cat.stack.role === 'top' ? 0.72 : 0
+    const isTop = cat.stack.role === 'top'
+    const isBottom = cat.stack.role === 'bottom'
+    const mechanismOffset = mechanismStandingLevels(tile) * unitHeight
+    const stackOffset = isTop ? Math.max(unitHeight, group.userData.spriteSize * 0.86) : 0
+    const { marker, sprite, spriteSize } = group.userData
+    sprite.scale.set(
+      spriteSize * (isBottom ? 1.04 : isTop ? 0.97 : 1),
+      spriteSize * (isBottom ? 0.92 : isTop ? 0.97 : 1),
+      1,
+    )
+    sprite.renderOrder = group.userData.baseRenderOrder + (isTop ? 10 : 0)
+    marker.scale.setScalar(isTop ? 0.82 : isBottom ? 1.08 : 1)
+    marker.material.opacity = isTop ? 0.82 : cat.controllerType === 'player' ? 0.95 : 0.62
     const target = new THREE.Vector3(
-      cat.position.x + 0.5 - props.map.width / 2,
-      top + group.userData.spriteSize / 2 + stackOffset + jump,
-      cat.position.y + 0.5 - props.map.height / 2,
+      cat.position.x + 0.5 - props.map.width / 2 + (isTop ? 0.07 : 0),
+      top + mechanismOffset + spriteSize / 2 + stackOffset + jump - (isBottom ? 0.04 : 0),
+      cat.position.y + 0.5 - props.map.height / 2 + (isTop ? 0.045 : 0),
     )
     if (group.position.lengthSq() === 0) group.position.copy(target)
     else group.position.lerp(target, 0.28)
@@ -480,19 +505,8 @@ function emphasizeSpikeTips(asset) {
     }
   })
   if (tipMaterialIndex < 0) return asset
-  asset.frames.forEach((frame) => {
-    const geometry = frame[tipMaterialIndex]
-    if (!geometry) return
-    geometry.computeBoundingBox()
-    const spikeBaseY = geometry.boundingBox.min.y
-    const positions = geometry.getAttribute('position')
-    for (let index = 0; index < positions.count; index += 1) {
-      positions.setY(index, spikeBaseY + (positions.getY(index) - spikeBaseY) * 1.75)
-    }
-    positions.needsUpdate = true
-    geometry.computeBoundingBox()
-    geometry.computeBoundingSphere()
-  })
+  // Keep the original model height so the disabled spikes stay flush with the
+  // surrounding floor. Visibility comes from color and the activation pulse.
   const tipMaterial = asset.materials[tipMaterialIndex]
   tipMaterial.color.set('#ff3658')
   tipMaterial.emissive?.set('#3d050c')
@@ -525,6 +539,15 @@ function clearMechanisms() {
 
 function pistonRotation(symbol) {
   return ({ P: Math.PI, D: 0, R: Math.PI / 2, L: -Math.PI / 2 })[symbol] ?? 0
+}
+
+function directionRotation(direction) {
+  return ({
+    up: Math.PI,
+    down: 0,
+    right: Math.PI / 2,
+    left: -Math.PI / 2,
+  })[direction] ?? 0
 }
 
 function createBombExplosionEffect() {
@@ -565,15 +588,20 @@ function addMechanisms(map) {
       const scale = 0.72 / asset.size.x
       group.scale.setScalar(scale)
     } else {
-      const scaleY = kind === 'spikes' ? unitHeight / modelSize.y : unitHeight / asset.size.y
-      group.scale.set(1 / asset.size.x, scaleY, 1 / asset.size.z)
+      const footprintScale = kind === 'piston' ? 1.28 : kind === 'spikes' ? 1.22 : 1.2
+      const heightScale = kind === 'piston' ? 1.18 : 1
+      const scaleY = kind === 'spikes'
+        ? (unitHeight / modelSize.y) * heightScale
+        : (unitHeight / asset.size.y) * heightScale
+      group.scale.set(footprintScale / asset.size.x, scaleY, footprintScale / asset.size.z)
     }
     if (kind === 'piston') group.rotation.y = pistonRotation(tile.symbol)
+    if (kind === 'spring') group.rotation.y = directionRotation(tile.mechanism.direction)
     const top = heightAt(map, tile.position.x, tile.position.y) * unitHeight
     const baseY = kind === 'bomb'
       ? top + 0.28
       : kind === 'piston'
-        ? top + 0.002
+        ? top + 0.035
         : top - unitHeight + 0.002
     group.position.set(
       tile.position.x + 0.5 - map.width / 2,
@@ -595,8 +623,10 @@ function addMechanisms(map) {
       group,
       kind,
       meshes,
+      baseScale: group.scale.clone(),
       nextExplosionAt: kind === 'bomb' ? performance.now() + 10_000 : null,
       animationStartedAt: null,
+      activationPulseStartedAt: null,
       phase: ((tile.position.x * 3 + tile.position.y) % 7) * 0.08,
       tilePosition: tile.position.clone(),
     })
@@ -611,6 +641,7 @@ function syncMechanismEvents(timeMs) {
     const mechanismKindByEvent = {
       'piston-activation': 'piston',
       'spring-activation': 'spring',
+      'spike-activation': 'spikes',
     }
     const eventKind = mechanismKindByEvent[event.type]
     if (eventKind) {
@@ -619,7 +650,10 @@ function syncMechanismEvents(timeMs) {
         && candidate.tilePosition.x === event.position.x
         && candidate.tilePosition.y === event.position.y
       ))
-      if (instance) instance.animationStartedAt = timeMs
+      if (instance) {
+        instance.animationStartedAt = timeMs
+        instance.activationPulseStartedAt = timeMs
+      }
       return
     }
     if (event.type !== 'tractor-bomb-explosion') return
@@ -652,6 +686,20 @@ function updateMechanismFrames(timeMs) {
       const elapsed = (timeMs / 1000 + instance.phase) % cycle
       const localTime = elapsed <= asset.duration ? elapsed : cycle - elapsed
       frame = Math.round((localTime / asset.duration) * (asset.frames.length - 1))
+    }
+    if (instance.activationPulseStartedAt !== null) {
+      const pulseProgress = (timeMs - instance.activationPulseStartedAt) / 520
+      if (pulseProgress >= 1) {
+        instance.activationPulseStartedAt = null
+        instance.group.scale.copy(instance.baseScale)
+      } else {
+        const pulse = Math.sin(Math.min(1, pulseProgress) * Math.PI)
+        const amount = instance.kind === 'spikes' ? 0.24 : 0.13
+        instance.group.scale.copy(instance.baseScale)
+        instance.group.scale.y *= 1 + amount * pulse
+        instance.group.scale.x *= 1 - amount * 0.32 * pulse
+        instance.group.scale.z *= 1 - amount * 0.32 * pulse
+      }
     }
     if (frame === instance.currentFrame) continue
     instance.meshes.forEach((mesh, index) => {

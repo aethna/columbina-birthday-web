@@ -28,6 +28,7 @@ import {
   canJumpBetweenHeights,
   createFoundationRace,
   createPlayableRace,
+  tileStandingHeight,
 } from './domain.js'
 import {
   MAP_HEIGHT,
@@ -135,6 +136,35 @@ describe('娅娅猫向前冲基础对象', () => {
     expect(canJumpBetweenHeights(7, 0)).toBe(true)
   })
 
+  it('keeps springs flush with the floor while pistons add one standing level', () => {
+    const spring = new MapTile({
+      x: 0,
+      y: 0,
+      baseHeight: 1,
+      mechanism: new TileMechanism({ type: MECHANISM_TYPE.SPRING, direction: DIRECTION.UP }),
+    })
+    const piston = new MapTile({
+      x: 1,
+      y: 0,
+      baseHeight: 1,
+      mechanism: new TileMechanism({ type: MECHANISM_TYPE.PISTON, direction: DIRECTION.UP }),
+    })
+    expect(tileStandingHeight(spring)).toBe(1)
+    expect(tileStandingHeight(piston)).toBe(2)
+
+    const race = createFoundationRace()
+    const tile = race.map.getTile(new GridPosition(2, 2))
+    tile.baseHeight = 1
+    tile.mechanism = piston.mechanism
+    const bottom = race.player
+    const top = race.getContestant('cat-ai-1')
+    bottom.position = tile.position.clone()
+    race.syncHeight(bottom)
+    race.stackOn(top, bottom, tile)
+    expect(bottom.currentHeight).toBe(2)
+    expect(top.currentHeight).toBe(3)
+  })
+
   it('applies the 0.3 second cooldown after a successful jump', () => {
     const race = createHeightRace(0)
     const first = race.attemptNormalJump('player', DIRECTION.UP, RACE_COUNTDOWN_MS)
@@ -174,6 +204,47 @@ describe('娅娅猫向前冲基础对象', () => {
     expect(result).toMatchObject({ ok: true, outcome: 'respawned-after-pit' })
     expect(race.player.deathCount).toBe(1)
     expect(race.player.position).toEqual(new GridPosition(2, 3))
+    expect(race.mechanismEvents.at(-1)).toMatchObject({
+      type: 'cat-death',
+      reason: TERRAIN_TYPE.PIT,
+      position: new GridPosition(2, 2),
+      respawnPosition: new GridPosition(2, 3),
+      affectedCatIds: [race.player.id],
+    })
+  })
+
+  it('lets forced movement enter pits while AI movement continues to avoid them', () => {
+    const race = createFoundationRace()
+    const pit = race.map.getTile(new GridPosition(2, 2))
+    pit.terrainType = TERRAIN_TYPE.PIT
+    pit.canStand = false
+    pit.isCheckpoint = false
+
+    expect(race.buildLinearForcedPath(
+      race.player.position,
+      DIRECTION.UP,
+      1,
+      race.player.currentHeight + 1,
+    )).toEqual([new GridPosition(2, 2)])
+    expect(race.legalAiDirections(race.player)).not.toContain(DIRECTION.UP)
+  })
+
+  it('records a spike activation when a cat lands on spikes', () => {
+    const race = createFoundationRace()
+    const target = race.map.getTile(new GridPosition(2, 2))
+    target.terrainType = TERRAIN_TYPE.SPIKES
+    target.isCheckpoint = false
+    race.startCountdown(0)
+    race.advanceClock(RACE_COUNTDOWN_MS)
+
+    const result = race.attemptNormalJump(race.player.id, DIRECTION.UP, RACE_COUNTDOWN_MS)
+
+    expect(result).toMatchObject({ ok: true, outcome: 'respawned-after-spikes' })
+    expect(race.mechanismEvents).toContainEqual(expect.objectContaining({
+      type: 'spike-activation',
+      position: new GridPosition(2, 2),
+      affectedCatIds: [race.player.id],
+    }))
   })
 
   it('forms no more than a two-cat stack', () => {
@@ -398,6 +469,40 @@ describe('娅娅猫向前冲基础对象', () => {
     race.killAndRespawn(player, 5_000)
     expect(player.position).toEqual(new GridPosition(1, 2))
     expect(player.invincibleUntil).toBe(5_000 + RESPAWN_INVINCIBILITY_MS)
+  })
+
+  it('respawns at the latest checkpoint reached during normal movement', () => {
+    const race = createFoundationRace()
+    race.startCountdown(0)
+    race.advanceClock(RACE_COUNTDOWN_MS)
+    race.attemptNormalJump(race.player.id, DIRECTION.UP, RACE_COUNTDOWN_MS)
+    const pit = race.map.getTile(new GridPosition(2, 1))
+    pit.terrainType = TERRAIN_TYPE.PIT
+    pit.canStand = false
+
+    const result = race.attemptNormalJump(
+      race.player.id,
+      DIRECTION.UP,
+      RACE_COUNTDOWN_MS + NORMAL_JUMP_COOLDOWN_MS,
+    )
+
+    expect(result.outcome).toBe('respawned-after-pit')
+    expect(race.player.position).toEqual(new GridPosition(2, 2))
+  })
+
+  it('records checkpoints crossed by forced movement without regressing progress', () => {
+    const race = createFoundationRace()
+    const player = race.player
+    race.resolveForcedLanding(
+      player,
+      player.position,
+      [new GridPosition(2, 2), new GridPosition(2, 1)],
+      5_000,
+    )
+    expect(player.respawnLine).toMatchObject({ y: 2, preferredX: 2 })
+
+    expect(player.activateCheckpoint(new GridPosition(4, 3))).toBe(false)
+    expect(player.respawnLine).toMatchObject({ y: 2, preferredX: 2 })
   })
 
   it('parses all five designed maps into 10 by 50 two-dimensional maps', () => {
