@@ -1155,8 +1155,6 @@ export class RaceSession {
     if (targetTile.terrainType === TERRAIN_TYPE.WALL || !targetTile.canJumpIn) {
       return this.fail('target-blocks-jump')
     }
-    if (targetTile.terrainType === TERRAIN_TYPE.PIT) return this.fail('pit-cannot-be-normal-jump-target')
-
     const occupants = this.contestantsAt(targetPosition, cat.id)
     if (occupants.length >= 2) return this.fail('target-stack-full')
     const bottom = occupants[0] ?? null
@@ -1173,6 +1171,10 @@ export class RaceSession {
     }
 
     if (targetTile.isCheckpoint) cat.activateCheckpoint(targetPosition)
+    if (targetTile.terrainType === TERRAIN_TYPE.PIT) {
+      const respawned = this.killAndRespawn(cat, now)
+      return { ok: true, outcome: respawned ? 'respawned-after-pit' : 'waiting-for-respawn-space', cat }
+    }
     if (targetTile.terrainType === TERRAIN_TYPE.SPIKES) {
       if (now < cat.invincibleUntil) return { ok: true, outcome: 'moved-while-invincible', cat }
       const respawned = this.killAndRespawn(cat, now)

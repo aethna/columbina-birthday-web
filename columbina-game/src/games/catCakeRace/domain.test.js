@@ -160,6 +160,22 @@ describe('娅娅猫向前冲基础对象', () => {
     expect(race.player.normalJumpReadyAt).toBe(RACE_COUNTDOWN_MS + NORMAL_JUMP_COOLDOWN_MS)
   })
 
+  it('allows a normal jump into a pit and resolves death and respawn', () => {
+    const race = createFoundationRace()
+    const target = race.map.getTile(new GridPosition(2, 2))
+    target.terrainType = TERRAIN_TYPE.PIT
+    target.canStand = false
+    target.isCheckpoint = false
+    race.startCountdown(0)
+    race.advanceClock(RACE_COUNTDOWN_MS)
+
+    const result = race.attemptNormalJump(race.player.id, DIRECTION.UP, RACE_COUNTDOWN_MS)
+
+    expect(result).toMatchObject({ ok: true, outcome: 'respawned-after-pit' })
+    expect(race.player.deathCount).toBe(1)
+    expect(race.player.position).toEqual(new GridPosition(2, 3))
+  })
+
   it('forms no more than a two-cat stack', () => {
     const race = createFoundationRace()
     race.startCountdown(0)
@@ -395,13 +411,14 @@ describe('娅娅猫向前冲基础对象', () => {
       expect(map.startRow).toBe(49)
       expect(map.finishRow).toBe(1)
       expect(map.respawnRows).toEqual([10, 20, 30, 40])
-      expect(map.stableRoute.length).toBeGreaterThan(0)
-      expect(map.getTile(map.stableRoute[0]).isStart).toBe(true)
-      expect(map.getTile(map.stableRoute.at(-1)).isFinish).toBe(true)
-      map.stableRoute.forEach((position) => {
+      expect(map.guaranteedRoute.length).toBeGreaterThan(0)
+      expect(map.getTile(map.guaranteedRoute[0]).isStart).toBe(true)
+      expect(map.getTile(map.guaranteedRoute.at(-1)).isFinish).toBe(true)
+      map.guaranteedRoute.forEach((position) => {
         const tile = map.getTile(position)
         expect(tile.terrainType).toBe(TERRAIN_TYPE.NORMAL)
-        expect(tile.mechanism).toBeNull()
+        expect([null, MECHANISM_TYPE.GLUE, MECHANISM_TYPE.SPRING])
+          .toContain(tile.mechanism?.type ?? null)
       })
     })
     expect(new Set(Object.values(MAP_LAYOUTS).map((rows) => rows.join('\n'))).size).toBe(5)
@@ -446,7 +463,7 @@ describe('娅娅猫向前冲基础对象', () => {
         map.guaranteedRoute.forEach((position) => {
           const tile = map.getTile(position)
           expect(tile.terrainType).toBe(TERRAIN_TYPE.NORMAL)
-          expect([null, MECHANISM_TYPE.GLUE]).toContain(tile.mechanism?.type ?? null)
+          expect([null, MECHANISM_TYPE.GLUE, MECHANISM_TYPE.SPRING]).toContain(tile.mechanism?.type ?? null)
         })
       }
     })
@@ -576,6 +593,7 @@ describe('娅娅猫向前冲基础对象', () => {
   }, 15_000)
 
   it('gives every designed map the complete mixed mechanism and hazard set', () => {
+    const raceSections = [[2, 9], [11, 19], [21, 29], [31, 39], [41, 48]]
     Object.values(createDesignedMaps()).forEach((map) => {
       const mechanisms = new Set(map.flatTiles.map((tile) => tile.mechanism?.type).filter(Boolean))
       expect(mechanisms).toEqual(new Set([
@@ -588,6 +606,20 @@ describe('娅娅猫向前冲基础对象', () => {
       expect(map.flatTiles.some((tile) => tile.terrainType === TERRAIN_TYPE.PIT)).toBe(true)
       expect(map.startRow).toBe(MAP_HEIGHT - 1)
       expect(map.finishRow).toBe(1)
+      expect(map.flatTiles.filter((tile) => tile.mechanism?.type === MECHANISM_TYPE.SPRING).length)
+        .toBeGreaterThanOrEqual(7)
+      expect(map.flatTiles.filter((tile) => tile.mechanism?.type === MECHANISM_TYPE.PISTON).length)
+        .toBeGreaterThanOrEqual(9)
+      expect(map.flatTiles
+        .filter((tile) => tile.mechanism?.type === MECHANISM_TYPE.SPRING)
+        .every((tile) => tile.baseHeight === 1)).toBe(true)
+      raceSections.forEach(([startRow, endRow]) => {
+        const sectionTiles = map.flatTiles.filter((tile) => (
+          tile.position.y >= startRow && tile.position.y <= endRow
+        ))
+        expect(sectionTiles.some((tile) => tile.mechanism?.type === MECHANISM_TYPE.SPRING)).toBe(true)
+        expect(sectionTiles.some((tile) => tile.mechanism?.type === MECHANISM_TYPE.PISTON)).toBe(true)
+      })
     })
   })
 

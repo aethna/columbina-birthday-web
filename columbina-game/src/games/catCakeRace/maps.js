@@ -13,39 +13,39 @@ export const MAP_HEIGHT = 50
 
 export const MAP_LAYOUTS = Object.freeze({
   map1: [
-    '..........','FFFFFFFFFF','b.0.2..^R.','.0..2.g...','....2..0..','..u.2.....','...0..2...','.^....2...','....o.2...','..g...0...',
-    'CCCCCCCCCC','...000....','..0...2...','.^0...2...','..0.g.....','..0..u....','..0....^..','..000.....','....o.....','..2...g...',
-    'CCCCCCCCCC','...222....','..0.2..^..','..u.2.....','.^..2.....','...02.g...','...0..2...','.o....2...','..000.....','....g.....',
-    'CCCCCCCCCC','..2220....','..2..0.^..','..2.u0....','..2..0....','..2.g0....','..2..000..','..2....o..','..0...^...','...g......',
-    'CCCCCCCCCC','..000.....','..0..^....','..0.u.....','..0...222.','..0.g.2...','..000.2...','....o.2...','..^...2...','SSSSSSSSSS',
+    '..........','FFFFFFFFFF','b.0.2L.^R.','.0..2.g...','....2..0..','..u.2.....','...P..2..L','.^....2.w.','....o.2...','..g...0...',
+    'CCCCCCCCCC','...000....','..0.L.2.P.','.^0...2...','..0.g.....','..0..u....','..0.P..^..','..000.....','....o.....','..2...g...',
+    'CCCCCCCCCC','..R222....','..0.2..^..','..u.2.....','.^..2.....','...02.g...','...0..2.P.','.o....2...','..000.....','....g.....',
+    'CCCCCCCCCC','..2220....','..2.L0.^..','..2.u0....','..2.P0....','..2.g0....','..2..000..','..2....o..','..0...^...','...g......',
+    'CCCCCCCCCC','..000.....','..0.L^....','..0.u.....','..0.P.222.','..0.g.2...','..000.2...','.x..o.2...','..^...2...','SSSSSSSSSS',
   ],
   map2: [
-    '..........','FFFFFFFFFF','#b.ooo...#','#Rw...##.#','#...g..#.#','###.u..#.#','#..^^..#.#','#.x....#.#','#..ooo...#','#....g...#',
-    'CCCCCCCCCC','#.###.u..#','#...o....#','#.w.o.##.#','#...o.g..#','###.o....#','#.u...^^.#','#...###..#','#.x......#','#...g....#',
-    'CCCCCCCCCC','#.u..###.#','#.ooo....#','#...#.w..#','#.g.#....#','#...#.^^.#','#.x.#....#','#...#..o.#','#.u....g.#','#........#',
-    'CCCCCCCCCC','###.w....#','#...ooo..#','#.u...##.#','#...g....#','#.###.x..#','#...^....#','#.ooo.##.#','#...u....#','#....g...#',
-    'CCCCCCCCCC','#.x..###.#','#...o....#','#.w.o.##.#','#...o.g..#','###.u....#','#..^^....#','#.x..##..#','#....g...#','SSSSSSSSSS',
+    '..........','FFFFFFFFFF','#b.ooo...#','#Rw...##.#','#.P.g..#.#','###.u..#.#','#..^^..#.#','#.x....#.#','#..ooo..w#','#....g...#',
+    'CCCCCCCCCC','#.###.u..#','#...o.P..#','#.w.o.##.#','#...o.g..#','###.o....#','#.u...^^.#','#...###..#','#.x.....x#','#...g....#',
+    'CCCCCCCCCC','#.u..###.#','#Pooo....#','#...#.w..#','#.g.#....#','#...#.^^.#','#.x.#....#','#...#..o.#','#.u...Rgu#','#........#',
+    'CCCCCCCCCC','###.w....#','#..Pooo..#','#.u...##.#','#...g....#','#.###.x..#','#...^....#','#.ooo.##.#','#...u...w#','#....g...#',
+    'CCCCCCCCCC','#.x..##..#','#.P.o....L','#.w.o.#..#','#...o.g..#','###.u....#','#..^^....#','#.x..##.u#','#....g.L.#','SSSSSSSSSS',
   ],
   map3: [
-    '..........','FFFFFFFFFF','#ub#..L..#','#..##.^..#','#..P..o..#','#.....R..#','#..##....#','#..g..L..#','#..^..o..#','#.....P..#',
-    'CCCCCCCCCC','#..R..##.#','#..#...L.#','#..#.o...#','#..D...^.#','#.....##.#','#..g.R...#','#..#...o.#','#..P..L..#','#..#.....#',
-    'CCCCCCCCCC','#..##..R.#','#..L.....#','#..#.^...#','#..#...P.#','#.....o..#','#..R..##.#','#..#g....#','#..D...L.#','#..#.....#',
-    'CCCCCCCCCC','#..P.###.#','#..#...R.#','#..#o....#','#..L...^.#','#.....##.#','#..g.D...#','#..#...o.#','#..R..P..#','#..#.....#',
-    'CCCCCCCCCC','#..##.L..#','#..P.....#','#..#.^...#','#..R...o.#','#.....##.#','#..g..D..#','#..#...L.#','#..P.....#','SSSSSSSSSS',
+    '..........','FFFFFFFFFF','#bu#..P..#','#..##.^..#','#..P..o..#','#.....R..#','#..##u...#','#..g..L..#','#..^..o..#','#.....P..#',
+    'CCCCCCCCCC','#..R..##.#','#..#.w.L.#','#..#.o...#','#..D...^.#','#.....##.#','#..g.R...#','#..#...o.#','#..P.uL..#','#..#.....#',
+    'CCCCCCCCCC','#..##..R.#','#..L.x...#','#..#.^...#','#..#...P.#','#.....o..#','#..R..##.#','#..#g....#','#..D.w.L.#','#..#.....#',
+    'CCCCCCCCCC','#..P.###.#','#..#...R.#','#..#o....#','#..L.u.^.#','#.....##.#','#..g.D...#','#..#...o.#','#u.R..P..#','#..#.....#',
+    'CCCCCCCCCC','#..##.L..#','#..P.w...#','#..#.^...#','#..R...o.#','#.....##.#','#..g..D..#','#..#...L.#','#..P.w...#','SSSSSSSSSS',
   ],
   map4: [
-    '..........','FFFFFFFFFF','R..o....^t','b....2....','..g...^..t','b..o...u..','...^....ot','b.....2...','..w..o...t','b..g...^..',
-    'CCCCCCCCCC','t...0...^.','..o....g.b','t.....2...','..^.....ob','t..g...u..','..o...^..b','t....2....','..x....o.b','t..^...g..',
-    'CCCCCCCCCC','b...2...o.','..^....g.t','b..o......','..u...2..t','b....g....','..o....^.t','b..w......','..^...o..t','b...2.g...',
-    'CCCCCCCCCC','t...0...o.','..g....^.b','t.....2...','..o...u..b','t..^......','..x...g..b','t....o....','..^...2..b','t..g......',
-    'CCCCCCCCCC','b...2...^.','..o....g.t','b.....u...','..^...2..t','b..g......','..w...o..t','b....^....','..o...x..t','SSSSSSSSSS',
+    '..........','FFFFFFFFFF','R..o....^t','b..R.2....','..g...^..t','b..o...u..','...^....ot','b....P2...','..w.wo...t','b..g...^..',
+    'CCCCCCCCCC','t...0...^.','..o...Pg.b','t..R..2...','..^.....ob','t..g...u..','..o...^..b','t....2P...','..x.u..o.b','t..^...g..',
+    'CCCCCCCCCC','b...2...o.','..^...Pg.t','b..R......','..u...2..t','b....g....','..o....^.t','b..w.P....','..^.w.o..t','b...2.g...',
+    'CCCCCCCCCC','t...0...o.','..g...P^.b','t..R..2...','..o...u..b','t..^......','..x...g..b','t....oP...','..^.u.2..b','t..g......',
+    'CCCCCCCCCC','b...2...^.','..o...Pg.t','b..R..u...','..^...2..t','b..g......','..w...o..t','b....^.P..','..o.u.x..t','SSSSSSSSSS',
   ],
   map5: [
-    '..........','FFFFFFFFFF','..o#..P...','x..#...^.t','...L....o.','b.##......','..g...R...','P...#....t','..^...w...','b...2....t',
-    'CCCCCCCCCC','t..#......','.R.#..o..b','..^#...L..','u..#.....b','t.##..g...','..P...^...','...#...R.b','x..#..o...','t...2....b',
-    'CCCCCCCCCC','b..#..P...','..o#.....t','w..#...L..','...R....^.','b.##..g..t','..^...D...','...#..o..t','u..#...R..','b...2....t',
-    'CCCCCCCCCC','t..#..L...','..^#.....b','x..#...o..','...P....^b','t.##..g...','..R...o...','...#...D.b','w..#..^...','t...2....b',
-    'CCCCCCCCCC','b..#..P...','..o#.....t','x..#...L..','...R....^.','b.##..g..t','..^...D...','u..#..o..t','b...2.R..t','SSSSSSSSSS',
+    '..........','FFFFFFFFFF','..o#..P...','x..#...^.t','...L....o.','b.##.x....','..g...R...','P...#....t','..^...w...','b...2....t',
+    'CCCCCCCCCC','t..#......','.R.#.uo..b','..^#...L..','u..#.....b','t.##..g...','..P...^...','...#...R.b','x..#..o...','t...2....b',
+    'CCCCCCCCCC','b..#..P...','..o#.w...t','w..#...L..','...R....^.','b.##..g..t','..^...D...','...#..o..t','u..#...R..','b...2....t',
+    'CCCCCCCCCC','t..#..L...','..^#.u...b','x..#...o..','...P....^b','t.##..g...','..R...o...','...#...D.b','w..#..^...','t...2....b',
+    'CCCCCCCCCC','b..#..P...','..o#.w...t','x..#...L..','...R....^.','b.##..g..t','..^...D...','u..#..o..t','bu..2.R..t','SSSSSSSSSS',
   ],
 })
 
@@ -80,7 +80,7 @@ function mechanismForSymbol(symbol) {
 }
 
 function tileForSymbol(symbol, x, y) {
-  const baseHeight = symbol === '.' || symbol === 'S' || symbol === 'F' || symbol === 'C' || symbol === 'g' || symbol === 'b' || symbol === 't' || symbol === 'R' || symbol === 'L' || symbol === 'P' || symbol === 'D' || symbol === '^' ? 1 : 0
+  const baseHeight = symbol === '.' || symbol === 'S' || symbol === 'F' || symbol === 'C' || symbol === 'g' || symbol === 'b' || symbol === 't' || symbol === 'u' || symbol === 'w' || symbol === 'x' || symbol === 'R' || symbol === 'L' || symbol === 'P' || symbol === 'D' || symbol === '^' ? 1 : 0
   const terrainType = symbol === '#' ? TERRAIN_TYPE.WALL : symbol === 'o' ? TERRAIN_TYPE.PIT : symbol === '^' ? TERRAIN_TYPE.SPIKES : TERRAIN_TYPE.NORMAL
   return new MapTile({
     x,
@@ -105,6 +105,38 @@ function isPistonTarget(tile, pistonTile) {
   return pistonTile.position.move(pistonTile.mechanism.direction).equals(tile.position)
 }
 
+function isInsideUnsafeMechanismArea(map, tile) {
+  return map.flatTiles.some((mechanismTile) => {
+    if (mechanismTile.mechanism?.type === MECHANISM_TYPE.TRACTOR_BOMB) {
+      return isInsideBombEffect(tile, mechanismTile)
+    }
+    if (mechanismTile.mechanism?.type === MECHANISM_TYPE.PISTON) {
+      return isPistonTarget(tile, mechanismTile)
+    }
+    return false
+  })
+}
+
+function isGuaranteedSpring(map, springTile) {
+  const distance = springTile.mechanism.parameters.distance ?? 1
+  let current = springTile.position
+  let travelled = 0
+  for (let step = 0; step < distance; step += 1) {
+    const next = map.getTile(current.move(springTile.mechanism.direction))
+    const heightBlocksLaunch = distance > 1 && next?.baseHeight > springTile.baseHeight
+    if (!next || next.terrainType === TERRAIN_TYPE.WALL || !next.canJumpIn || heightBlocksLaunch) break
+    if (
+      next.terrainType !== TERRAIN_TYPE.NORMAL
+      || !next.canStand
+      || (next.mechanism && next.mechanism.type !== MECHANISM_TYPE.GLUE)
+      || isInsideUnsafeMechanismArea(map, next)
+    ) return false
+    current = next.position
+    travelled += 1
+  }
+  return travelled > 0
+}
+
 function isStableRouteTile(map, tile) {
   if (!tile?.canStand || !tile.canJumpIn || !tile.canJumpOut) return false
   if (tile.terrainType !== TERRAIN_TYPE.NORMAL || tile.mechanism !== null) return false
@@ -122,16 +154,10 @@ function isStableRouteTile(map, tile) {
 function isGuaranteedRouteTile(map, tile) {
   if (!tile?.canStand || !tile.canJumpIn || !tile.canJumpOut) return false
   if (tile.terrainType !== TERRAIN_TYPE.NORMAL) return false
-  if (tile.mechanism && tile.mechanism.type !== MECHANISM_TYPE.GLUE) return false
-  return !map.flatTiles.some((mechanismTile) => {
-    if (mechanismTile.mechanism?.type === MECHANISM_TYPE.TRACTOR_BOMB) {
-      return isInsideBombEffect(tile, mechanismTile)
-    }
-    if (mechanismTile.mechanism?.type === MECHANISM_TYPE.PISTON) {
-      return isPistonTarget(tile, mechanismTile)
-    }
-    return false
-  })
+  if (tile.mechanism
+    && tile.mechanism.type !== MECHANISM_TYPE.GLUE
+    && !(tile.mechanism.type === MECHANISM_TYPE.SPRING && isGuaranteedSpring(map, tile))) return false
+  return !isInsideUnsafeMechanismArea(map, tile)
 }
 
 function findRoute(map, canUseTile) {
@@ -246,13 +272,13 @@ function shuffle(values, random) {
 
 function randomMechanism(random) {
   const roll = random()
-  if (roll < 0.34) return new TileMechanism({ type: MECHANISM_TYPE.GLUE })
-  if (roll < 0.58) return new TileMechanism({
+  if (roll < 0.2) return new TileMechanism({ type: MECHANISM_TYPE.GLUE })
+  if (roll < 0.55) return new TileMechanism({
     type: MECHANISM_TYPE.SPRING,
     direction: DIRECTION.UP,
     parameters: { distance: 1 + Math.floor(random() * 3) },
   })
-  if (roll < 0.8) {
+  if (roll < 0.85) {
     const directions = [DIRECTION.LEFT, DIRECTION.RIGHT, DIRECTION.UP, DIRECTION.DOWN]
     return new TileMechanism({
       type: MECHANISM_TYPE.PISTON,
@@ -291,7 +317,13 @@ export function createRandomizedMap(id = null, { random = Math.random } = {}) {
   if (!MAP_LAYOUTS[sourceId]) throw new Error(`Unknown designed map: ${sourceId}`)
   const source = createDesignedMap(sourceId)
   const map = cloneRaceMap(source)
-  const protectedRoute = source.stableRoute.map((position) => position.clone())
+  // Some layouts deliberately use safe forward springs as their fastest
+  // guaranteed corridor. Preserve that corridor when there is no completely
+  // mechanism-free route to protect.
+  const routeToProtect = source.stableRoute.length > 0
+    ? source.stableRoute
+    : source.guaranteedRoute
+  const protectedRoute = routeToProtect.map((position) => position.clone())
   const routeKeys = new Set(protectedRoute.map((position) => position.key))
 
   // Every possible bottom-to-top route must cross this row. Turning every

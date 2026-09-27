@@ -467,6 +467,40 @@ function loadBakedAsset(url, palette) {
   })
 }
 
+function emphasizeSpikeTips(asset) {
+  const firstFrame = asset.frames[0]
+  let tipMaterialIndex = -1
+  let highestMinimumY = -Infinity
+  firstFrame.forEach((geometry, index) => {
+    if (!geometry) return
+    geometry.computeBoundingBox()
+    if (geometry.boundingBox.min.y > highestMinimumY) {
+      highestMinimumY = geometry.boundingBox.min.y
+      tipMaterialIndex = index
+    }
+  })
+  if (tipMaterialIndex < 0) return asset
+  asset.frames.forEach((frame) => {
+    const geometry = frame[tipMaterialIndex]
+    if (!geometry) return
+    geometry.computeBoundingBox()
+    const spikeBaseY = geometry.boundingBox.min.y
+    const positions = geometry.getAttribute('position')
+    for (let index = 0; index < positions.count; index += 1) {
+      positions.setY(index, spikeBaseY + (positions.getY(index) - spikeBaseY) * 1.75)
+    }
+    positions.needsUpdate = true
+    geometry.computeBoundingBox()
+    geometry.computeBoundingSphere()
+  })
+  const tipMaterial = asset.materials[tipMaterialIndex]
+  tipMaterial.color.set('#ff3658')
+  tipMaterial.emissive?.set('#3d050c')
+  tipMaterial.emissiveIntensity = 0.24
+  tipMaterial.needsUpdate = true
+  return asset
+}
+
 function disposeBakedAsset(asset) {
   if (!asset) return
   const geometries = new Set(asset.frames.flat().filter(Boolean))
@@ -660,8 +694,9 @@ async function loadMechanismAssets() {
   const keys = ['spring', 'piston', 'spikes', 'bomb']
   results.forEach((result, index) => {
     if (result.status === 'fulfilled') {
-      if (isUnmounted) disposeBakedAsset(result.value)
-      else mechanismAssets[keys[index]] = result.value
+      const asset = keys[index] === 'spikes' ? emphasizeSpikeTips(result.value) : result.value
+      if (isUnmounted) disposeBakedAsset(asset)
+      else mechanismAssets[keys[index]] = asset
     } else {
       console.warn(`无法加载${keys[index]}模型`, result.reason)
     }
