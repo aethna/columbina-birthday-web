@@ -33,7 +33,7 @@ const exact = new Map(Object.entries({
   '与哥伦比娅一起玩游戏': 'Play with Columbina',
   '「梦境游廊」已经开启——陪她穿过云隙、踏过月岩，或在月色里落下一枚棋子。': 'The Dream Arcade is open—fly through cloudbreaks, cross moonlit crags, or place a piece beneath the moon with her.',
   '云隙轻歌': 'Song Through the Clouds', '无尽巡游': 'Endless Sojourn', '月亮棋': 'Moon Chess', '星月五子棋': 'Starlit Gomoku', '提瓦特战力党': 'Teyvat Power Dice',
-  '娅娅猫向前冲': 'Cat Cake Race',
+  '娅娅猫向前冲': 'Columbina Cat Dash',
   '与哥伦比娅一起玩游戏 ↗': 'Play with Columbina ↗',
   '企划时间线': 'Project Timeline', '2026 · 秋': 'AUTUMN · 2026', '企划筹备': 'Project Preparation',
   '确定企划方向，搭建宣传小站，公开征集参与。': 'Set the creative direction, launch the campaign site, and open public participation.',
