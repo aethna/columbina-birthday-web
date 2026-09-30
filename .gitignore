@@ -24,6 +24,9 @@ api-src-*.tgz
 # agent 的临时输出 / 试验构建产物（不进仓库）
 out/
 
+# 外部交接包的原始解压目录（源码已整理进 columbina-venue/，此目录仅为本地暂存）
+_venue-import/
+
 # 部署密钥 / 凭据（绝不入库，仓库是 public）
 .deploy-keys/
 *.pem

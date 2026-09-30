@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>角色生日会</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --gold: #ffd97a;
+      --gold-deep: #c9a24a;
+      --bg: #0b0f16;
+      --panel: #141b26;
+      --line: #2e3a4f;
+      --text: #e8eef8;
+      --muted: #93a8c4;
+    }
+
+    html, body {
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ================= 主视觉 ================= */
+    #hero {
+      position: relative;
+      min-height: 78vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 60px 24px 80px;
+      overflow: hidden;
+      background:
+        radial-gradient(ellipse 70% 55% at 50% 32%, rgba(120, 90, 180, .30), transparent 70%),
+        radial-gradient(ellipse 60% 45% at 78% 72%, rgba(201, 162, 74, .16), transparent 70%),
+        radial-gradient(ellipse 55% 40% at 20% 68%, rgba(74, 111, 165, .18), transparent 70%),
+        linear-gradient(180deg, #0d1219 0%, #0b0f16 100%);
+    }
+
+    /* 星点背景 */
+    #stars { position: absolute; inset: 0; pointer-events: none; }
+    #stars i {
+      position: absolute;
+      background: #fff;
+      border-radius: 50%;
+      animation: twinkle 3.5s ease-in-out infinite;
+    }
+    @keyframes twinkle {
+      0%, 100% { opacity: .15; transform: scale(1); }
+      50%      { opacity: .75; transform: scale(1.35); }
+    }
+
+    .hero-eyebrow {
+      font-size: 13px;
+      letter-spacing: .42em;
+      color: var(--gold-deep);
+      margin-bottom: 22px;
+      text-indent: .42em;
+      position: relative; z-index: 2;
+    }
+
+    #hero h1 {
+      font-size: clamp(38px, 8vw, 78px);
+      font-weight: 800;
+      letter-spacing: .04em;
+      line-height: 1.15;
+      background: linear-gradient(180deg, #fff 8%, var(--gold) 52%, var(--gold-deep) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      margin-bottom: 18px;
+      position: relative; z-index: 2;
+      text-shadow: 0 0 60px rgba(255, 217, 122, .12);
+    }
+
+    #hero-sub {
+      font-size: clamp(14px, 2.2vw, 17px);
+      color: var(--muted);
+      letter-spacing: .16em;
+      margin-bottom: 40px;
+      position: relative; z-index: 2;
+    }
+
+    /* 进入会场按钮 */
+    #enter-btn {
+      position: relative; z-index: 2;
+      display: inline-flex;
+      align-items: center;
+      gap: 11px;
+      padding: 16px 46px;
+      font-size: 17px;
+      font-weight: 700;
+      font-family: inherit;
+      letter-spacing: .1em;
+      color: #2a1f00;
+      background: linear-gradient(180deg, #ffe9a8, var(--gold) 40%, var(--gold-deep));
+      border: none;
+      border-radius: 40px;
+      cursor: pointer;
+      text-decoration: none;
+      box-shadow:
+        0 0 0 1px rgba(255, 235, 168, .6),
+        0 8px 26px rgba(201, 162, 74, .34);
+      transition: transform .18s, box-shadow .18s;
+    }
+    #enter-btn:hover {
+      transform: translateY(-2px);
+      box-shadow:
+        0 0 0 1px rgba(255, 235, 168, .8),
+        0 12px 34px rgba(201, 162, 74, .5);
+    }
+    #enter-btn:active { transform: translateY(0); }
+    #enter-btn .arrow { transition: transform .18s; }
+    #enter-btn:hover .arrow { transform: translateX(4px); }
+
+    .scroll-hint {
+      position: absolute;
+      bottom: 26px; left: 50%;
+      transform: translateX(-50%);
+      color: #55647d;
+      font-size: 12px;
+      letter-spacing: .2em;
+      z-index: 2;
+      animation: floaty 2.4s ease-in-out infinite;
+    }
+    @keyframes floaty {
+      0%, 100% { transform: translateX(-50%) translateY(0); opacity: .55; }
+      50%      { transform: translateX(-50%) translateY(6px); opacity: 1; }
+    }
+
+    /* ================= 内容区 ================= */
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 20px 24px 80px;
+    }
+
+    .section { margin-bottom: 56px; }
+
+    .section-head {
+      display: flex;
+      align-items: baseline;
+      gap: 14px;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .section-head h2 {
+      font-size: 21px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: .05em;
+    }
+    .section-head h2::before {
+      content: '';
+      display: inline-block;
+      width: 4px; height: 18px;
+      background: linear-gradient(180deg, var(--gold), var(--gold-deep));
+      border-radius: 2px;
+      margin-right: 11px;
+      vertical-align: -2px;
+    }
+    .section-head .desc {
+      font-size: 13px;
+      color: var(--muted);
+      flex: 1 1 auto;
+    }
+    .section-head .count {
+      font-size: 12px;
+      color: #55647d;
+    }
+
+    /* 卡片网格 */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(238px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      position: relative;
+      background: linear-gradient(180deg, var(--panel), #101620);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: transform .18s, border-color .18s, box-shadow .18s;
+      text-align: left;
+      font-family: inherit;
+      color: inherit;
+      padding: 0;
+      display: block;
+      width: 100%;
+    }
+    .card:hover {
+      transform: translateY(-4px);
+      border-color: var(--gold-deep);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, .5);
+    }
+
+    /* 卡片顶部色带 + 图标 */
+    .card-top {
+      height: 96px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 42px;
+      position: relative;
+      overflow: hidden;
+    }
+    .card-top::after {
+      content: '';
+      position: absolute; inset: 0;
+      background: linear-gradient(180deg, transparent 40%, rgba(11, 15, 22, .85) 100%);
+    }
+    .card-top .ico { position: relative; z-index: 1; filter: drop-shadow(0 3px 8px rgba(0,0,0,.4)); }
+
+    .card-tag {
+      position: absolute;
+      top: 9px; right: 9px;
+      font-size: 11px;
+      padding: 3px 9px;
+      border-radius: 20px;
+      background: rgba(0, 0, 0, .48);
+      color: var(--gold);
+      border: 1px solid rgba(255, 217, 122, .3);
+      z-index: 2;
+    }
+
+    .card-body { padding: 13px 15px 16px; }
+    .card-name {
+      font-size: 15.5px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 5px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .card-desc {
+      font-size: 12.5px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    .card-go {
+      margin-top: 11px;
+      font-size: 12.5px;
+      color: var(--gold-deep);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .card:hover .card-go { color: var(--gold); }
+
+    /* 未配置链接的卡片 */
+    .card.todo { cursor: not-allowed; opacity: .62; }
+    .card.todo:hover { transform: none; border-color: var(--line); box-shadow: none; }
+    .card.todo .card-go { color: #55647d; }
+
+    /* ================= 页脚 ================= */
+    footer {
+      text-align: center;
+      padding: 30px 24px 46px;
+      color: #46536a;
+      font-size: 12px;
+      line-height: 1.9;
+      border-top: 1px solid #1a222e;
+      max-width: 1080px;
+      margin: 0 auto;
+    }
+
+    /* ================= 加载 ================= */
+    #loading {
+      text-align: center;
+      padding: 50px 0;
+      color: #55647d;
+      font-size: 14px;
+    }
+
+    /* 小屏适配 */
+    @media (max-width: 560px) {
+      #hero { min-height: 68vh; padding: 40px 18px 64px; }
+      .grid { grid-template-columns: 1fr; }
+      main { padding: 14px 16px 60px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 主视觉 -->
+  <header id="hero">
+    <div id="stars"></div>
+    <div class="hero-eyebrow">BIRTHDAY ONLINE EVENT</div>
+    <h1 id="site-title">角色生日会</h1>
+    <p id="hero-sub">线上同人庆祝活动</p>
+    <a id="enter-btn" href="venue.html">
+      <span id="enter-text">进入主会场</span>
+      <span class="arrow">→</span>
+    </a>
+    <div class="scroll-hint">↓ 更多内容</div>
+  </header>
+
+  <!-- 内容区 -->
+  <main id="content">
+    <div id="loading">正在加载内容…</div>
+  </main>
+
+  <footer>
+    <div>同人庆祝活动 · 非官方作品</div>
+    <div>所有素材版权归原作者所有</div>
+  </footer>
+
+  <script>
+    // =====================================================================
+    // 首页逻辑
+    //   内容从 content.json 读取 —— 增删内容不用改这个文件
+    // =====================================================================
+
+    // ---- 星点背景 ----
+    (function makeStars() {
+      const box = document.getElementById('stars');
+      const n = 70;
+      let html = '';
+      for (let i = 0; i < n; i++) {
+        const size = (Math.random() * 2 + 1).toFixed(1);
+        html += `<i style="
+          left:${(Math.random() * 100).toFixed(2)}%;
+          top:${(Math.random() * 100).toFixed(2)}%;
+          width:${size}px;height:${size}px;
+          animation-delay:${(Math.random() * 3.5).toFixed(2)}s;
+        "></i>`;
+      }
+      box.innerHTML = html;
+    })();
+
+    // ---- 加载内容 ----
+    const contentEl = document.getElementById('content');
+
+    async function loadContent() {
+      let data;
+      try {
+        const res = await fetch('content.json', { cache: 'no-cache' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        data = await res.json();
+      } catch (e) {
+        contentEl.innerHTML = `
+          <div id="loading">
+            内容加载失败：${e.message}<br>
+            <span style="font-size:12px">（如果是直接双击打开的 html，请改用 npm run dev 启动本地服务）</span>
+          </div>`;
+        return;
+      }
+
+      applySite(data.site);
+      renderSections(data.sections);
+    }
+
+    // ---- 应用站点文案 ----
+    function applySite(site) {
+      if (!site) return;
+      if (site.title) {
+        document.title = site.title;
+        document.getElementById('site-title').textContent = site.title;
+      }
+      if (site.subtitle || site.dateText) {
+        document.getElementById('hero-sub').textContent =
+          [site.subtitle, site.dateText].filter(Boolean).join(' · ');
+      }
+      if (site.enterText) {
+        document.getElementById('enter-text').textContent = site.enterText;
+      }
+    }
+
+    // ---- 渲染各个分区 ----
+    function renderSections(sections) {
+      if (!sections || !sections.length) {
+        contentEl.innerHTML = '<div id="loading">暂无内容</div>';
+        return;
+      }
+
+      contentEl.innerHTML = sections.map((sec) => `
+        <section class="section">
+          <div class="section-head">
+            <h2>${sec.title}</h2>
+            <span class="desc">${sec.desc || ''}</span>
+            <span class="count">${(sec.items || []).length} 项</span>
+          </div>
+          <div class="grid">
+            ${(sec.items || []).map((it) => cardHtml(it)).join('')}
+          </div>
+        </section>
+      `).join('');
+
+      // 绑定点击
+      contentEl.querySelectorAll('.card').forEach((card) => {
+        card.addEventListener('click', () => {
+          const url = card.dataset.url;
+          const name = card.dataset.name;
+
+          if (!url) {
+            // 没配链接 → 提示还没上线
+            toast(`「${name}」还没有配置链接`);
+            return;
+          }
+
+          // 本地小游戏 / 会场 → 当前页跳转
+          // 外部链接 → 新标签页
+          if (/^https?:\/\//i.test(url)) {
+            window.open(url, '_blank', 'noopener');
+          } else {
+            location.href = url;
+          }
+        });
+      });
+    }
+
+    function cardHtml(item) {
+      const hasUrl = !!item.url;
+      return `
+        <button class="card ${hasUrl ? '' : 'todo'}"
+                data-url="${item.url || ''}"
+                data-name="${escapeAttr(item.name)}">
+          <div class="card-top" style="background: linear-gradient(140deg, ${item.color || '#3a4a5f'}, #101620)">
+            ${item.tag ? `<span class="card-tag">${item.tag}</span>` : ''}
+            <span class="ico">${item.icon || '★'}</span>
+          </div>
+          <div class="card-body">
+            <div class="card-name">${item.name}</div>
+            <div class="card-desc">${item.desc || ''}</div>
+            <div class="card-go">${hasUrl ? '打开 →' : '待上线'}</div>
+          </div>
+        </button>
+      `;
+    }
+
+    function escapeAttr(s) {
+      return String(s || '').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    }
+
+    // ---- 轻提示 ----
+    function toast(msg) {
+      let el = document.getElementById('toast');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'toast';
+        el.style.cssText = `
+          position:fixed; left:50%; bottom:40px; transform:translateX(-50%);
+          background:rgba(0,0,0,.86); color:#ffd97a; padding:11px 22px;
+          border-radius:24px; font-size:14px; z-index:100;
+          border:1px solid rgba(255,217,122,.28);
+          opacity:0; transition:opacity .22s; pointer-events:none;
+        `;
+        document.body.appendChild(el);
+      }
+      el.textContent = msg;
+      el.style.opacity = '1';
+      clearTimeout(el._t);
+      el._t = setTimeout(() => { el.style.opacity = '0'; }, 1900);
+    }
+
+    // ---- 滚动时主视觉轻微视差 ----
+    const hero = document.getElementById('hero');
+    window.addEventListener('scroll', () => {
+      const y = window.scrollY;
+      if (y < window.innerHeight) {
+        hero.style.transform = `translateY(${y * 0.22}px)`;
+        hero.style.opacity = String(Math.max(0, 1 - y / (window.innerHeight * 0.85)));
+      }
+    }, { passive: true });
+
+    loadContent();
+  </script>
+</body>
+</html>
