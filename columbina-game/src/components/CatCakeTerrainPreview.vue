@@ -13,6 +13,7 @@ const props = defineProps({
   map: { type: Object, required: true },
   modelUrl: { type: String, required: true },
   spriteUrl: { type: String, required: true },
+  spriteUrls: { type: Object, default: () => ({}) },
   springModelUrl: { type: String, required: true },
   pistonModelUrl: { type: String, required: true },
   spikeModelUrl: { type: String, required: true },
@@ -31,6 +32,8 @@ let camera
 let terrainMesh
 let terrainSprite
 let spriteTexture
+const opponentSpriteTextures = new Map()
+const loadingSpriteUrls = new Set()
 const catSpriteGroups = new Map()
 let processedMechanismEvents = 0
 let cameraFocusZ = 0
@@ -335,13 +338,48 @@ function clearCatSprites() {
   catSpriteGroups.clear()
 }
 
+function spriteUrlForCat(cat) {
+  return props.spriteUrls[cat.id] ?? props.spriteUrl
+}
+
+function spriteTextureForCat(cat) {
+  const url = spriteUrlForCat(cat)
+  return url === props.spriteUrl ? spriteTexture : opponentSpriteTextures.get(url)
+}
+
+function loadOpponentSprite(url) {
+  if (!url || url === props.spriteUrl || opponentSpriteTextures.has(url) || loadingSpriteUrls.has(url)) return
+  loadingSpriteUrls.add(url)
+  new THREE.TextureLoader().load(url, (texture) => {
+    loadingSpriteUrls.delete(url)
+    if (isUnmounted || !Object.values(props.spriteUrls).includes(url)) {
+      texture.dispose()
+      return
+    }
+    texture.colorSpace = THREE.SRGBColorSpace
+    opponentSpriteTextures.set(url, texture)
+    syncCatSprites(performance.now())
+  }, undefined, () => loadingSpriteUrls.delete(url))
+}
+
+function syncOpponentSpriteTextures() {
+  const requiredUrls = new Set(Object.values(props.spriteUrls).filter((url) => url !== props.spriteUrl))
+  opponentSpriteTextures.forEach((texture, url) => {
+    if (requiredUrls.has(url)) return
+    texture.dispose()
+    opponentSpriteTextures.delete(url)
+  })
+  requiredUrls.forEach((url) => loadOpponentSprite(url))
+}
+
 function addCatSprite(cat) {
-  if (!spriteTexture || catSpriteGroups.has(cat.id)) return
+  const catTexture = spriteTextureForCat(cat)
+  if (!catTexture || catSpriteGroups.has(cat.id)) return
   const group = new THREE.Group()
   const spriteSize = cat.controllerType === 'player' ? 1.5 : 1.34
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: spriteTexture,
-    color: cat.controllerType === 'player' ? '#ffffff' : cat.color,
+    map: catTexture,
+    color: '#ffffff',
     transparent: true,
     depthWrite: false,
   }))
@@ -367,6 +405,7 @@ function addCatSprite(cat) {
     marker,
     movedAt: 0,
     sprite,
+    spriteUrl: spriteUrlForCat(cat),
     spriteSize,
   }
   scene.add(group)
@@ -385,6 +424,9 @@ function syncCatSprites(timeMs) {
   props.contestants.forEach((cat) => {
     addCatSprite(cat)
     const group = catSpriteGroups.get(cat.id)
+    // Opponent textures load independently. Skip this frame until the
+    // selected cat's texture is ready; the loader will resync immediately.
+    if (!group) return
     group.visible = cat.actionState !== 'respawning'
     if (!group.visible) return
     const key = `${cat.position.x},${cat.position.y},${cat.stack.role}`
@@ -890,6 +932,7 @@ onMounted(async () => {
   new THREE.TextureLoader().load(props.spriteUrl, (texture) => {
     texture.colorSpace = THREE.SRGBColorSpace
     spriteTexture = texture
+    syncOpponentSpriteTextures()
     renderTerrain()
   })
   const animate = (timeMs) => {
@@ -905,6 +948,11 @@ onMounted(async () => {
 
 watch(() => props.map, () => renderTerrain())
 watch(() => props.contestants, () => syncCatSprites(performance.now()), { deep: true })
+watch(() => props.spriteUrls, () => {
+  clearCatSprites()
+  syncOpponentSpriteTextures()
+  syncCatSprites(performance.now())
+}, { deep: true })
 
 onBeforeUnmount(() => {
   isUnmounted = true
@@ -914,6 +962,8 @@ onBeforeUnmount(() => {
   terrainMesh?.material.dispose()
   terrainSprite?.material.dispose()
   spriteTexture?.dispose()
+  opponentSpriteTextures.forEach((texture) => texture.dispose())
+  opponentSpriteTextures.clear()
   clearCatSprites()
   clearMechanisms()
   disposeBakedAsset(mechanismAssets.spring)
