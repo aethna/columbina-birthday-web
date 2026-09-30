@@ -12,6 +12,7 @@
             <span>月亮棋</span>
             <span>星月五子棋</span>
             <span>提瓦特战力党</span>
+            <span>娅娅猫向前冲</span>
           </div>
           <a class="play-btn" href="./game/index.html">
             与哥伦比娅一起玩游戏 <span class="arr">↗</span>
