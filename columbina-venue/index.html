@@ -285,6 +285,33 @@
       font-size: 14px;
     }
 
+    /* ================= 返回主站 ================= */
+    #back-home {
+      position: fixed;
+      top: 18px;
+      left: 18px;
+      z-index: 20;
+      display: inline-flex;
+      align-items: center;
+      padding: 9px 22px;
+      border-radius: 99px;
+      border: 1px solid rgba(255, 217, 122, .45);
+      background: rgba(11, 15, 22, .72);
+      color: var(--gold);
+      font-size: 14px;
+      letter-spacing: .12em;
+      text-decoration: none;
+      -webkit-backdrop-filter: blur(6px);
+      backdrop-filter: blur(6px);
+      transition: background .3s, border-color .3s, transform .3s;
+    }
+
+    #back-home:hover {
+      background: rgba(255, 217, 122, .14);
+      border-color: var(--gold);
+      transform: translateY(-2px);
+    }
+
     /* 小屏适配 */
     @media (max-width: 560px) {
       #hero { min-height: 68vh; padding: 40px 18px 64px; }
@@ -294,6 +321,9 @@
   </style>
 </head>
 <body>
+
+  <!-- 返回主站 -->
+  <a id="back-home" href="https://columbina520.com/" aria-label="返回主站">返回</a>
 
   <!-- 主视觉 -->
   <header id="hero">
