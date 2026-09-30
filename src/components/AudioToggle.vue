@@ -181,7 +181,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .audio-toggle{
-  position:fixed;z-index:60;top:22px;right:22px;
+  position:fixed;z-index:60;top:22px;left:22px;
   width:46px;height:46px;padding:0;cursor:pointer;
   display:grid;place-items:center;
   border:1px solid var(--line);border-radius:50%;
@@ -200,7 +200,7 @@ onBeforeUnmount(() => {
 @keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}
 
 @media(max-width:520px){
-  .audio-toggle{top:12px;right:12px;width:40px;height:40px}
+  .audio-toggle{top:12px;left:12px;width:40px;height:40px}
   .audio-icon{width:19px;height:19px}
 }
 </style>
