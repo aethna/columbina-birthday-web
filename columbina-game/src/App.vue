@@ -24,6 +24,7 @@ import stageTwo from '../p/stages/02.jpg'
 import stageThree from '../p/stages/03.jpg'
 import stageFour from '../p/stages/04.jpg'
 import characterRun from '../p/columbina-run-transparent.webp'
+import catRaceTitle from '../p/cat-cake-race/标题.png'
 import ticTacToeWorkerUrl from './games/ticTacToe.worker.js?worker&url'
 import gomokuWorkerUrl from './games/gomoku.worker.js?worker&url'
 import { playSfx } from './games/sound.js'
@@ -44,6 +45,7 @@ import { isEnglish } from './i18n.js'
 const RunnerGame = defineAsyncComponent(() => import('./components/RunnerGame.vue'))
 const BoardGame = defineAsyncComponent(() => import('./components/BoardGame.vue'))
 const TeyvatDiceGame = defineAsyncComponent(() => import('./components/TeyvatDiceGame.vue'))
+const CatCakeRaceGame = defineAsyncComponent(() => import('./components/CatCakeRaceGame.vue'))
 
 const eventLogo = isEnglish ? './english-logo.png' : eventLogoZh
 
@@ -179,6 +181,7 @@ function applyBgm() {
   else if (screen.value === 'game') setBgm(stageMusic[index % 4])
   else if (screen.value === 'board') setBgm(stageMusicThree)
   else if (screen.value === 'dice') setBgm(stageMusicThree)
+  else if (screen.value === 'catRace') setBgm(stageMusicThree)
 }
 watch([screen, () => Math.floor(score.value / 10)], applyBgm, { immediate: true })
 function preloadStage(index) { const image = new Image(); image.src = stageBackgrounds[index % stageBackgrounds.length] }
@@ -526,6 +529,14 @@ function closeDice() {
   nextTick(() => window.scrollTo({ top: 0, behavior: 'instant' }))
 }
 
+function openCatCakeRace() {
+  playSfx('ui')
+  stopVoice()
+  cancelAnimationFrame(animationFrame)
+  screen.value = 'catRace'
+  nextTick(() => window.scrollTo({ top: 0, behavior: 'instant' }))
+}
+
 /* 五子棋重开会重挂棋盘组件（避免残局/语音状态残留） */
 function reloadBoard() {
   boardSessionKey.value += 1
@@ -813,7 +824,7 @@ onBeforeUnmount(() => {
           <div class="hero-content">
             <p class="hero-kicker">「新月再梦听羽生」主题游戏</p>
             <img class="event-logo" :src="eventLogo" alt="新月再梦听羽生 · 哥伦比娅生日会" />
-            <p class="hero-copy">循着月光进入她的梦境。五段旅程，五种相遇，<br />在羽声落下之前，与哥伦比娅共度这一夜。</p>
+            <p class="hero-copy">循着月光进入她的梦境。六段旅程，六种相遇，<br />在羽声落下之前，与哥伦比娅共度这一夜。</p>
             <a class="hero-cta" href="#games"><span>进入梦境游廊</span><b>↓</b></a>
           </div>
           <div class="hero-scroll"><span></span>SCROLL TO DREAM</div>
@@ -935,8 +946,7 @@ onBeforeUnmount(() => {
               </div>
             </article>
 
-            <!-- DREAM 05：提瓦特战力党。卡面结构与上面四张完全一致，
-                 只是横跨两列（grid-column:1/-1），否则第 3 行会空半格。 -->
+            <!-- DREAM 05：提瓦特战力党。新原型加入后与 DREAM 06 并排。 -->
             <article
               class="game-card featured dice-card"
               role="button"
@@ -965,6 +975,31 @@ onBeforeUnmount(() => {
                 </div>
                 <button class="enter-button" type="button" @click.stop="openDice">
                   开始游戏 <span>↗</span>
+                </button>
+              </div>
+            </article>
+
+            <article
+              class="game-card featured cat-race-card"
+              role="button"
+              tabindex="0"
+              @click="openCatCakeRace"
+              @keydown.enter="openCatCakeRace"
+              @keydown.space.prevent="openCatCakeRace"
+            >
+              <div class="card-art cat-race-card-art game-cover">
+                <div class="cat-race-preview-grid" aria-hidden="true"></div>
+                <img class="cat-race-cover-icon" :src="catRaceTitle" alt="娅娅猫向前冲">
+                <span class="play-orbit"><span>06</span><b>进入</b></span>
+              </div>
+              <div class="card-body">
+                <div>
+                  <p class="card-number">DREAM 06 · CAT CAKE RACE</p>
+                  <h2>娅娅猫向前冲</h2>
+                  <p>选择五张正式地图，与4只AI竞速；使用跳跃、弹簧和机关冲向终点。</p>
+                </div>
+                <button class="enter-button" type="button" @click.stop="openCatCakeRace">
+                  开始比赛 <span>↗</span>
                 </button>
               </div>
             </article>
@@ -1062,6 +1097,7 @@ onBeforeUnmount(() => {
 
       <RunnerGame v-else-if="screen === 'runner'" key="runner" @back="returnToLobby" />
       <TeyvatDiceGame v-else-if="screen === 'dice'" key="dice" @back="closeDice" />
+      <CatCakeRaceGame v-else-if="screen === 'catRace'" key="catRace" @back="returnToLobby" />
       <BoardGame v-else :key="`board-${boardKind}-${boardSessionKey}`" :kind="boardKind" @back="closeBoard" @reload="reloadBoard" @result="saveBoardResult" />
     </Transition>
 

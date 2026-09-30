@@ -6,7 +6,7 @@ export const isEnglish = language === 'en'
 const exact = new Map(Object.entries({
   '返回': 'Back', '哥伦比娅生日会': 'Columbina Birthday Celebration',
   '「新月再梦听羽生」主题游戏': "“Where Feathers Bloom in the New Moon's Dream” · Themed Games",
-  '循着月光进入她的梦境。五段旅程，五种相遇，\n在羽声落下之前，与哥伦比娅共度这一夜。': 'Follow the moonlight into her dreams. Five journeys, five encounters—\nspend this night with Columbina before the feathers fall silent.',
+  '循着月光进入她的梦境。六段旅程，六种相遇，\n在羽声落下之前，与哥伦比娅共度这一夜。': 'Follow the moonlight into her dreams. Six journeys, six encounters—\nspend this night with Columbina before the feathers fall silent.',
   '进入梦境游廊': 'Enter the Dream Arcade', '月下游廊': 'Dream Arcade',
   '选择一段梦境，与她一同飞行、奔跑，或在月色中落下一枚棋子。': 'Choose a dream: fly and run beside her, or place a piece together beneath the moon.',
   '进入': 'ENTER', '云隙轻歌': 'Song Through the Clouds', '陪哥伦比娅轻盈起飞，在云隙之间延续她的歌。': 'Take flight with Columbina and carry her song through the clouds.',
@@ -16,7 +16,7 @@ const exact = new Map(Object.entries({
   '提瓦特战力党': 'Teyvat Power Dice',
   '十二位提瓦特角色，投骰、选骰、重投，在攻防之间决出胜负。': 'Twelve Teyvat characters — roll, pick, reroll, and settle it in attack and defence.',
   '进入提瓦特…': 'Entering Teyvat…',
-  '循着月光进入她的梦境。五段旅程，五种相遇，': 'Follow the moonlight into her dreams. Five journeys, five encounters—',
+  '循着月光进入她的梦境。六段旅程，六种相遇，': 'Follow the moonlight into her dreams. Six journeys, six encounters—',
   '在羽声落下之前，与哥伦比娅共度这一夜。': 'spend this night with Columbina before the feathers fall silent.',
   '梦境记录': 'Dream Record', '愿今夜的月光，停留得久一些。': 'May tonight’s moonlight linger a little longer.',
   '哥伦比娅生日会 · 新月再梦听羽生': "Columbina Birthday Celebration · Where Feathers Bloom in the New Moon's Dream",
