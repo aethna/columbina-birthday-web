@@ -24,6 +24,7 @@ import stageTwo from '../p/stages/02.jpg'
 import stageThree from '../p/stages/03.jpg'
 import stageFour from '../p/stages/04.jpg'
 import characterRun from '../p/columbina-run-transparent.webp'
+import catRaceTitle from '../p/cat-cake-race/标题.png'
 import ticTacToeWorkerUrl from './games/ticTacToe.worker.js?worker&url'
 import gomokuWorkerUrl from './games/gomoku.worker.js?worker&url'
 import { playSfx } from './games/sound.js'
@@ -882,10 +883,8 @@ onBeforeUnmount(() => {
               @keydown.space.prevent="openCatCakeRace"
             >
               <div class="card-art cat-race-card-art game-cover">
-                <div class="cat-race-preview" aria-hidden="true">
-                  <span v-for="n in 5" :key="n" :class="{ player: n === 3 }">{{ n === 3 ? 'P' : n }}</span>
-                </div>
                 <div class="cat-race-preview-grid" aria-hidden="true"></div>
+                <img class="cat-race-cover-icon" :src="catRaceTitle" alt="娅娅猫向前冲">
                 <span class="play-orbit"><span>06</span><b>进入</b></span>
               </div>
               <div class="card-body">
