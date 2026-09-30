@@ -12,6 +12,37 @@
 
   "sections": [
     {
+      "id": "games",
+      "title": "小游戏",
+      "desc": "大家做的小游戏，点开即玩",
+      "items": [
+        {
+          "name": "小游戏 1",
+          "desc": "占位描述，以后换成真实简介",
+          "icon": "🎮",
+          "color": "#4a6fa5",
+          "url": "games/demo-game/index.html",
+          "tag": "休闲"
+        },
+        {
+          "name": "小游戏 2",
+          "desc": "占位描述，以后换成真实简介",
+          "icon": "🎲",
+          "color": "#6b4a8a",
+          "url": "games/demo-game/index.html",
+          "tag": "益智"
+        },
+        {
+          "name": "小游戏 3",
+          "desc": "占位描述，以后换成真实简介",
+          "icon": "🎯",
+          "color": "#8a5a4a",
+          "url": "games/demo-game/index.html",
+          "tag": "挑战"
+        }
+      ]
+    },
+    {
       "id": "goods",
       "title": "单品展示",
       "desc": "同好们的创作，点开看详情",
