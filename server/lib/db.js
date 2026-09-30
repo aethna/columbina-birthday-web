@@ -57,6 +57,8 @@ const SCHEMA = [
      agreed TINYINT(1) NOT NULL DEFAULT 0,
      ip VARCHAR(64) NULL,
      ua VARCHAR(500) NULL,
+     qq_openid VARCHAR(64) NULL,
+     qq_nickname VARCHAR(128) NULL,
      created_at DATETIME NOT NULL,
      KEY idx_created (created_at)
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -104,6 +106,31 @@ const SCHEMA = [
      expires_at DATETIME NOT NULL,
      KEY idx_expires (expires_at)
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+  /* ---- QQ 登录（普通访客，与管理员体系完全分开） ---- */
+  `CREATE TABLE IF NOT EXISTS qq_users (
+     id VARCHAR(32) NOT NULL PRIMARY KEY,
+     openid VARCHAR(64) NOT NULL UNIQUE,
+     unionid VARCHAR(64) NULL,
+     nickname VARCHAR(128) NULL,
+     avatar VARCHAR(512) NULL,
+     gender VARCHAR(16) NULL,
+     login_count INT NOT NULL DEFAULT 1,
+     created_at DATETIME NOT NULL,
+     last_login_at DATETIME NOT NULL,
+     last_ip VARCHAR(64) NULL
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+  `CREATE TABLE IF NOT EXISTS user_sessions (
+     tk CHAR(64) NOT NULL PRIMARY KEY,
+     user_id VARCHAR(32) NOT NULL,
+     created_at DATETIME NOT NULL,
+     expires_at DATETIME NOT NULL,
+     ip VARCHAR(64) NULL,
+     ua VARCHAR(500) NULL,
+     KEY idx_user (user_id),
+     KEY idx_expires (expires_at)
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 ];
 
 /* 已有库的增量变更（CREATE TABLE IF NOT EXISTS 不会加列） */
@@ -112,6 +139,8 @@ const MIGRATIONS = [
   { table: 'submissions', column: 'favorited_at', sql: "ALTER TABLE submissions ADD COLUMN favorited_at DATETIME NULL" },
   { table: 'admin_users', column: 'secret_enc', sql: "ALTER TABLE admin_users ADD COLUMN secret_enc VARCHAR(255) NULL" },
   { table: 'submissions', column: 'updated_at', sql: "ALTER TABLE submissions ADD COLUMN updated_at DATETIME NULL" },
+  { table: 'submissions', column: 'qq_openid', sql: "ALTER TABLE submissions ADD COLUMN qq_openid VARCHAR(64) NULL" },
+  { table: 'submissions', column: 'qq_nickname', sql: "ALTER TABLE submissions ADD COLUMN qq_nickname VARCHAR(128) NULL" },
 ];
 
 async function migrate() {
@@ -228,7 +257,7 @@ async function filesOf(submissionId) {
 const SUB_FIELDS = [
   'id', 'contact_type', 'contact_value', 'nicknames', 'creation_type', 'team_members',
   'title', 'category', 'intro', 'duration', 'has_other_chars', 'other_chars',
-  'progress', 'preview_type', 'preview_link', 'agreed', 'ip', 'ua', 'created_at',
+  'progress', 'preview_type', 'preview_link', 'agreed', 'ip', 'ua', 'qq_openid', 'qq_nickname', 'created_at',
 ];
 async function insertSubmission(row) {
   const cols = SUB_FIELDS.join(',');
@@ -438,6 +467,78 @@ async function purgeSessions() {
   return res.affectedRows || 0;
 }
 
+/* ------------------------------------------------------------ QQ 访客账号 / 登录态 */
+
+async function getQqUserByOpenid(openid) {
+  const [rows] = await get().query('SELECT * FROM qq_users WHERE openid = ? LIMIT 1', [openid]);
+  return rows[0] || null;
+}
+
+async function getQqUserById(id) {
+  const [rows] = await get().query('SELECT * FROM qq_users WHERE id = ? LIMIT 1', [id]);
+  return rows[0] || null;
+}
+
+/**
+ * 同一 openid 复访不新建账号：只刷新昵称/头像并累加登录次数。
+ * id 由调用方生成（index.js 用 auth.newId），避免本模块再引 crypto。
+ */
+async function upsertQqUser(row) {
+  const existing = await getQqUserByOpenid(row.openid);
+  if (existing) {
+    await get().query(
+      `UPDATE qq_users
+          SET nickname = ?, avatar = ?, unionid = ?, gender = ?,
+              login_count = login_count + 1, last_login_at = ?, last_ip = ?
+        WHERE id = ?`,
+      [
+        row.nickname || existing.nickname,
+        row.avatar || existing.avatar,
+        row.unionid || existing.unionid,
+        row.gender || existing.gender,
+        now(), row.ip || null, existing.id,
+      ]
+    );
+    return getQqUserById(existing.id);
+  }
+  await get().query(
+    `INSERT INTO qq_users (id, openid, unionid, nickname, avatar, gender, login_count, created_at, last_login_at, last_ip)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    [row.id, row.openid, row.unionid || null, row.nickname || null, row.avatar || null,
+     row.gender || null, 1, now(), now(), row.ip || null]
+  );
+  return getQqUserById(row.id);
+}
+
+async function countQqUsers() {
+  const [rows] = await get().query('SELECT COUNT(*) AS n FROM qq_users');
+  return Number(rows[0].n);
+}
+
+async function createUserSession(row) {
+  await get().query(
+    'INSERT INTO user_sessions (tk, user_id, created_at, expires_at, ip, ua) VALUES (?,?,?,?,?,?)',
+    [row.tk, row.userId, now(), row.expiresAt, row.ip || null, String(row.ua || '').slice(0, 480) || null]
+  );
+}
+
+async function getUserSession(tk) {
+  const [rows] = await get().query(
+    'SELECT * FROM user_sessions WHERE tk = ? AND expires_at > ? LIMIT 1',
+    [tk, now()]
+  );
+  return rows[0] || null;
+}
+
+async function deleteUserSession(tk) {
+  await get().query('DELETE FROM user_sessions WHERE tk = ?', [tk]);
+}
+
+async function purgeUserSessions() {
+  const [res] = await get().query('DELETE FROM user_sessions WHERE expires_at <= ?', [now()]);
+  return res.affectedRows || 0;
+}
+
 module.exports = {
   loadConfig, readAdminSecret, init, get, now,
   createUpload, getUpload, touchUpload, findUploadByNameSize, staleUploads, dropUpload,
@@ -448,4 +549,6 @@ module.exports = {
   countAdmins, listAdminUsers, getAdminUserById, getAdminUserByName, createAdminUser,
   updateAdminSecret, touchAdminLogin, deleteAdminUser, countSupers,
   createSession, getSession, deleteSession, purgeSessions, revokeUserSessions,
+  getQqUserByOpenid, getQqUserById, upsertQqUser, countQqUsers,
+  createUserSession, getUserSession, deleteUserSession, purgeUserSessions,
 };
