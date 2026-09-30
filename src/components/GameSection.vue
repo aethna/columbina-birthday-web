@@ -14,7 +14,7 @@
             <span>提瓦特战力党</span>
             <span>娅娅猫向前冲</span>
           </div>
-          <a class="play-btn" href="./game/index.html">
+          <a class="play-btn" href="./game/index.html" @click.prevent="$emit('play')">
             与哥伦比娅一起玩游戏 <span class="arr">↗</span>
           </a>
         </div>
@@ -27,6 +27,11 @@
     </div>
   </section>
 </template>
+
+<script setup>
+/* 点击交给 App 做登录门禁：未登录先去登录页，登录了再跳游戏页 */
+defineEmits(['play'])
+</script>
 
 <style scoped>
 /* ---------- 玩游戏 ---------- */

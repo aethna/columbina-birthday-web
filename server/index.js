@@ -26,6 +26,7 @@ const db = require('./lib/db');
 const up = require('./lib/upload');
 const auth = require('./lib/auth');
 const { validateSubmission } = require('./lib/validate');
+const qq = require('./lib/qq');
 
 const cfg = db.loadConfig();
 /* 内置超级管理员：不可删除（用户名取自 config.initAdmin，默认 admin） */
@@ -43,6 +44,15 @@ const DEFAULT_CHUNK = Number(cfg.defaultChunkMB || 4) * MB;
 const MAX_CHUNK = Number(cfg.maxChunkMB || 16) * MB;
 const MIN_CHUNK = Number(cfg.minChunkKB || 256) * 1024;
 const PUBLIC_BASE = (cfg.publicBaseUrl || '').replace(/\/+$/, '');
+
+/* ---- QQ 访客登录 ---- */
+/* 密钥来自 <dataDir>/qq.json 或环境变量（见 lib/qq.js）；没配置时接口返回 503，站点其余部分照常可用 */
+let QQ_CFG = { appId: '', appKey: '', redirectUri: '' };
+const MEMBER_COOKIE = 'cb_user';
+const MEMBER_TTL_HOURS = Math.max(1, Number(cfg.userSessionTTLHours || 168));
+/* 防 CSRF 的 state 表：进程内存足够，10 分钟过期；重启后旧 state 失效，用户重来一次即可 */
+const QQ_STATES = new Map();
+const QQ_STATE_TTL_MS = 10 * 60 * 1000;
 
 /* ------------------------------------------------------------ 小工具 */
 
@@ -274,8 +284,12 @@ async function handleSubmit(req, res) {
   }
 
   const id = up.newId();
+  /* 已登录投稿：顺手记下 QQ 身份，后台可对账（未登录仍允许提交，保持老路径不变） */
+  const me = await resolveUser(req);
   await db.insertSubmission({
     id,
+    qq_openid: me ? me.user.openid : null,
+    qq_nickname: me ? me.user.nickname : null,
     contact_type: value.contactType,
     contact_value: value.contactValue,
     nicknames: value.nicknames,
@@ -443,6 +457,7 @@ function rowToJson(row, withContact) {
     favoritedAt: row.favorited_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at || null,
+    qqNickname: row.qq_nickname || null,
   };
   if (withContact) {
     out.contactType = row.contact_type;
@@ -498,6 +513,135 @@ async function handleLogout(req, res, me) {
 
 async function handleMe(req, res, me) {
   return json(res, 200, { ok: true, id: me.userId || '', username: me.username, role: me.role, viaMaster: !!me.viaMaster });
+}
+
+/* ---------------- 访客 QQ 登录 ---------------- */
+
+function parseCookies(req) {
+  const out = {};
+  const raw = String(req.headers.cookie || '');
+  if (!raw) return out;
+  for (const part of raw.split(';')) {
+    const i = part.indexOf('=');
+    if (i < 0) continue;
+    const k = part.slice(0, i).trim();
+    if (!k) continue;
+    try { out[k] = decodeURIComponent(part.slice(i + 1).trim()); } catch (e) { out[k] = part.slice(i + 1).trim(); }
+  }
+  return out;
+}
+
+function isLocalHost(req) {
+  const h = String(req.headers.host || '');
+  return h.startsWith('127.0.0.1') || h.startsWith('localhost') || h.startsWith('[::1]');
+}
+
+/** 会话 cookie：HttpOnly 防脚本读取，SameSite=Lax 防跨站携带；线上（非本机）一律 Secure */
+function memberCookieHeader(req, tk, maxAgeSec) {
+  const parts = [`${MEMBER_COOKIE}=${encodeURIComponent(tk)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax'];
+  if (!isLocalHost(req)) parts.push('Secure');
+  parts.push(maxAgeSec > 0 ? `Max-Age=${maxAgeSec}` : 'Max-Age=0');
+  return parts.join('; ');
+}
+
+function redirect(res, location) {
+  res.writeHead(302, { Location: location, 'Cache-Control': 'no-store' });
+  res.end();
+}
+
+/** 登录后跳回哪里：只接受站内相对路径，挡掉 //evil.com 这类开放重定向 */
+function safeReturnTo(v) {
+  const s = String(v || '').trim();
+  if (!s.startsWith('/') || s.startsWith('//')) return '/';
+  return s.slice(0, 300);
+}
+
+function sweepStates() {
+  const nowMs = Date.now();
+  for (const [k, v] of QQ_STATES) if (v.exp < nowMs) QQ_STATES.delete(k);
+}
+
+/** 读 cookie → 查会话 → 取 QQ 用户；未登录返回 null（不抛错） */
+async function resolveUser(req) {
+  const tk = parseCookies(req)[MEMBER_COOKIE] || '';
+  if (!tk) return null;
+  const sess = await db.getUserSession(tk);
+  if (!sess) return null;
+  const user = await db.getQqUserById(sess.user_id);
+  if (!user) { await db.deleteUserSession(tk); return null; }
+  return { tk, user };
+}
+
+/* 对外只暴露昵称头像，openid 属站内标识，不外泄 */
+function publicUser(u) {
+  return { id: u.id, nickname: u.nickname || '', avatar: u.avatar || '', lastLoginAt: u.last_login_at };
+}
+
+/** 第一步：302 到 QQ 授权页 */
+async function handleQqStart(req, res, url) {
+  if (!qq.enabled(QQ_CFG)) {
+    return json(res, 503, { ok: false, error: 'QQ 登录尚未配置' });
+  }
+  sweepStates();
+  const state = auth.newId(16);
+  QQ_STATES.set(state, { returnTo: safeReturnTo(url.searchParams.get('returnTo')), exp: Date.now() + QQ_STATE_TTL_MS });
+  return redirect(res, qq.authorizeUrl(QQ_CFG, state));
+}
+
+/** 第二步：QQ 回调 → 换 token → 取 openid/资料 → 落库 → 下发 cookie → 跳回原目标 */
+async function handleQqCallback(req, res, url) {
+  if (!qq.enabled(QQ_CFG)) {
+    return json(res, 503, { ok: false, error: 'QQ 登录尚未配置' });
+  }
+  const code = String(url.searchParams.get('code') || '');
+  const state = String(url.searchParams.get('state') || '');
+  const rec = QQ_STATES.get(state);
+  if (!code || !rec || rec.exp < Date.now()) {
+    if (state) QQ_STATES.delete(state);
+    console.error('[qq] 回调缺少有效 code/state（可能过期或被伪造）');
+    return redirect(res, '/#/login?error=state');
+  }
+  QQ_STATES.delete(state);
+
+  const ip = clientIp(req);
+  try {
+    const { accessToken } = await qq.exchangeToken(QQ_CFG, code);
+    const { openid, unionid } = await qq.fetchOpenid(accessToken);
+    const info = await qq.fetchUserInfo(QQ_CFG, accessToken, openid);
+    const user = await db.upsertQqUser({
+      id: auth.newId(16), openid, unionid,
+      nickname: info.nickname, avatar: info.avatar, gender: info.gender, ip,
+    });
+    const tk = auth.newId(32);
+    const expiresAt = new Date(Date.now() + MEMBER_TTL_HOURS * 3600 * 1000);
+    await db.createUserSession({ tk, userId: user.id, expiresAt, ip, ua: req.headers['user-agent'] });
+    res.setHeader('Set-Cookie', memberCookieHeader(req, tk, Math.floor(MEMBER_TTL_HOURS * 3600)));
+    console.log(`[qq] 登录成功 user=${user.id} nickname=${user.nickname || '(无昵称)'}`);
+    return redirect(res, rec.returnTo || '/');
+  } catch (e) {
+    console.error('[qq] 登录失败：', e && e.message);
+    return redirect(res, '/#/login?error=qq');
+  }
+}
+
+async function handleUserMe(req, res) {
+  const me = await resolveUser(req);
+  if (!me) return json(res, 200, { ok: true, loggedIn: false });
+  return json(res, 200, { ok: true, loggedIn: true, user: publicUser(me.user) });
+}
+
+async function handleUserLogout(req, res) {
+  const tk = parseCookies(req)[MEMBER_COOKIE] || '';
+  if (tk) await db.deleteUserSession(tk);
+  res.setHeader('Set-Cookie', memberCookieHeader(req, '', 0));
+  return json(res, 200, { ok: true });
+}
+
+/** 给投稿用的门禁判定：未登录就 401，前端据此弹登录 */
+function requireUser(me, res) {
+  if (me) return false;
+  json(res, 401, { ok: false, error: '请先登录', needLogin: true });
+  return true;
 }
 
 /* ---------------- 投稿列表 / 详情 ---------------- */
@@ -756,6 +900,12 @@ const ROUTES = [
   ['PUT', /^\/api\/submissions\/([a-f0-9]{32})\/?$/, async (req, res, m) => handleSubmissionUpdate(req, res, m[1]), null],
   ['GET', /^\/api\/submissions\/([a-f0-9]{32})\/?$/, async (req, res, m) => handleSubmissionReceipt(req, res, m[1]), null],
 
+  /* 访客 QQ 登录（cookie 会话，与管理员体系完全分开） */
+  ['GET', /^\/api\/auth\/qq\/start\/?$/, async (req, res, m, url) => handleQqStart(req, res, url), null],
+  ['GET', /^\/api\/auth\/qq\/callback\/?$/, async (req, res, m, url) => handleQqCallback(req, res, url), null],
+  ['GET', /^\/api\/auth\/me\/?$/, handleUserMe, null],
+  ['POST', /^\/api\/auth\/logout\/?$/, handleUserLogout, null],
+
   /* 管理端 */
   ['POST', /^\/api\/admin\/login\/?$/, handleLogin, null],
   ['POST', /^\/api\/admin\/logout\/?$/, async (req, res, m, url, me) => handleLogout(req, res, me), 'session'],
@@ -835,6 +985,7 @@ async function main() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   up.initDirs(DATA_DIR);
   SECRET_KEY = auth.loadKey(keyFilePath());
+  QQ_CFG = qq.readConfig(DATA_DIR);
   await db.init();
   await ensureSuperAdmin();
   const retentionDays = Number(cfg.retentionDays || 7);
@@ -844,6 +995,7 @@ async function main() {
       const stale = await db.staleUploads(new Date(Date.now() - retentionDays * 86400 * 1000));
       for (const s of stale) if (s.state === 'open') await db.dropUpload(s.id);
       await db.purgeSessions();
+      await db.purgeUserSessions();
       if (r.removedTmp) console.log(`[cleanup] 清理过期分片目录 ${r.removedTmp} 个`);
     } catch (e) {
       console.error('[cleanup] 失败', e && e.message);
@@ -854,6 +1006,9 @@ async function main() {
 
   server.listen(PORT, HOST, () => {
     console.log(`columbina-birthday api listening on http://${HOST}:${PORT}${PUBLIC_BASE || ''}`);
+    console.log(qq.enabled(QQ_CFG)
+      ? `[qq] QQ 登录已启用，回调地址 ${QQ_CFG.redirectUri}`
+      : '[qq] QQ 登录未配置（缺 data/qq.json 或 QQ_APP_ID/QQ_APP_KEY 环境变量），/api/auth/* 返回 503');
   });
 }
 
