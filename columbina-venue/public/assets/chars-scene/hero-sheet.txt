@@ -1,0 +1,3 @@
+frameWidth=192
+frameHeight=192
+displayHeight=192

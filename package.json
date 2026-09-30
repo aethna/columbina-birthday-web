@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite",
     "build:game": "npm --prefix columbina-game run build && node scripts/sync-game-dist.mjs",
-    "build": "npm run build:game && vite build",
+    "build:venue": "npm --prefix columbina-venue run build && node scripts/sync-venue-dist.mjs",
+    "build": "npm run build:game && npm run build:venue && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

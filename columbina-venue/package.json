@@ -1,0 +1,19 @@
+{
+  "name": "genshin-birthday-venue",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "原神角色生日会 2D 主会场 —— 固定俯视视角，展位可挂载独立 HTML 小游戏",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview --host"
+  },
+  "dependencies": {
+    "phaser": "^3.90.0",
+    "puppeteer": "^25.12.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}

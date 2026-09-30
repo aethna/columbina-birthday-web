@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>生日会主会场</title>
+  <!-- 内联 favicon，避免浏览器请求不存在的文件产生 404 -->
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #0d1117;
+      font-family: system-ui, "Microsoft YaHei", sans-serif;
+      user-select: none;
+    }
+    /* 用 fixed + inset 铺满视口，不依赖百分比高度链。
+       百分比高度在部分浏览器/嵌入场景下会解析为 0，导致画布没高度 → 黑屏。 */
+    #game-root {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #game-root canvas { display: block; }
+    canvas { display: block; }
+
+    /* ================= 对话框（仙剑 / 剑侠 风格） ================= */
+    /* 布局：左侧大头像 + 右侧文字区，外双线描边，名牌挂在框左上角 */
+    #dialog-root {
+      position: fixed;
+      left: 50%;
+      bottom: 28px;
+      transform: translateX(-50%) translateY(16px);
+      width: min(820px, calc(100% - 40px));
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .18s, transform .18s;
+      z-index: 2000;
+    }
+    #dialog-root.active {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* 外框：双层描边 + 四角装饰 */
+    #dialog-frame {
+      position: relative;
+      display: flex;
+      gap: 0;
+      background: linear-gradient(180deg, rgba(20, 26, 38, .97), rgba(12, 16, 24, .97));
+      border: 2px solid #8a6d3b;
+      border-radius: 4px;
+      box-shadow:
+        inset 0 0 0 1px rgba(255, 217, 122, .25),
+        0 14px 44px rgba(0, 0, 0, .7);
+      padding: 14px;
+    }
+    /* 四角小装饰（中式画框感） */
+    #dialog-frame::before,
+    #dialog-frame::after {
+      content: '';
+      position: absolute;
+      width: 14px; height: 14px;
+      border: 2px solid #ffd97a;
+      pointer-events: none;
+    }
+    #dialog-frame::before { top: -2px; left: -2px; border-right: none; border-bottom: none; }
+    #dialog-frame::after  { bottom: -2px; right: -2px; border-left: none; border-top: none; }
+
+    /* ---- 左侧大头像 ---- */
+    /*
+     * ★ 尺寸从 128x128 改为 128x192（竖版），并且图片改用 object-fit: contain
+     *
+     *   原来为什么显示不一致（根因）：
+     *     NPC 头像是「非 Q 版全身立绘」，5 张都是竖长的
+     *     （约 160x310，高宽比接近 2:1）。
+     *     而头像框是 128x128 的正方形 + object-fit: cover ——
+     *     cover 会保持比例填满方框、把超出的部分裁掉。
+     *     竖图塞进方框：宽度先撑满 128，高度就变成约 256，
+     *     上下各被裁掉 64px，正好把【头部】裁没，只剩腰腿那一截。
+     *     5 张图宽度略有差别（160~196），裁掉的量也不同，
+     *     所以看起来就是「有的显示全身、有的只剩半截」—— 各不相同。
+     *
+     *   现在怎么统一：
+     *     框改成竖版 128x192（贴近素材的 1:2 比例），
+     *     图片用 contain（完整显示、不裁剪、不变形）。
+     *     5 个 NPC 一律显示完整全身立绘，风格统一。
+     */
+    #dialog-portrait {
+      flex: 0 0 auto;
+      width: 128px;
+      height: 192px;
+      border: 2px solid #8a6d3b;
+      border-radius: 3px;
+      background: #26313d;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 76px;
+      line-height: 1;
+      overflow: hidden;
+      position: relative;
+    }
+    /*
+     * contain：把整张立绘完整装进框内，不裁切。
+     * 竖图装进竖框几乎不留白，比例也不变形。
+     */
+    #dialog-portrait img {
+      width: 100%; height: 100%;
+      object-fit: contain;
+      object-position: center bottom;   /* 底边对齐，脚踩在框底，更像立绘 */
+      display: block;
+    }
+
+    /* ---- 右侧内容 ---- */
+    #dialog-content {
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      padding-left: 18px;
+      min-width: 0;
+    }
+
+    /* 名牌 */
+    #dialog-name {
+      position: absolute;
+      top: -15px;
+      left: 130px;
+      background: linear-gradient(180deg, #c9a24a, #8a6d3b);
+      color: #1a1207;
+      font-size: 14px;
+      font-weight: 700;
+      padding: 4px 18px;
+      border-radius: 3px;
+      border: 1px solid #ffd97a;
+      letter-spacing: .5px;
+      white-space: nowrap;
+    }
+
+    #dialog-text {
+      color: #e8eef8;
+      font-size: 17px;
+      line-height: 1.75;
+      flex: 1 1 auto;
+      padding-top: 6px;
+      white-space: pre-wrap;
+      overflow-y: auto;
+      max-height: 132px;
+    }
+    /* 逐字打印时的光标 */
+    #dialog-text.typing::after {
+      content: '▌';
+      color: #ffd97a;
+      animation: blink .7s step-end infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    #dialog-links {
+      margin-top: 10px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .dialog-link {
+      background: linear-gradient(180deg, #ffd97a, #d9a93c);
+      color: #2a1f00;
+      border: 1px solid #ffeba8;
+      padding: 9px 22px;
+      border-radius: 3px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+      transition: transform .12s, filter .12s;
+    }
+    .dialog-link:hover { transform: translateY(-1px); filter: brightness(1.1); }
+    .dialog-link:active { transform: translateY(0); }
+
+    #dialog-hint {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #7d93b3;
+      text-align: right;
+    }
+
+    /* ================= 通用弹层（小游戏 / 外部页） ================= */
+    #overlay {
+      position: fixed; inset: 0;
+      background: rgba(8, 12, 20, .94);
+      display: none;
+      flex-direction: column;
+      z-index: 3000;
+    }
+    #overlay.active { display: flex; }
+    #overlay-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 20px;
+      background: #1a2233;
+      border-bottom: 1px solid #2e3a4f;
+      flex: 0 0 auto;
+    }
+    #overlay-title { color: #ffd97a; font-size: 17px; font-weight: 600; }
+    #overlay-close {
+      background: #2e3a4f; color: #fff; border: none;
+      padding: 8px 18px; border-radius: 6px; font-size: 14px;
+      cursor: pointer; font-family: inherit;
+    }
+    #overlay-close:hover { background: #4a6fa5; }
+    #overlay-body { flex: 1 1 auto; position: relative; background: #0d1117; }
+    #overlay-frame { width: 100%; height: 100%; border: none; display: block; }
+
+    /* iframe 加载失败时的兜底提示 */
+    #overlay-fallback {
+      position: absolute; inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: #0d1117;
+      color: #a9c4e8;
+      text-align: center;
+      padding: 30px;
+    }
+    #overlay-fallback.show { display: flex; }
+    #overlay-fallback h3 { color: #ffd97a; font-size: 19px; font-weight: 600; }
+    #overlay-fallback p { font-size: 14px; color: #6f8bb5; line-height: 1.7; max-width: 460px; }
+    #fallback-open {
+      background: linear-gradient(180deg, #ffd97a, #f0b93c);
+      color: #2a1f00; border: none;
+      padding: 11px 26px; border-radius: 8px;
+      font-size: 15px; font-weight: 600;
+      cursor: pointer; font-family: inherit;
+    }
+    #fallback-open:hover { filter: brightness(1.08); }
+
+    /* ================= 返回首页 ================= */
+    #back-home {
+      position: fixed;
+      top: 14px; right: 16px;
+      z-index: 1600;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 8px 16px;
+      font-size: 13.5px;
+      font-family: inherit;
+      color: #dfe9f7;
+      text-decoration: none;
+      background: rgba(20, 26, 38, .88);
+      border: 1px solid #2e3a4f;
+      border-radius: 6px;
+      backdrop-filter: blur(4px);
+      transition: background .15s, border-color .15s;
+    }
+    #back-home:hover { background: #2e3a4f; border-color: #4a6fa5; }
+    #back-home .arw { transition: transform .15s; }
+    #back-home:hover .arw { transform: translateX(-3px); }
+
+    /* 任务面板要避开返回按钮 */
+    #quest-panel { top: 62px; }
+
+    /* ================= 任务面板 ================= */
+    #quest-panel {
+      position: fixed;
+      top: 16px; right: 16px;
+      width: 290px;
+      max-height: calc(100% - 200px);
+      background: linear-gradient(180deg, rgba(20, 26, 38, .96), rgba(12, 16, 24, .96));
+      border: 2px solid #8a6d3b;
+      border-radius: 4px;
+      box-shadow: inset 0 0 0 1px rgba(255, 217, 122, .2), 0 10px 32px rgba(0, 0, 0, .6);
+      z-index: 1500;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #quest-panel.hidden { display: none; }
+
+    /*
+     * 收起后的小标签
+     *
+     * 位置：屏幕【右下角】—— 也就是任务栏原本的下沿，
+     *       而不是之前那样贴在右侧中间竖着放（用户反馈侧面那个位置别扭）。
+     * 作用：面板收起后还能一键展开，不用去按 Q。
+     */
+    #quest-tab {
+      position: fixed;
+      right: 16px; bottom: 16px;
+      padding: 9px 20px;
+      background: linear-gradient(180deg, #c9a24a, #8a6d3b);
+      color: #1a1207;
+      border: 2px solid rgba(255, 217, 122, .45);
+      border-radius: 4px;
+      font-family: inherit; font-size: 14px; font-weight: 700;
+      letter-spacing: 2px;
+      cursor: pointer;
+      z-index: 1400;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, .55);
+    }
+    #quest-tab:hover { background: linear-gradient(180deg, #e0b858, #9c7c44); }
+    /* 面板展开时把标签藏起来，避免重复 */
+    #quest-tab.hidden { display: none; }
+
+    /* ---- 左下角：初始化按钮 ---- */
+    /*
+     * 作用：一键把进度退回初始状态（清存档 + 刷新页面）。
+     * 位置：左下角，和右下角的「任务」按钮对称，不会挡到任务面板。
+     * 配色偏暗红，和主界面的金色区分开 —— 它是个"危险操作"，
+     * 视觉上不该和普通按钮长得一样。
+     */
+    #reset-btn {
+      position: fixed;
+      left: 16px; bottom: 16px;
+      padding: 9px 18px;
+      background: linear-gradient(180deg, #8a4a3b, #5c2f26);
+      color: #ffe9d8;
+      border: 2px solid rgba(255, 160, 122, .40);
+      border-radius: 4px;
+      font-family: inherit; font-size: 14px; font-weight: 700;
+      letter-spacing: 2px;
+      cursor: pointer;
+      z-index: 1400;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, .55);
+    }
+    #reset-btn:hover { background: linear-gradient(180deg, #a85848, #6e3a2e); }
+    #reset-btn:active { transform: translateY(1px); }
+
+    /* 面板底部的操作条 —— 收起按钮放这儿 */
+    #quest-foot {
+      flex: 0 0 auto;
+      padding: 7px 8px;
+      border-top: 1px solid rgba(255, 217, 122, .22);
+      background: rgba(0, 0, 0, .22);
+    }
+    #quest-foot button {
+      width: 100%;
+      padding: 7px 0;
+      background: rgba(255, 217, 122, .12);
+      border: 1px solid rgba(255, 217, 122, .3);
+      border-radius: 3px;
+      color: #ffd97a;
+      font-family: inherit; font-size: 13px; font-weight: 600;
+      letter-spacing: 1px;
+      cursor: pointer;
+    }
+    #quest-foot button:hover { background: rgba(255, 217, 122, .24); }
+
+    #quest-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px;
+      background: linear-gradient(180deg, #c9a24a, #8a6d3b);
+      color: #1a1207;
+      font-size: 15px; font-weight: 700;
+      letter-spacing: .5px;
+      flex: 0 0 auto;
+    }
+    #quest-head button {
+      background: rgba(0, 0, 0, .18);
+      border: none; color: #1a1207;
+      width: 22px; height: 22px;
+      border-radius: 3px; cursor: pointer;
+      font-size: 14px; line-height: 1;
+      font-family: inherit;
+    }
+    #quest-head button:hover { background: rgba(0, 0, 0, .3); }
+
+    #quest-list {
+      overflow-y: auto;
+      padding: 8px;
+      flex: 1 1 auto;
+    }
+    #quest-list::-webkit-scrollbar { width: 6px; }
+    #quest-list::-webkit-scrollbar-thumb { background: #3d4c66; border-radius: 3px; }
+
+    .quest-item {
+      background: rgba(255, 255, 255, .04);
+      border-left: 3px solid #4a6fa5;
+      border-radius: 3px;
+      padding: 9px 11px;
+      margin-bottom: 7px;
+    }
+    .quest-item.ready { border-left-color: #ffd97a; background: rgba(255, 217, 122, .09); }
+    .quest-item.completed { border-left-color: #4a8a5a; opacity: .6; }
+    .quest-item.active { border-left-color: #6fb3ff; }
+
+    .quest-title {
+      color: #e8eef8; font-size: 13.5px; font-weight: 600;
+      margin-bottom: 3px;
+      display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    }
+    .quest-state {
+      font-size: 11px; padding: 1px 6px; border-radius: 3px;
+      font-weight: 400; white-space: nowrap;
+    }
+    .quest-state.available { background: #4a6fa5; color: #fff; }
+    .quest-state.active    { background: #2d4a6b; color: #a9c4e8; }
+    .quest-state.ready     { background: #ffd97a; color: #2a1f00; }
+    .quest-state.completed { background: #2a4a34; color: #7ed7a0; }
+
+    .quest-desc { color: #9db4d0; font-size: 12px; line-height: 1.55; }
+    .quest-reward { color: #c9a24a; font-size: 11.5px; margin-top: 4px; }
+
+    /* 进度数字（x/y 或百分比） */
+    .quest-progress {
+      font-size: 11.5px;
+      color: #7fb0e8;
+      margin-top: 5px;
+      text-align: right;
+    }
+
+    /* 主线任务加个左侧竖条区分 */
+    .quest-item.main-quest { background: rgba(255, 217, 122, .06); }
+
+    .quest-bar {
+      height: 3px; background: #2a3345; border-radius: 2px;
+      margin-top: 6px; overflow: hidden;
+    }
+    .quest-bar > div {
+      height: 100%; background: linear-gradient(90deg, #6fb3ff, #ffd97a);
+      transition: width .3s;
+    }
+
+    .quest-goto {
+      margin-top: 7px;
+      width: 100%;
+      background: #2e3a4f; color: #dfe9f7;
+      border: 1px solid #4a6fa5;
+      padding: 6px; border-radius: 3px;
+      font-size: 12.5px; cursor: pointer;
+      font-family: inherit;
+      transition: background .15s;
+    }
+    .quest-goto:hover { background: #4a6fa5; }
+    /* ================= 加载提示 ================= */
+    #loading {
+      position: fixed; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      color: #6f8bb5; font-size: 15px;
+      background: #0d1117;
+      z-index: 4000;
+      transition: opacity .4s;
+    }
+    #loading.hide { opacity: 0; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div id="game-root"></div>
+  <div id="loading">正在搭建会场…</div>
+
+  <!-- 返回首页 -->
+  <a id="back-home" href="index.html">
+    <span class="arw">←</span>
+    <span>返回首页</span>
+  </a>
+
+  <!-- 任务面板收起后的入口（一直贴着右边缘，点一下展开） -->
+  <button id="quest-tab" title="展开任务列表">任务</button>
+
+  <!-- 左下角：初始化（清空进度回到初始状态） -->
+  <button id="reset-btn" title="清空全部进度，回到初始状态（会刷新页面）">初始化</button>
+
+  <!-- 任务面板 -->
+  <div id="quest-panel">
+    <div id="quest-head">
+      <span>任务列表</span>
+      <button id="quest-hide" title="收起">×</button>
+    </div>
+    <div id="quest-list"></div>
+    <div id="quest-foot">
+      <button id="quest-collapse">收起任务列表</button>
+    </div>
+  </div>
+
+  <!-- 对话框（左头像 + 右文字） -->
+  <div id="dialog-root">
+    <div id="dialog-frame">
+      <div id="dialog-portrait">💬</div>
+      <div id="dialog-content">
+        <div id="dialog-name">NPC</div>
+        <div id="dialog-text"></div>
+        <div id="dialog-links"></div>
+        <div id="dialog-hint">点击继续</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 小游戏 / 外链弹层 -->
+  <div id="overlay">
+    <div id="overlay-bar">
+      <span id="overlay-title">内容</span>
+      <button id="overlay-close">关闭 (Esc)</button>
+    </div>
+    <div id="overlay-body">
+      <iframe id="overlay-frame" allow="fullscreen; autoplay" title="内容"></iframe>
+      <div id="overlay-fallback">
+        <h3>这个页面无法在会场内打开</h3>
+        <p>对方网站设置了禁止嵌入（X-Frame-Options / CSP），
+           这是网站自己的安全策略，不是会场的问题。<br>可以点下面按钮在新标签页打开。</p>
+        <button id="fallback-open">在新标签页打开</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+
+  <script>
+    // =====================================================================
+    // 外层 HTML 的职责：
+    //   1. 小游戏 / 外链的弹层开关
+    //   2. 接收场景发来的事件
+    // 场景（Phaser）只负责游戏内逻辑，不直接操作 DOM，两边职责清晰。
+    // =====================================================================
+
+    const overlay = document.getElementById('overlay');
+    const frame = document.getElementById('overlay-frame');
+    const overlayTitle = document.getElementById('overlay-title');
+    const fallback = document.getElementById('overlay-fallback');
+    const fallbackOpen = document.getElementById('fallback-open');
+
+    let currentUrl = '';
+    let loadTimer = null;
+
+    window.addEventListener('load', () => {
+      setTimeout(() => document.getElementById('loading').classList.add('hide'), 300);
+    });
+
+    // ---- 弹层控制 ----
+    function openOverlay(title, url) {
+      currentUrl = url;
+      overlayTitle.textContent = title || '内容';
+      fallback.classList.remove('show');
+      overlay.classList.add('active');
+      window.__venuePaused = true;
+
+      frame.src = url;
+
+      // 兜底：iframe 被对方站点拒绝嵌入时，往往既不触发 load 也不触发 error，
+      // 所以用一个超时来检测「迟迟没加载完」的情况。
+      clearTimeout(loadTimer);
+      loadTimer = setTimeout(() => {
+        if (overlay.classList.contains('active') && frame.src === url) {
+          // 只有跨域地址才可能被拒；同源本地页面不该出现这个提示
+          if (/^https?:\/\//i.test(url) && !url.startsWith(location.origin)) {
+            fallback.classList.add('show');
+          }
+        }
+      }, 6000);
+    }
+
+    function closeOverlay() {
+      clearTimeout(loadTimer);
+      overlay.classList.remove('active');
+      fallback.classList.remove('show');
+      frame.src = 'about:blank';   // 真正停止 iframe 里的内容，释放资源
+      window.__venuePaused = false;
+    }
+
+    frame.addEventListener('load', () => {
+      clearTimeout(loadTimer);
+      fallback.classList.remove('show');
+    });
+
+    fallbackOpen.addEventListener('click', () => {
+      if (currentUrl) window.open(currentUrl, '_blank', 'noopener');
+    });
+
+    document.getElementById('overlay-close').addEventListener('click', closeOverlay);
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && overlay.classList.contains('active')) closeOverlay();
+    });
+
+    // ---- 接收场景事件 ----
+    // 对话里的跳转选项 → 打开小游戏 / 单品页
+    window.addEventListener('venue:open-url', (e) => {
+      const { url, newTab, label } = e.detail;
+
+      // 强制新标签页
+      if (newTab) {
+        window.open(url, '_blank', 'noopener');
+        return;
+      }
+
+      // 判断是本地小游戏还是外部链接，只影响标题显示
+      const isLocalGame = url.includes('games/');
+      openOverlay(isLocalGame ? '小游戏' : (label || '详情'), url);
+
+      // 记录委托进度（只有打开小游戏才算）
+      if (isLocalGame && window.__venueQuests) {
+        window.__venueQuests.markOpenGame();
+      }
+    });
+
+    // 打开站内面板（如任务）
+    window.addEventListener('venue:open-panel', (e) => {
+      if (e.detail.panel === 'quests') {
+        questPanel.classList.remove('hidden');
+      }
+    });
+
+    // =====================================================================
+    // 任务面板
+    //   数据由 Phaser 场景推过来（venue:quests-updated），
+    //   这个文件只负责渲染和交互，不持有任务逻辑。
+    // =====================================================================
+    const questPanel = document.getElementById('quest-panel');
+    // 初始：面板展开、标签隐藏（实际值会在下面 setPanelOpen 里统一设置）
+    const questList = document.getElementById('quest-list');
+
+    const STATE_LABEL = {
+      available: '可接取',
+      active: '进行中',
+      ready: '可交付',
+      completed: '已完成',
+    };
+
+    function renderQuests(quests) {
+      if (!quests || !quests.length) {
+        questList.innerHTML = '<div class="quest-desc" style="padding:10px">暂无任务</div>';
+        return;
+      }
+
+      questList.innerHTML = quests.map((q) => {
+        const pct = Math.round(q.progress * 100);
+        const isMain = q.id.startsWith('main-');
+
+        // 主线任务有进度但不是"可接取"，也不显示"前往接取"
+        const canGoto = !isMain || q.state === 'active';
+        const btnText = q.state === 'ready' ? '前往交付' : '前往';
+
+        // 奖励：主线没有奖励就不显示这一行
+        const rewardLine = q.reward
+          ? `<div class="quest-reward">奖励：${q.reward}</div>`
+          : '';
+
+        // 进度：主线显示 x/y，委托显示百分比
+        let progressLine = '';
+        if (q.state !== 'available') {
+          let progressText = `${pct}%`;
+          if (q.need && q.need > 1) {
+            progressText = `${q.counter || 0}/${q.need}`;
+          }
+          progressLine = `
+            <div class="quest-progress">${progressText}</div>
+            <div class="quest-bar"><div style="width:${pct}%"></div></div>
+          `;
+        }
+
+        return `
+          <div class="quest-item ${q.state}${isMain ? ' main-quest' : ''}">
+            <div class="quest-title">
+              <span>${q.title}</span>
+              <span class="quest-state ${q.state}">${STATE_LABEL[q.state] || q.state}</span>
+            </div>
+            <div class="quest-desc">${q.desc}</div>
+            ${rewardLine}
+            ${progressLine}
+            ${canGoto ? `<button class="quest-goto" data-quest="${q.id}">${btnText}</button>` : ''}
+          </div>
+        `;
+      }).join('');
+
+      // 绑定「前往」按钮 → 通知场景自动寻路
+      questList.querySelectorAll('.quest-goto').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          window.dispatchEvent(new CustomEvent('venue:goto-quest', {
+            detail: { questId: btn.dataset.quest },
+          }));
+        });
+      });
+    }
+
+    window.addEventListener('venue:quests-updated', (e) => {
+      renderQuests(e.detail.quests);
+    });
+
+    const questTab = document.getElementById('quest-tab');
+
+    // 用一个函数统一管理"面板 / 标签"的显示，避免两边状态不同步
+    function setPanelOpen(open) {
+      questPanel.classList.toggle('hidden', !open);
+      questTab.classList.toggle('hidden', open);
+    }
+
+    // 三处入口统一走 setPanelOpen，避免状态不同步：
+    //   × 按钮（面板右上角）
+    //   面板底部的「收起任务列表」
+    //   右下角的小标签（展开）
+    document.getElementById('quest-hide').addEventListener('click', () => setPanelOpen(false));
+    document.getElementById('quest-collapse').addEventListener('click', () => setPanelOpen(false));
+    questTab.addEventListener('click', () => setPanelOpen(true));
+
+    // Q 键切换
+    window.addEventListener('venue:toggle-quest-panel', () => {
+      setPanelOpen(questPanel.classList.contains('hidden'));
+    });
+
+    // =====================================================================
+    // 任务操作：接取 / 交付
+    //   这里只负责"转发"，真正的逻辑在场景里（它能拿到任务定义）。
+    // =====================================================================
+    window.addEventListener('venue:quest-action', (e) => {
+      const { action, questId } = e.detail;
+      const scene = window.__venueScene;
+      if (!scene || typeof scene.handleQuestAction !== 'function') return;
+      scene.handleQuestAction(action, questId);
+    });
+
+    // =====================================================================
+    // 初始化按钮（左下角）
+    //
+    // 作用：把主线/委托全部退回未完成状态，地图/NPC/道具同步复位。
+    //
+    // 做法就是「清存档 + 刷新页面」：
+    //   所有进度都持久化在 localStorage 里（4 个键），
+    //   清掉之后重新加载，游戏自然从初始状态跑起来 ——
+    //   NPC 不在场、道具没摆、任务全是初始态，一步到位。
+    //
+    // 为什么用 localStorage.clear() 而不是逐个 removeItem：
+    //   游戏数据的键有 4 个（venue-quests-v2 / venue-story-v1 /
+    //   venue-props-v1 / venue-items-v1），而且以后还会加。
+    //   逐个删容易漏，漏一个就会"复位不干净"。
+    //   这个页面除了游戏数据没有任何别的东西要保留，所以整体清空最可靠。
+    //
+    // 加了二次确认：进度是玩家攒出来的，误点一下全没了太伤。
+    // =====================================================================
+    const resetBtn = document.getElementById('reset-btn');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', () => {
+        const ok = window.confirm(
+          '确定要初始化吗？\n\n' +
+          '主线任务、委托进度、已获得的道具都会清空，\n' +
+          'NPC 和场景道具会回到初始状态（页面将刷新）。'
+        );
+        if (!ok) return;
+
+        try {
+          localStorage.clear();
+        } catch (e) {
+          console.warn('清空存档失败', e);
+        }
+        location.reload();
+      });
+    }
+  </script>
+</body>
+</html>

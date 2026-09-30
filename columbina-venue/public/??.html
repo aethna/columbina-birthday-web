@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>哥伦比娅生日会 · 项目状态</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0d1117;
+    --panel: #151b24;
+    --line: #2a3542;
+    --text: #e6edf3;
+    --dim: #8b98a8;
+    --gold: #ffd97a;
+    --green: #7ed7a0;
+    --blue: #6fb3ff;
+    --red: #ff8a8a;
+    --amber: #ffb347;
+  }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, "Microsoft YaHei", sans-serif;
+    line-height: 1.65;
+    padding: 32px 24px 80px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+
+  h1 {
+    font-size: 26px;
+    color: var(--gold);
+    margin-bottom: 6px;
+    letter-spacing: .02em;
+  }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 28px; }
+
+  h2 {
+    font-size: 17px;
+    margin: 30px 0 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+    color: var(--text);
+  }
+
+  /* 入口按钮 */
+  .entries { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+  .entry {
+    flex: 1 1 220px;
+    background: linear-gradient(180deg, var(--panel), #101620);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px 20px;
+    text-decoration: none;
+    color: inherit;
+    transition: transform .15s, border-color .15s;
+    display: block;
+  }
+  .entry:hover { transform: translateY(-3px); border-color: var(--gold); }
+  .entry .label {
+    font-size: 16px; font-weight: 600; color: var(--gold);
+    margin-bottom: 5px; display: flex; align-items: center; gap: 8px;
+  }
+  .entry .desc { font-size: 12.5px; color: var(--dim); }
+
+  /* 表格 */
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-top: 6px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 500; font-size: 12.5px; }
+  td code {
+    background: #1d2632; padding: 2px 7px; border-radius: 4px;
+    font-size: 12.5px; color: var(--blue);
+  }
+
+  .tag {
+    display: inline-block; font-size: 11.5px; padding: 2px 9px;
+    border-radius: 20px; white-space: nowrap;
+  }
+  .tag.ok   { background: #16351f; color: var(--green); }
+  .tag.todo { background: #35281a; color: var(--amber); }
+  .tag.miss { background: #3a1c1c; color: var(--red); }
+
+  ul.plain { list-style: none; }
+  ul.plain li {
+    padding: 7px 0 7px 22px;
+    position: relative;
+    font-size: 13.5px;
+    color: var(--text);
+  }
+  ul.plain li::before {
+    content: '·'; position: absolute; left: 8px;
+    color: var(--dim); font-weight: bold;
+  }
+
+  .note {
+    background: #161d27;
+    border-left: 3px solid var(--blue);
+    padding: 12px 16px;
+    border-radius: 0 6px 6px 0;
+    font-size: 13px;
+    color: var(--dim);
+    margin: 12px 0;
+  }
+  .note.warn { border-left-color: var(--amber); }
+  .note strong { color: var(--text); }
+
+  .tree {
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12.5px;
+    line-height: 1.75;
+    color: var(--dim);
+    background: #10161e;
+    padding: 16px 18px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .tree b { color: var(--gold); font-weight: normal; }
+  .tree i { color: var(--blue); font-style: normal; }
+
+  footer {
+    margin-top: 44px; padding-top: 18px;
+    border-top: 1px solid var(--line);
+    color: #55606e; font-size: 12px; text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>哥伦比娅生日会 · 项目状态</h1>
+  <div class="sub">本地开发预览页 · 用来核对进度和素材</div>
+
+  <!-- ============ 入口 ============ -->
+  <div class="entries">
+    <a class="entry" href="venue/venue.html">
+      <div class="label">▶ 预览会场</div>
+      <div class="desc">直接进游戏看效果（需要服务在运行）</div>
+    </a>
+    <a class="entry" href="venue/index.html">
+      <div class="label">🏠 活动首页</div>
+      <div class="desc">玩家看到的首页（主视觉 + 内容入口）</div>
+    </a>
+    <a class="entry" href="图片素材/" id="assets-link">
+      <div class="label">🖼 查看素材</div>
+      <div class="desc">AI 生成的场景和提示词（需要服务在运行）</div>
+    </a>
+  </div>
+
+  <div class="note">
+    <strong>两种打开方式</strong>：
+    ① 直接双击本文件 —— 能看状态，但下面的链接点不开；
+    ② 双击 <code>启动.bat</code> 启动服务后访问
+    <code>http://localhost:5173/状态.html</code> —— 所有链接都能用。
+  </div>
+
+  <!-- ============ 进度 ============ -->
+  <h2>已完成</h2>
+  <table>
+    <tr>
+      <th style="width:180px">模块</th>
+      <th>说明</th>
+      <th style="width:70px">状态</th>
+    </tr>
+    <tr>
+      <td>多场景架构</td>
+      <td>5 个场景，走到边缘切屏，带淡入淡出</td>
+      <td><span class="tag ok">完成</span></td>
+    </tr>
+    <tr>
+      <td>主线剧情</td>
+      <td>写邀请函（5 封）→ 投信箱 → NPC 前来</td>
+      <td><span class="tag ok">完成</span></td>
+    </tr>
+    <tr>
+      <td>任务系统</td>
+      <td>NPC 发放委托，接取 → 完成 → 交付</td>
+      <td><span class="tag ok">完成</span></td>
+    </tr>
+    <tr>
+      <td>NPC 对话</td>
+      <td>仙剑式大头像 + 对话框，逐字打印</td>
+      <td><span class="tag ok">完成</span></td>
+    </tr>
+    <tr>
+      <td>NPC 立绘</td>
+      <td>5 个角色，已改站姿 + 抠图 + 比例校准</td>
+      <td><span class="tag ok">完成</span></td>
+    </tr>
+    <tr>
+      <td>引导箭头</td>
+      <td>指向任务目标；跨场景时指向出口</td>
+      <td><span class="tag ok">完成</span></td>
+    </tr>
+    <tr>
+      <td>世界地图</td>
+      <td>按 M 打开，场景连线图 + 当前位置</td>
+      <td><span class="tag ok">完成</span></td>
+    </tr>
+    <tr>
+      <td>交互点</td>
+      <td>书桌、信箱、任务目标点，走近按 E</td>
+      <td><span class="tag ok">完成</span></td>
+    </tr>
+  </table>
+
+  <h2>待办</h2>
+  <table>
+    <tr>
+      <th style="width:180px">事项</th>
+      <th>说明</th>
+      <th style="width:70px">状态</th>
+    </tr>
+    <tr>
+      <td>书桌场景图</td>
+      <td>缺 <code>home.png</code>，目前用临时图顶替</td>
+      <td><span class="tag todo">待生成</span></td>
+    </tr>
+    <tr>
+      <td>信箱场景图</td>
+      <td>缺 <code>mailbox.png</code>，目前用临时图顶替</td>
+      <td><span class="tag todo">待生成</span></td>
+    </tr>
+    <tr>
+      <td>主角行走图</td>
+      <td>哥伦比娅已渲染 16 帧，但还在用占位小人</td>
+      <td><span class="tag todo">待接入</span></td>
+    </tr>
+    <tr>
+      <td>装饰物件</td>
+      <td>桌椅、信箱等独立素材，提示词已写好</td>
+      <td><span class="tag todo">待生成</span></td>
+    </tr>
+    <tr>
+      <td>文案</td>
+      <td>对话和邀请函目前是占位文案，等正式文案</td>
+      <td><span class="tag todo">等文案</span></td>
+    </tr>
+    <tr>
+      <td>水印处理</td>
+      <td>即梦生成图右下角有水印，需要 PS 抹掉</td>
+      <td><span class="tag todo">待处理</span></td>
+    </tr>
+  </table>
+
+  <h2>5 个场景</h2>
+  <table>
+    <tr>
+      <th style="width:130px">场景</th>
+      <th>作用</th>
+      <th style="width:130px">出口</th>
+    </tr>
+    <tr>
+      <td>窗前书桌</td>
+      <td>起点，只有主角。在这写 5 封邀请函</td>
+      <td>→ 信箱</td>
+    </tr>
+    <tr>
+      <td>林间信箱</td>
+      <td>投递邀请函</td>
+      <td>→ 主会场 / 回书桌</td>
+    </tr>
+    <tr>
+      <td>林间空地</td>
+      <td>主会场，5 个 NPC 聚集，派发委托</td>
+      <td>→ 信箱 / 池塘</td>
+    </tr>
+    <tr>
+      <td>静谧池塘</td>
+      <td>打水、捉鱼</td>
+      <td>→ 主会场 / 秘境</td>
+    </tr>
+    <tr>
+      <td>林间秘境</td>
+      <td>采花、采蘑菇、拾柴</td>
+      <td>→ 池塘</td>
+    </tr>
+  </table>
+
+  <h2>5 个委托（每个 NPC 一个）</h2>
+  <table>
+    <tr>
+      <th style="width:100px">NPC</th>
+      <th>委托内容</th>
+      <th style="width:110px">地点</th>
+    </tr>
+    <tr><td>爱诺</td><td>池塘捉鱼</td><td>池塘</td></tr>
+    <tr><td>奈芙尔</td><td>打一桶清水</td><td>池塘</td></tr>
+    <tr><td>菲林斯</td><td>采集野花做装饰</td><td>秘境</td></tr>
+    <tr><td>桑多涅</td><td>采会发光的蘑菇当灯</td><td>秘境</td></tr>
+    <tr><td>菈乌玛</td><td>拾取干柴生火</td><td>秘境</td></tr>
+  </table>
+
+  <h2>目录结构</h2>
+  <div class="tree">哥伦比娅生日会/
+├─ <b>启动.bat</b>              ← 双击启动服务
+├─ <b>主页.html</b>             ← 本文件（项目状态）
+│
+├─ venue/                    游戏本体
+│  ├─ index.html             活动首页（玩家入口）
+│  ├─ venue.html             游戏页面
+│  ├─ src/
+│  │  ├─ <i>config.js</i>        NPC 配置
+│  │  ├─ <i>scenes.js</i>        场景与地图
+│  │  ├─ <i>quests.js</i>        任务与交互点
+│  │  ├─ <i>StorySystem.js</i>   主线剧情
+│  │  ├─ <i>QuestSystem.js</i>   任务状态机
+│  │  ├─ <i>SceneManager.js</i>  场景切换
+│  │  ├─ <i>InteractPoints.js</i> 交互点
+│  │  ├─ <i>Minimap.js</i>       世界地图
+│  │  ├─ <i>DialogSystem.js</i>  对话（大头像）
+│  │  ├─ <i>characters.js</i>    角色素材
+│  │  └─ <i>VenueScene.js</i>    主场景逻辑
+│  └─ public/assets/
+│     ├─ scenes/             场景背景图
+│     ├─ chars-scene/        NPC 立绘（场景用）
+│     ├─ chars/              NPC 头像（对话用）
+│     └─ games/              小游戏
+│
+├─ 图片素材/                  原始素材 + AI 生成
+│  └─ AI生成场景/            场景图 + 提示词.txt
+│
+├─ 哥伦比娅模型/              PMX 模型
+├─ assets-raw/columbina/      渲染出的行走图帧
+└─ tools/                     各种生成和校验脚本</div>
+
+  <h2>常见问题</h2>
+  <ul class="plain">
+    <li><strong>双击 html 打不开游戏</strong> —— 必须用 <code>启动.bat</code> 启动服务，走 http:// 访问</li>
+    <li><strong>人物和场景比例不对</strong> —— 改 <code>tools/calibrate-scale.py</code> 里的基准值，然后重跑</li>
+    <li><strong>想改场景布局</strong> —— 改 <code>src/scenes.js</code> 里的地图规格</li>
+    <li><strong>想改 NPC 位置</strong> —— 改 <code>src/config.js</code> 里的 tileX / tileY</li>
+    <li><strong>想改任务</strong> —— 改 <code>src/quests.js</code></li>
+  </ul>
+
+  <footer>
+    本地开发预览 · 数据截至 2026-09-25
+  </footer>
+
+</div>
+
+<script>
+  // 「查看素材」入口：本地服务才能列目录，否则提示
+  document.getElementById('assets-link').addEventListener('click', function (e) {
+    if (location.protocol === 'file:') {
+      e.preventDefault();
+      alert('双击打开时无法浏览素材目录。\n请先用「启动.bat」启动服务，\n再访问 http://localhost:5173/');
+    }
+  });
+</script>
+</body>
+</html>

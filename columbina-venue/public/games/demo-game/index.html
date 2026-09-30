@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>示例小游戏 · 接礼物</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #0d1117;
+      font-family: system-ui, "Microsoft YaHei", sans-serif;
+      color: #fff;
+      user-select: none;
+    }
+    #hud {
+      position: fixed; top: 14px; left: 0; right: 0;
+      display: flex; justify-content: center; gap: 30px;
+      font-size: 17px; pointer-events: none; z-index: 10;
+    }
+    #hud span { background: #1a2233cc; padding: 7px 16px; border-radius: 20px; }
+    #hint {
+      position: fixed; bottom: 16px; left: 0; right: 0;
+      text-align: center; font-size: 13px; color: #6f8bb5;
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <span>得分 <b id="score">0</b></span>
+    <span>生命 <b id="life">3</b></span>
+  </div>
+  <div id="hint">← → 或 A / D 移动 · 接到礼物得分 · 漏掉扣命</div>
+
+  <canvas id="cv"></canvas>
+
+  <script>
+    // =======================================================================
+    // 示例小游戏：接礼物
+    //
+    // 这个文件是「独立可运行」的 —— 你可以直接双击打开调试，
+    // 也可以被主会场用 iframe 嵌入。两种方式都能跑。
+    //
+    // 做你自己的小游戏时，照抄这个文件的结构即可：
+    //   1. 全屏 canvas
+    //   2. requestAnimationFrame 循环
+    //   3. 不依赖任何外部库
+    // =======================================================================
+
+    const cv = document.getElementById('cv');
+    const ctx = cv.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const lifeEl = document.getElementById('life');
+
+    let W = 0, H = 0;
+
+    function resize() {
+      W = cv.width = window.innerWidth;
+      H = cv.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // ---- 游戏状态 ----
+    const state = {
+      score: 0,
+      life: 3,
+      running: true,
+      basketX: 0,
+      items: [],
+      spawnTimer: 0,
+      spawnInterval: 900, // 毫秒
+      lastTime: 0,
+      keys: {},
+    };
+
+    const BASKET_W = 90;
+    const BASKET_H = 26;
+    const ITEM_SIZE = 34;
+
+    // 礼物用 emoji 表示，不依赖图片素材
+    const ITEM_ICONS = ['🎁', '🎂', '🎈', '⭐', '💝'];
+
+    // ---- 输入 ----
+    window.addEventListener('keydown', (e) => {
+      state.keys[e.key.toLowerCase()] = true;
+      // 阻止方向键滚动页面
+      if (['arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) e.preventDefault();
+    });
+    window.addEventListener('keyup', (e) => {
+      state.keys[e.key.toLowerCase()] = false;
+    });
+
+    // 鼠标 / 触摸也能控制
+    let pointerX = null;
+    window.addEventListener('mousemove', (e) => { pointerX = e.clientX; });
+    window.addEventListener('touchmove', (e) => {
+      if (e.touches[0]) pointerX = e.touches[0].clientX;
+    }, { passive: true });
+
+    // ---- 重置 ----
+    function reset() {
+      state.score = 0;
+      state.life = 3;
+      state.items = [];
+      state.running = true;
+      state.basketX = W / 2;
+      scoreEl.textContent = 0;
+      lifeEl.textContent = 3;
+    }
+
+    // ---- 更新逻辑 ----
+    function update(dt) {
+      if (!state.running) return;
+
+      // 移动篮子
+      const speed = 0.62 * dt; // 像素/毫秒
+      const left = state.keys['arrowleft'] || state.keys['a'];
+      const right = state.keys['arrowright'] || state.keys['d'];
+
+      if (left) state.basketX -= speed;
+      if (right) state.basketX += speed;
+
+      // 鼠标控制（优先级低于键盘，鼠标没动就不干预）
+      if (pointerX !== null && !left && !right) {
+        const diff = pointerX - state.basketX;
+        state.basketX += Math.max(-speed, Math.min(speed, diff * 0.18));
+      }
+
+      state.basketX = Math.max(BASKET_W / 2, Math.min(W - BASKET_W / 2, state.basketX));
+
+      // 生成掉落物
+      state.spawnTimer += dt;
+      if (state.spawnTimer >= state.spawnInterval) {
+        state.spawnTimer = 0;
+        state.items.push({
+          x: 40 + Math.random() * (W - 80),
+          y: -ITEM_SIZE,
+          vy: 0.22 + Math.random() * 0.22,
+          icon: ITEM_ICONS[Math.floor(Math.random() * ITEM_ICONS.length)],
+          spin: (Math.random() - 0.5) * 0.004,
+          angle: 0,
+        });
+      }
+
+      // 更新掉落物
+      const basketTop = H - 70;
+      for (let i = state.items.length - 1; i >= 0; i--) {
+        const it = state.items[i];
+        it.y += it.vy * dt;
+        it.angle += it.spin * dt;
+
+        // 接住判定
+        if (it.y > basketTop - 10 && it.y < basketTop + BASKET_H + 20) {
+          if (Math.abs(it.x - state.basketX) < BASKET_W / 2 + 6) {
+            state.score += 10;
+            scoreEl.textContent = state.score;
+            state.items.splice(i, 1);
+            continue;
+          }
+        }
+
+        // 落地 = 扣命
+        if (it.y > H + ITEM_SIZE) {
+          state.items.splice(i, 1);
+          state.life -= 1;
+          lifeEl.textContent = Math.max(0, state.life);
+          if (state.life <= 0) {
+            state.running = false;
+            state.overAt = performance.now();
+          }
+        }
+      }
+
+      // 随时间加速
+      state.spawnInterval = Math.max(380, 900 - state.score * 2);
+    }
+
+    // ---- 渲染 ----
+    function render() {
+      // 背景
+      const grd = ctx.createLinearGradient(0, 0, 0, H);
+      grd.addColorStop(0, '#131a26');
+      grd.addColorStop(1, '#0a0f16');
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, 0, W, H);
+
+      // 星空点缀
+      ctx.fillStyle = '#ffffff18';
+      for (let i = 0; i < 40; i++) {
+        const sx = (i * 137.5) % W;
+        const sy = (i * 89.3) % H;
+        ctx.fillRect(sx, sy, 2, 2);
+      }
+
+      // 掉落物
+      ctx.font = `${ITEM_SIZE}px serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const it of state.items) {
+        ctx.save();
+        ctx.translate(it.x, it.y);
+        ctx.rotate(it.angle);
+        ctx.fillText(it.icon, 0, 0);
+        ctx.restore();
+      }
+
+      // 篮子
+      const bx = state.basketX;
+      const by = H - 70;
+      ctx.fillStyle = '#6fb3ff';
+      ctx.beginPath();
+      ctx.roundRect(bx - BASKET_W / 2, by, BASKET_W, BASKET_H, 8);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff55';
+      ctx.beginPath();
+      ctx.roundRect(bx - BASKET_W / 2 + 4, by + 4, BASKET_W - 8, 6, 3);
+      ctx.fill();
+
+      // 结束画面
+      if (!state.running) {
+        ctx.fillStyle = '#000000bb';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = '#ffd97a';
+        ctx.font = 'bold 40px system-ui, sans-serif';
+        ctx.fillText('游戏结束', W / 2, H / 2 - 30);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '22px system-ui, sans-serif';
+        ctx.fillText(`最终得分：${state.score}`, W / 2, H / 2 + 24);
+        ctx.fillStyle = '#6f8bb5';
+        ctx.font = '16px system-ui, sans-serif';
+        ctx.fillText('按 R 重新开始', W / 2, H / 2 + 66);
+      }
+    }
+
+    // ---- 主循环 ----
+    function loop(t) {
+      const dt = Math.min(50, t - (state.lastTime || t));
+      state.lastTime = t;
+
+      update(dt);
+      render();
+
+      requestAnimationFrame(loop);
+    }
+
+    // R 键重开
+    window.addEventListener('keydown', (e) => {
+      if (e.key.toLowerCase() === 'r' && !state.running) reset();
+    });
+
+    state.basketX = window.innerWidth / 2;
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
