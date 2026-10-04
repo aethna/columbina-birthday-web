@@ -82,8 +82,10 @@ try {
   rec(7, "金色引导箭头已移除", false, e.message);
 }
 
-// ---------- 任务2：5 个 NPC 的配置位置都在会场可走区 ----------
+// ---------- 任务2：客人 NPC 全部站在会场禁行区，且都能被玩家挨到 ----------
 //
+// 需求：NPC 不能和哥伦比娅重叠 —— 所以 NPC 必须落在禁行格（'#'）上，
+//       同时四个邻格里至少有一个可走格，玩家才能贴上去对话。
 // 注意：NPC 是「受邀客人」，主线没走完时 s.npcs 是空的 ——
 //       所以这里直接比对 config 里的坐标和会场碰撞图（确定性检查），
 //       不依赖剧情进度。
@@ -93,22 +95,44 @@ try {
     const m = s.scenes.getMap("venue");
     const NPCS = (await import("/src/config.js")).NPCS;
     const venueNpcs = NPCS.filter((n) => (n.scene || "venue") === "venue");
-    const out = venueNpcs.map((n) => ({
-      name: n.name,
-      tile: [n.tileX, n.tileY],
-      onWalk: m[n.tileY]?.[n.tileX] === ".",
-    }));
-    // 顺便看看这批位置离地图边缘有多远（太靠边相机会看不到）
-    const edge = venueNpcs.map((n) => Math.min(n.tileX, n.tileY, 39 - n.tileX, 23 - n.tileY));
-    return { out, minEdge: Math.min(...edge) };
+    const out = venueNpcs.map((n) => {
+      const x = n.tileX, y = n.tileY;
+      const neigh = [[x, y - 1], [x, y + 1], [x - 1, y], [x + 1, y]]
+        .map(([nx, ny]) => m[ny]?.[nx]);
+      return {
+        name: n.name,
+        tile: [x, y],
+        blocked: m[y]?.[x] === "#",
+        reachable: neigh.includes("."),
+        // 立绘是「脚底对齐锚点、向上长出 displayHeight」，
+        // 所以最容易出问题的是贴着上边缘的那几位（头会被切掉）。
+        sprTop: y * 64 + 32 - (n.displayHeight || 150),
+        sprBottom: y * 64 + 32 + 16,
+      };
+    });
+    let minDist = Infinity;
+    for (let i = 0; i < venueNpcs.length; i++) {
+      for (let j = i + 1; j < venueNpcs.length; j++) {
+        const dx = venueNpcs[i].tileX - venueNpcs[j].tileX;
+        const dy = venueNpcs[i].tileY - venueNpcs[j].tileY;
+        minDist = Math.min(minDist, Math.hypot(dx, dy));
+      }
+    }
+    return { out, minDist, count: venueNpcs.length };
   });
-  const nefer = r2.out.find((n) => n.name === "奈芙尔");
-  const allWalk = r2.out.every((n) => n.onWalk);
-  const pass = !!nefer && nefer.onWalk && allWalk && r2.minEdge >= 4;
-  rec(2, "奈芙尔在场且 5 个 NPC 位置都合理", pass,
-      r2.out.map((n) => `${n.name}(${n.tile})`).join(" ") + `  离边缘最近 ${r2.minEdge} 格`);
+  const bad = r2.out.filter((n) => !n.blocked || !n.reachable);
+  const clipped = r2.out.filter((n) => n.sprTop < 0 || n.sprBottom > 1536);
+  const pass = r2.count === 13 && bad.length === 0 && clipped.length === 0 && r2.minDist >= 2.9;
+  rec(2, "13 位客人都在禁行区且紧贴可走格（不与哥伦比娅重叠）", pass,
+      `${r2.count} 位；最小间距 ${r2.minDist.toFixed(1)} 格；立绘被切 ${clipped.length} 位` +
+      (bad.length
+        ? "  异常: " + bad.map((n) => `${n.name}(${n.tile}) blocked=${n.blocked} reachable=${n.reachable}`).join(" ")
+        : "") +
+      (clipped.length
+        ? "  被切: " + clipped.map((n) => `${n.name}(${n.tile}) top=${n.sprTop}`).join(" ")
+        : ""));
 } catch (e) {
-  rec(2, "奈芙尔在场且 5 个 NPC 位置都合理", false, e.message);
+  rec(2, "13 位客人位置合理", false, e.message);
 }
 
 // ---------- 任务3：交互点都有可用动作 ----------
@@ -138,8 +162,10 @@ try {
       .map((e) => e.textContent);
     return { shown };
   });
-  const still = r4.shown.some((t) => t.includes("写下邀请函"));
-  rec(4, "已完成主线不再显示", !still, "列表: " + (r4.shown.join(" | ") || "(空)"));
+  const still = r4.shown.some((t) => t.includes("写邀请函"));
+  const hasDeliver = r4.shown.some((t) => t.includes("投递邀请函"));
+  rec(4, "已完成主线不再显示", !still && hasDeliver,
+      "列表: " + (r4.shown.join(" | ") || "(空)") + `  投递主线还在=${hasDeliver}`);
 } catch (e) {
   rec(4, "已完成主线不再显示", false, e.message);
 }
@@ -223,6 +249,32 @@ try {
   rec("水", "交付后道具立刻出现（水桶）", has, `交付前 ${pr.before} 个 -> ${pr.keys.join(",") || "无"}`);
 } catch (e) {
   rec("水", "交付后道具立刻出现（水桶）", false, e.message);
+}
+
+// ---------- 任务9：13 位客人的 Q 版立绘 / 对话头像素材齐全 ----------
+try {
+  const r9 = await p.evaluate(async () => {
+    const NPCS = (await import("/src/config.js")).NPCS;
+    const venueNpcs = NPCS.filter((n) => (n.scene || "venue") === "venue");
+    const urls = [];
+    for (const n of venueNpcs) {
+      urls.push({ name: n.name, kind: "立绘", url: n.sprite });
+      urls.push({ name: n.name, kind: "头像", url: (n.portrait && n.portrait.url) || "" });
+    }
+    const bad = [];
+    for (const u of urls) {
+      if (!u.url) { bad.push(`${u.name} 无${u.kind}路径`); continue; }
+      try {
+        const res = await fetch(u.url);
+        if (!res.ok) bad.push(`${u.name} ${u.kind} HTTP ${res.status}`);
+      } catch (e) { bad.push(`${u.name} ${u.kind} ${e.message}`); }
+    }
+    return { total: urls.length, bad };
+  });
+  rec(9, "13 位客人的立绘与头像素材齐全", r9.bad.length === 0,
+      `${r9.total} 个文件；缺失/报错 ${r9.bad.length} 个：${r9.bad.join(", ") || "无"}`);
+} catch (e) {
+  rec(9, "13 位客人的立绘与头像素材齐全", false, e.message);
 }
 
 console.log("\n================ 核查结果 ================");

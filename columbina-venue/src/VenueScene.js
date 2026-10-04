@@ -29,6 +29,7 @@ import { QUESTS, INTERACT_POINTS } from './quests.js';
 import { SCENES, SCENE_COLS, SCENE_ROWS, SCENE_W, SCENE_H } from './scenes.js';
 import { preloadCharacters, setupCharacters, createCharSprite, CHARACTER_FRAME } from './characters.js';
 import DialogSystem from './DialogSystem.js';
+import LetterSystem from './LetterSystem.js';
 import QuestSystem from './QuestSystem.js';
 import SceneManager from './SceneManager.js';
 import Minimap from './Minimap.js';
@@ -173,6 +174,8 @@ export default class VenueScene extends Phaser.Scene {
 
     // ---- 系统 ----
     this.dialog = new DialogSystem();
+    // 信纸过场（写邀请函）：书桌前按 E → 信纸逐行展开 → 收归信封
+    this.letter = new LetterSystem();
     // ★ 把 story 传进去：主线进度存在 StorySystem 里（邀请函写了几封 / 投没投递），
     //   QuestSystem 必须能问到它，否则主线永远显示「进行中 0%」。
     this.quests = new QuestSystem((qs, quest, kind) => {
@@ -410,6 +413,16 @@ export default class VenueScene extends Phaser.Scene {
     // 剧情变化可能影响 NPC 是否出现
     this.spawnNpcsForCurrentScene();
     this.refreshQuestUI();
+
+    // ★ 书桌那一个交互点要跟着剧情换脸
+    //   （icon 从 ✎ 变成 ✉、标签从「窗前的书桌」变成「桌上的邀请函」）
+    //   label/hint/icon 文字是 getter，本来就会实时求值；
+    //   但【图标图形】是 rebuild 时按 shape 画出来的，所以这里得重建一次。
+    if (kind === 'write' || kind === 'take' || kind === 'reset') {
+      if (this.scenes && this.scenes.current) {
+        this.interactPoints.rebuild(this.scenes.current.id);
+      }
+    }
 
     if (kind === 'deliver') {
       this.toast('邀请函已寄出，朋友们正在赶来…');
@@ -878,7 +891,7 @@ export default class VenueScene extends Phaser.Scene {
       return;
     }
 
-    if (window.__venuePaused || this.dialog.isOpen()) {
+    if (window.__venuePaused || this.dialog.isOpen() || (this.letter && this.letter.isOpen())) {
       this.player.setVelocity(0);
       this.safePlay(`idle-${this.playerDir}`);
       if (this.interactPoints) this.interactPoints.update(this.player.x, this.player.y);
@@ -1403,8 +1416,18 @@ export default class VenueScene extends Phaser.Scene {
     const r = this.interactPoints.trigger();
     if (!r) return;
 
-    // ★ 'writeLetter' 分支已随「去掉写信环节」一并删除。
-    if (r.type === 'takeLetters') {
+    if (r.type === 'desk') {
+      // 书桌前的两种情况：还没写完 → 写下一封；写完了 → 把桌上的信收起来
+      if (!this.story.allWritten) {
+        this.startLetterWriting();
+      } else if (this.story.onDeskCount > 0) {
+        const n = this.story.takeLetters();
+        this.toast(`收起了 ${n} 封邀请函`);
+        this.gainToast(`邀请函 x${n}`);
+      } else {
+        this.toast('邀请函都收好了');
+      }
+    } else if (r.type === 'takeLetters') {
       if (r.ok) {
         this.toast(`收起了 ${r.count} 封邀请函`);
         this.gainToast(`邀请函 x${r.count}`);
@@ -1424,6 +1447,52 @@ export default class VenueScene extends Phaser.Scene {
     } else {
       this.toast(point.hint || point.label);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // 写邀请函（书桌前的信纸过场）
+  // ---------------------------------------------------------------------------
+  /**
+   * 写「下一封」邀请函。
+   *
+   * 为什么是一封一封写、而不是一次性写完 11 封：
+   *   邀请函的每一封正文都不一样（11 封信，13 位客人，林尼/琳妮特/菲米尼
+   *   三个人共收一封）。一封一封地展开，才能把每一封都真的念一遍；
+   *   一口气写完 11 封，就只能看到一张纸。
+   *
+   * 收到的那一封是 StorySystem 里的哪个 nextGuest()：
+   *   GUESTS 的顺序 = 邀请函 docx 里的出场顺序，
+   *   所以写出来的顺序和用户手里那叠信的顺序是一致的。
+   */
+  startLetterWriting() {
+    // 已经打开（比如连按了两下 E）就不重复开
+    if (this.letter.isOpen()) return;
+
+    const guest = this.story.nextGuest();
+    if (!guest) {
+      this.toast('邀请函都写完了');
+      return;
+    }
+
+    // 「写的是第几封」——用【已经写好多少封】来算，不能用 story 里此刻的 onDeskCount：
+    // onDesk 要等这封写完了才 +1，而这里是在打开信纸之前取的值。
+    const index = this.story.writtenCount;
+    const total = this.story.totalCount;
+
+    this.letter.open(guest, {
+      index,
+      total,
+      onDone: (g) => {
+        const written = this.story.writeLetter();
+        if (!written) return;
+        this.toast(`写好了：${written.name}`);
+        this.gainToast(`邀请函「${written.name}」`);
+        // 全部写完 → 提示下一步（quests 那边已经自动把 main-write 标完成）
+        if (this.story.allWritten) {
+          this.time.delayedCall(700, () => this.toast('桌上已经摞好了全部邀请函，按 E 收起来'));
+        }
+      },
+    });
   }
 
   // ---------------------------------------------------------------------------

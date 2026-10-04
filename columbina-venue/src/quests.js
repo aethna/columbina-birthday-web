@@ -6,7 +6,7 @@
  *   因为主会场是林地，没有现成的派对用品，所以任务都是「去别处收集」。
  *
  * 剧情顺序：
- *   主线：写 5 封邀请函 → 投信箱 → NPC 前来
+ *   主线：在书桌写 11 封邀请函 → 收起来 → 投信箱 → 13 位客人前来
  *     ↓
  *   委托：每个 NPC 一个任务，为主题筹备物资
  *
@@ -19,32 +19,33 @@
 
 export const QUESTS = [
   // =========================================================================
-  // 主线：收起邀请函 & 投递
+  // 主线：写邀请函 & 投递
   // 这两个任务不由 NPC 发放，而是推进剧情用的
   //
-  // ★ 流程改版（2026-09-28）：去掉了「写信」环节
-  //   旧：在书桌前写信 → 桌上累积 → 收起 → 投递
-  //   新：　　　　　　　　　　　　　　 收起 → 投递
-  //   开局 = 写信环节已经完成，5 封信直接摆在桌上。
-  //   所以第一个任务的文案改成「邀请函已经写好，去收起来准备寄出」的意思。
+  // ★ 流程改版（2026-10-04）：写信环节回来了，而且升级成一段过场
+  //   旧：　　　　　　　　　　　　　　 收起 → 投递
+  //   新：书桌前按 E 写一封（信纸逐行展开 → 收归信封）→ 桌上累积
+  //       → 收起 → 投递
+  //   正文来自《生日会邀请函.docx》，一共 11 封（见 StorySystem.js 的 GUESTS）。
   // =========================================================================
   {
     id: 'main-write',
     // title 里的 id 保持 main-write 不变 —— 存档、验收脚本都按这个 id 找任务，
     // 改 id 会让老存档和新脚本都对不上。只改给人看的文案。
-    title: '【主线】整理邀请函',
-    desc: '邀请函已经写好了，就摆在桌上 —— 把它们收起来，准备寄出去',
+    title: '【主线】写邀请函',
+    desc: '走到窗前的书桌，把邀请函一封一封写好',
     scene: 'home',
     // 特殊标记：不是 NPC 派发，而是场景交互推进
     special: 'write',
-    target: { type: 'writeLetters', count: 5 },
+    // count 要和 StorySystem.js 的 GUESTS.length 一致（11 封）
+    target: { type: 'writeLetters', count: 11 },
     reward: null,
     autoAccept: true,
   },
   {
     id: 'main-deliver',
     title: '【主线】投递邀请函',
-    desc: '把收好的邀请函投进林间信箱',
+    desc: '把桌上写好的邀请函收进怀里，投进林间信箱',
     scene: 'mailbox',
     special: 'deliver',
     target: { type: 'deliverLetters', count: 1 },
@@ -193,24 +194,31 @@ export const QUESTS = [
 export const INTERACT_POINTS = [
   // ===== 书桌场景 =====
   //
-  // ★ 流程改版（2026-09-28）：去掉「写信」环节
+  // ★ 流程改版（2026-10-04）：写信环节回来了
   //
-  //   旧流程：写信（书桌）→ 桌上累积 → 收起信件 → 邮箱投递
-  //   新流程：　　　　　　　　　　　 收起信件 → 邮箱投递
+  //   书桌这一个交互点承担两件事，按剧情自动切换：
+  //     · 还没写完 → 按 E 写下一封（信纸逐行展开 → 收归信封的过场）
+  //     · 写完了但桌上还有信 → 按 E 收起来
   //
-  //   所以这里删掉了原来的 `ip-desk`（action: 'writeLetter'）。
-  //   开局 = 写信环节已经完成，5 封信直接摆在桌上等着收（见 StorySystem.createInitial）。
+  //   为什么做成一个点而不是两个点：
+  //     两个点会挨在一起抢「最近交互点」，玩家按 E 到底触发哪个全看站位，很别扭。
   //
-  // 桌上一叠写好的信：拿起来
+  //   label / hint / shape / requires 都可以写成 (story) => ... 的函数，
+  //   InteractPoints 会用当期剧情求值（见 InteractPoints.js 的 resolve()）。
   {
-    id: 'ip-letters',
+    id: 'ip-desk',
     scene: 'home',
     tileX: 15, tileY: 5,
-    shape: 'letter',
-    label: '桌上的邀请函',
-    hint: '按 E 收起来',
-    action: 'takeLetters',
-    requires: 'hasLettersOnDesk',
+    shape: (s) => (s.allWritten ? 'letter' : 'pen'),
+    label: (s) => (s.allWritten ? '桌上的邀请函' : '窗前的书桌'),
+    hint: (s) => {
+      if (!s.allWritten) return `按 E 写邀请函（${s.writtenCount}/${s.totalCount}）`;
+      if (s.onDeskCount > 0) return '按 E 收起来';
+      return '邀请函都收好了';
+    },
+    action: 'writeOrTake',
+    // 全写完了、信也收走了，这个点就消失（不然站在书桌前一直闪很碍眼）
+    requires: (s) => !s.allWritten || s.onDeskCount > 0,
   },
 
   // ===== 信箱场景 =====

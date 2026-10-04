@@ -39,8 +39,19 @@ const ICON_TEXT = {
 };
 
 /** 取交互点的提示符号（拿不到就用兜底菱形） */
-function iconTextOf(def) {
-  return (def && ICON_TEXT[def.shape]) || ICON_TEXT.dot;
+function iconTextOf(shape) {
+  return ICON_TEXT[shape] || ICON_TEXT.dot;
+}
+
+/**
+ * 求值交互点字段
+ *
+ * label / hint / shape / requires 都可以写成 (story) => ... 的函数
+ * （书桌那个点就是如此：写完了就变成「桌上的邀请函」，图标从笔换成信封）。
+ * 不是函数就原样返回。
+ */
+function resolve(value, story) {
+  return typeof value === 'function' ? value(story) : value;
 }
 
 export default class InteractPointSystem {
@@ -85,6 +96,7 @@ export default class InteractPointSystem {
     this.active = null;
 
     const defs = INTERACT_POINTS.filter((d) => d.scene === sceneId);
+    const story = this.story;   // 下面的 getter 要闭包用到
 
     defs.forEach((def) => {
       const x = def.tileX * TILE_SIZE + TILE_SIZE / 2;
@@ -100,10 +112,10 @@ export default class InteractPointSystem {
       //   emoji 依赖系统字体，在没有该字体的环境里会渲染成「豆腐块」白方块，
       //   而且大小和位置不好控制。
       //   这里改成用代码画：一个圆底 + 一个简单符号，任何环境都一样。
-      const icon = this.makeIcon(x, y - 26, def);
+      const icon = this.makeIcon(x, y - 26, resolve(def.shape, this.story));
 
       // 名字（只在靠近时显示，平时不显示以免画面杂乱）
-      const labelObj = this.scene.add.text(x, y + 24, def.label, {
+      const labelObj = this.scene.add.text(x, y + 24, resolve(def.label, this.story), {
         fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
         fontSize: '12px',
         color: '#ffe9b8',
@@ -121,7 +133,20 @@ export default class InteractPointSystem {
         ease: 'Sine.inOut',
       });
 
-      this.points.push({ ...def, x, y, marker, icon, iconText: iconTextOf(def), labelObj });
+      this.points.push({
+        ...def,
+        x,
+        y,
+        marker,
+        icon,
+        labelObj,
+        // label / hint / iconText 用 getter 实时求值 ——
+        // 书桌那一个点在「没写完 / 写完了」两种状态下显示的文字不一样，
+        // 用 getter 就不必每次剧情推进都重建整个交互点（重建会打断浮动动画）。
+        get labelText() { return resolve(def.label, story) || ''; },
+        get hintText() { return resolve(def.hint, story) || ''; },
+        get iconText() { return iconTextOf(resolve(def.shape, story)); },
+      });
     });
   }
 
@@ -130,8 +155,9 @@ export default class InteractPointSystem {
    *
    * 做法：半径 13 的圆底 + 中间一个小符号。
    * 符号用 shape 代号，没有对应形状就用一个小菱形兜底。
+   * @param {string} s 已经求值过的 shape 代号
    */
-  makeIcon(x, y, def) {
+  makeIcon(x, y, s) {
     const g = this.scene.add.graphics().setDepth(9000);
 
     // 圆底
@@ -142,7 +168,7 @@ export default class InteractPointSystem {
 
     // 符号
     g.fillStyle(0xffe9b8, 1);
-    const s = def.shape || 'dot';
+    s = s || 'dot';
     if (s === 'drop') {
       g.fillCircle(0, 2, 4.5);
       g.fillTriangle(-4.6, 1.5, 4.6, 1.5, 0, -7);
@@ -226,7 +252,11 @@ export default class InteractPointSystem {
 
     if (nearest !== this.active) {
       this.points.forEach((p) => p.labelObj.setVisible(false));
-      if (nearest) nearest.labelObj.setVisible(true);
+      if (nearest) {
+        // 标签文字可能随剧情变了（书桌：书桌 -> 桌上的邀请函），显示前重新取一次
+        nearest.labelObj.setText(nearest.labelText);
+        nearest.labelObj.setVisible(true);
+      }
       this.active = nearest;
     }
 
@@ -244,9 +274,16 @@ export default class InteractPointSystem {
   isAvailable(p) {
     if (!p.requires) return true;
 
-    switch (p.requires) {
-      // ★ 'notAllWritten'（书桌写信）已随「去掉写信环节」一并删除。
+    // 函数式前置条件（书桌：还没写完 或 桌上还有信）
+    if (typeof p.requires === 'function') {
+      try {
+        return !!p.requires(this.story);
+      } catch {
+        return false;
+      }
+    }
 
+    switch (p.requires) {
       case 'hasLettersOnDesk':
         // 桌上有写好的信 → 可以拿走
         return this.story.onDeskCount > 0;
@@ -271,7 +308,9 @@ export default class InteractPointSystem {
     if (!p || !this.isAvailable(p)) return null;
 
     switch (p.action) {
-      // ★ 'writeLetter'（书桌写信）已随「去掉写信环节」一并删除。
+      // 书桌：写下一封 或 收起桌上的信 —— 具体走哪条由调用方（VenueScene）按剧情决定
+      case 'writeOrTake':
+        return { type: 'desk', point: p };
 
       case 'takeLetters': {
         const n = this.story.takeLetters();

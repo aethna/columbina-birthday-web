@@ -30,6 +30,10 @@ export const TILE_SIZE = 64;
 // dialog        : 对话内容，一条一句
 // offers        : 该 NPC 提供的功能入口（小游戏 / 单品）
 // ---------------------------------------------------------------------------
+// ★ 站位规则（2026-10-04 起）：所有客人 NPC 都站在**禁行格（'#'）**上，
+//   而且必须紧贴可走格 —— 这样哥伦比娅能走到旁边挨着他/她，但走不进同格，
+//   两个模型就不会重合了。验收脚本 _verify_all.mjs 会强制这条规则。
+// ---------------------------------------------------------------------------
 export const NPCS = [
   // ==========================================================================
   // 受邀的客人 —— 全部在主会场
@@ -39,7 +43,7 @@ export const NPCS = [
     id: 'npc-ainuo',
     scene: 'venue',
     guest: true,
-    tileX: 16, tileY: 12,
+    tileX: 11, tileY: 6,
     name: '爱诺',
     icon: '👧',
     color: 0xffc8e0,
@@ -50,6 +54,7 @@ export const NPCS = [
     dialog: [
       { text: '哇——！好大的树！' },
       { text: '谢谢你邀请我，我一定来！' },
+      { text: '乌吉恩圈那盏灯，我等会儿就去看看。' },
     ],
     offers: [
       {
@@ -63,7 +68,7 @@ export const NPCS = [
     id: 'npc-nefer',
     scene: 'venue',
     guest: true,
-    tileX: 26, tileY: 10,
+    tileX: 15, tileY: 19,
     name: '奈芙尔',
     icon: '📋',
     color: 0x4a9a8a,
@@ -73,6 +78,7 @@ export const NPCS = [
     displayHeight: 188,
     dialog: [
       { text: '收到你的邀请函了。' },
+      { text: '「月亮上没有伏尼契商会」——这条情报我记下了。' },
       { text: '既然来了，就帮你把这场生日会办妥吧。' },
     ],
     offers: [
@@ -87,7 +93,7 @@ export const NPCS = [
     id: 'npc-philins',
     scene: 'venue',
     guest: true,
-    tileX: 28, tileY: 15,
+    tileX: 27, tileY: 18,
     name: '菲林斯',
     icon: '🎁',
     color: 0xffd97a,
@@ -97,6 +103,7 @@ export const NPCS = [
     displayHeight: 188,
     dialog: [
       { text: '这块空地不错，布置一下会很好看。' },
+      { text: '灯我就不带了 —— 今晚有月亮。' },
       { text: '交给我吧。' },
     ],
     offers: [
@@ -111,7 +118,7 @@ export const NPCS = [
     id: 'npc-sandrone',
     scene: 'venue',
     guest: true,
-    tileX: 21, tileY: 14,
+    tileX: 29, tileY: 15,
     name: '桑多涅',
     icon: '🎪',
     color: 0xa78bfa,
@@ -121,6 +128,7 @@ export const NPCS = [
     displayHeight: 178,
     dialog: [
       { text: '……这里好安静。' },
+      { text: '伊涅芙又问我「心」的事了。下次让她自己来问你。' },
       { text: '天黑之前要布置好才行。' },
     ],
     offers: [
@@ -135,7 +143,7 @@ export const NPCS = [
     id: 'npc-lawuma',
     scene: 'venue',
     guest: true,
-    tileX: 12, tileY: 15,
+    tileX: 21, tileY: 19,
     name: '菈乌玛',
     icon: '🎵',
     color: 0x6fb3ff,
@@ -145,6 +153,7 @@ export const NPCS = [
     displayHeight: 188,
     dialog: [
       { text: '林子里办生日会，倒是别有味道。' },
+      { text: '你说不用带祭品……那我就把自己带来了。' },
       { text: '我来得不算晚吧？' },
     ],
     offers: [
@@ -154,6 +163,176 @@ export const NPCS = [
         url: '#goods',
       },
     ],
+  },
+
+  // ==========================================================================
+  // 第二批客人（2026-10-04 加入）—— 邀请函 docx 里还有 8 位收信人
+  // 阿蕾奇诺 / 林尼 / 琳妮特 / 菲米尼 / 那维莱特 / 芙宁娜 / 伊涅芙 / 旅行者
+  // 他们没有委托任务，只在会场里聊天。
+  // ==========================================================================
+  {
+    id: 'npc-arlecchino',
+    scene: 'venue',
+    guest: true,
+    tileX: 10, tileY: 14,
+    name: '阿蕾奇诺',
+    icon: '🖤',
+    color: 0xd94f6a,
+    sprite: 'assets/chars-scene/arlecchino-stand.png',
+    portrait: { url: 'assets/chars/npc-arlecchino-portrait.png' },
+    portraitBg: '#2e1a20',
+    displayHeight: 188,
+    dialog: [
+      { text: '月亮上的路，比我想象中好找。' },
+      { text: '你信里写的那件事，我没有忘。' },
+      { text: '生日会而已 —— 我准时到。' },
+    ],
+    offers: [],
+  },
+  {
+    id: 'npc-lyney',
+    scene: 'venue',
+    guest: true,
+    tileX: 14, tileY: 6,
+    name: '林尼',
+    icon: '🎩',
+    color: 0xe07ad0,
+    sprite: 'assets/chars-scene/lyney-stand.png',
+    portrait: { url: 'assets/chars/npc-lyney-portrait.png' },
+    portraitBg: '#2b2438',
+    displayHeight: 176,
+    dialog: [
+      { text: '「月亮上没有什么像样的舞台」？' },
+      { text: '那正好。台子越简陋，魔术越好看。' },
+      { text: '看着吧，我会让整片月海都鼓掌。' },
+    ],
+    offers: [
+      {
+        text: '想看个小魔术吗？就地取材的那种。',
+        label: '打开小游戏',
+        url: 'games/demo-game/index.html',
+      },
+    ],
+  },
+  {
+    id: 'npc-lynette',
+    scene: 'venue',
+    guest: true,
+    tileX: 21, tileY: 6,
+    name: '琳妮特',
+    icon: '🐱',
+    color: 0x9fb6d8,
+    sprite: 'assets/chars-scene/lynette-stand.png',
+    portrait: { url: 'assets/chars/npc-lynette-portrait.png' },
+    portraitBg: '#242c38',
+    displayHeight: 172,
+    dialog: [
+      { text: '……' },
+      { text: '（她点了点头，看来确实不打算说话。）' },
+      { text: '（……茶，谢谢。）' },
+    ],
+    offers: [],
+  },
+  {
+    id: 'npc-freminet',
+    scene: 'venue',
+    guest: true,
+    tileX: 24, tileY: 7,
+    name: '菲米尼',
+    icon: '🤿',
+    color: 0x7fd0c8,
+    sprite: 'assets/chars-scene/freminet-stand.png',
+    portrait: { url: 'assets/chars/npc-freminet-portrait.png' },
+    portraitBg: '#1f3330',
+    displayHeight: 168,
+    dialog: [
+      { text: '在月亮上遨游……和潜水，真的不一样吗？' },
+      { text: '我把头盔带来了。虽然这里好像用不上。' },
+      { text: '……谢谢你，让我来看看。' },
+    ],
+    offers: [],
+  },
+  {
+    id: 'npc-neuvillette',
+    scene: 'venue',
+    guest: true,
+    tileX: 28, tileY: 9,
+    name: '那维莱特',
+    icon: '⚖️',
+    color: 0x8fb8ff,
+    sprite: 'assets/chars-scene/neuvillette-stand.png',
+    portrait: { url: 'assets/chars/npc-neuvillette-portrait.png' },
+    portraitBg: '#1e2a3d',
+    displayHeight: 188,
+    dialog: [
+      { text: '你特意让今晚不下雨。' },
+      { text: '……谢谢。月亮，我看得很清楚。' },
+      { text: '枫丹的雨，今夜也停一停吧。' },
+    ],
+    offers: [],
+  },
+  {
+    id: 'npc-furina',
+    scene: 'venue',
+    guest: true,
+    tileX: 33, tileY: 10,
+    name: '芙宁娜',
+    icon: '🎬',
+    color: 0x86c8ff,
+    sprite: 'assets/chars-scene/furina-stand.png',
+    portrait: { url: 'assets/chars/npc-furina-portrait.png' },
+    portraitBg: '#1d2c42',
+    displayHeight: 178,
+    dialog: [
+      { text: '没有水族箱，也没有镜头？那怎么行！' },
+      { text: '灯光、走位、情绪 —— 全部交给我。' },
+      { text: '月灵们不会演戏？那就教到会为止。' },
+    ],
+    offers: [
+      {
+        text: '要不要先看一段我导的片子？',
+        label: '打开小游戏',
+        url: 'games/demo-game/index.html',
+      },
+    ],
+  },
+  {
+    id: 'npc-ineffa',
+    scene: 'venue',
+    guest: true,
+    tileX: 34, tileY: 14,
+    name: '伊涅芙',
+    icon: '⚙️',
+    color: 0xc9b6ff,
+    sprite: 'assets/chars-scene/ineffa-stand.png',
+    portrait: { url: 'assets/chars/npc-ineffa-portrait.png' },
+    portraitBg: '#2a2438',
+    displayHeight: 172,
+    dialog: [
+      { text: '「有『心』的机械，是如何进行情感活动的？」' },
+      { text: '这个问题，我一直没问出答案。' },
+      { text: '扫帚我就不拿了 —— 你说月亮上不太脏。' },
+    ],
+    offers: [],
+  },
+  {
+    id: 'npc-traveler',
+    scene: 'venue',
+    guest: true,
+    tileX: 14, tileY: 23,
+    name: '旅行者',
+    icon: '⭐',
+    color: 0xffe08a,
+    sprite: 'assets/chars-scene/traveler-stand.png',
+    portrait: { url: 'assets/chars/npc-traveler-portrait.png' },
+    portraitBg: '#33291a',
+    displayHeight: 180,
+    dialog: [
+      { text: '你果然在这里。' },
+      { text: '旅途还长 —— 但今天，我准时到了。' },
+      { text: '走吧，去看看你布置好的月亮。' },
+    ],
+    offers: [],
   },
 
 ];

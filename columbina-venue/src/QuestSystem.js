@@ -204,22 +204,18 @@ export default class QuestSystem {
     const t = quest.target;
 
     // ---- 主线：进度存在 StorySystem 里 --------------------------------
-    //   邀请函收了几封 / 投没投递，都不是本系统的计数器能回答的。
+    //   邀请函写了几封 / 投没投递，都不是本系统的计数器能回答的。
     //
-    // ★ 「writeLetters」类型的进度 = 已收起的信 / 总数（不是"已写好的"）
+    // ★ 「writeLetters」类型的进度 = 已写好的信 / 总数
     //
-    //   流程改版后（去掉写信环节），开局 5 封信就已经是"写好"状态了。
-    //   如果还按 writtenCount 算，任务一进游戏就是 5/5 = 100%，
-    //   会被 syncStoryQuests() 立刻判定为完成 —— 玩家还没走到桌边，
-    //   任务就自己完成了。
-    //
-    //   现在这一步的实际动作是「把桌上写好的信收起来」，
-    //   所以进度应该看【收起来多少】：carriedCount。
-    //   （桌上的还在 onDesk，收进身上才进 carried）
+    //   2026-10-04 写信环节回来了（书桌前按 E → 信纸逐行展开 → 收归信封），
+    //   任务目标就是「把 11 封 invitation 写完」，所以这里必须看 writtenCount。
+    //   （2026-09-28 ~ 2026-10-04 之间那版去掉写信环节的流程看的是 carriedCount，
+    //     现在改回来了；改错会让任务开局就 100% 自己完成。）
     if (t.type === 'writeLetters') {
       if (!this.story) return 0;
-      const need = t.count || this.story.totalCount || 5;
-      return Math.min(1, this.story.carriedCount / need);
+      const need = t.count || this.story.totalCount || 11;
+      return Math.min(1, this.story.writtenCount / need);
     }
     if (t.type === 'deliverLetters') {
       if (!this.story) return 0;
@@ -242,8 +238,11 @@ export default class QuestSystem {
   getCounts(quest) {
     const t = quest.target || {};
     if (t.type === 'writeLetters') {
-      // 和 getProgress 保持一致：看「已收起」的数量
-      return { got: this.story ? this.story.carriedCount : 0, need: t.count || 5 };
+      // 和 getProgress 保持一致：看「已写好」的数量
+      return {
+        got: this.story ? this.story.writtenCount : 0,
+        need: t.count || (this.story ? this.story.totalCount : 11),
+      };
     }
     if (t.type === 'deliverLetters') {
       return { got: this.story && this.story.isDelivered ? 1 : 0, need: t.count || 1 };
