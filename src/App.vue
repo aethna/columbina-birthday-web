@@ -4,7 +4,9 @@
   <div class="vignette"></div>
 
   <AudioToggle v-if="view !== 'admin'" />
+  <!-- 登录入口：QQ 互联应用审核通过前先不展示；恢复时删掉这三行注释即可
   <UserAuth v-if="view !== 'admin' && view !== 'login'" :return-to="authReturnTo" />
+  -->
 
   <template v-if="view === 'login'">
     <LoginPage :return-to="pendingTarget || '/#/signup'" @back="go('home')" />
@@ -33,7 +35,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import SkyCanvas from './components/SkyCanvas.vue'
 import AudioToggle from './components/AudioToggle.vue'
-import UserAuth from './components/UserAuth.vue'
+// import UserAuth from './components/UserAuth.vue'  // QQ 应用审核通过前先隐藏登录入口
 import LoginPage from './components/LoginPage.vue'
 import HeroSection from './components/HeroSection.vue'
 import IntroSection from './components/IntroSection.vue'
