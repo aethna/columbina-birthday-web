@@ -85,10 +85,14 @@ function go(next) {
 
 const GATE_TARGET = { game: '/game/index.html', venue: '/venue/index.html', signup: '/#/signup' }
 
+/* QQ 互联应用审核期间临时关闭门禁：未登录也放行。
+   审核通过后把这里改回 true，门禁立刻恢复（登录入口那几行注释也一并恢复）。 */
+const GATE_ENABLED = false
+
 /** 未登录 → 去登录页并记住目标；已登录 → 直接放行 */
 function gate(action) {
   const target = GATE_TARGET[action] || '/'
-  if (!user.value) {
+  if (GATE_ENABLED && !user.value) {
     pendingTarget.value = target
     go('login')
     return
@@ -100,7 +104,7 @@ function gate(action) {
 /* 直接敲 #/signup 或登录返回时的兜底：登录态一确定就复查视图 */
 watch([view, ready], ([v, r]) => {
   if (!r) return
-  if (v === 'signup' && !user.value) {
+  if (v === 'signup' && !user.value && GATE_ENABLED) {
     pendingTarget.value = '/#/signup'
     go('login')
     return
