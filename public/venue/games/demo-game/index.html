@@ -22,7 +22,7 @@
     #hud span { background: #1a2233cc; padding: 7px 16px; border-radius: 20px; }
     #hint {
       position: fixed; bottom: 16px; left: 0; right: 0;
-      text-align: center; font-size: 13px; color: #6f8bb5;
+      padding: 0 12px; text-align: center; font-size: 13px; line-height: 1.5; color: #6f8bb5;
     }
   </style>
 </head>
@@ -31,9 +31,9 @@
     <span>得分 <b id="score">0</b></span>
     <span>生命 <b id="life">3</b></span>
   </div>
-  <div id="hint">← → 或 A / D 移动 · 接到礼物得分 · 漏掉扣命</div>
+  <div id="hint">← → 或 A / D 移动 · 鼠标移动 / 触摸滑动也能控制 · 接到礼物得分 · 漏掉扣命</div>
 
-  <canvas id="cv"></canvas>
+  <canvas id="cv" style="touch-action: none"></canvas>
 
   <script>
     // =======================================================================
@@ -73,6 +73,7 @@
       spawnInterval: 900, // 毫秒
       lastTime: 0,
       keys: {},
+      inputMode: 'pointer',
     };
 
     const BASKET_W = 90;
@@ -83,21 +84,53 @@
     const ITEM_ICONS = ['🎁', '🎂', '🎈', '⭐', '💝'];
 
     // ---- 输入 ----
+    const movementKeys = new Set(['arrowleft', 'arrowright', 'a', 'd']);
+
     window.addEventListener('keydown', (e) => {
-      state.keys[e.key.toLowerCase()] = true;
+      const key = e.key.toLowerCase();
+      if (!movementKeys.has(key)) return;
+      state.keys[key] = true;
+      state.inputMode = 'keyboard';
       // 阻止方向键滚动页面
-      if (['arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) e.preventDefault();
+      e.preventDefault();
     });
     window.addEventListener('keyup', (e) => {
-      state.keys[e.key.toLowerCase()] = false;
+      const key = e.key.toLowerCase();
+      if (movementKeys.has(key)) state.keys[key] = false;
     });
 
-    // 鼠标 / 触摸也能控制
+    function clearKeys() {
+      state.keys = {};
+    }
+
+    window.addEventListener('blur', clearKeys);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) clearKeys();
+    });
+
+    // 鼠标 / 触摸也能控制。支持 Pointer Events 的浏览器统一走这一套；
+    // 旧浏览器回退到 mousemove / touchmove，避免同一次触摸被处理两遍。
     let pointerX = null;
-    window.addEventListener('mousemove', (e) => { pointerX = e.clientX; });
-    window.addEventListener('touchmove', (e) => {
-      if (e.touches[0]) pointerX = e.touches[0].clientX;
-    }, { passive: true });
+    function setPointerPosition(clientX) {
+      if (!Number.isFinite(clientX)) return;
+      pointerX = clientX;
+      state.inputMode = 'pointer';
+    }
+
+    function handlePointerMove(e) {
+      setPointerPosition(e.clientX);
+    }
+
+    function handleTouchMove(e) {
+      if (e.touches[0]) setPointerPosition(e.touches[0].clientX);
+    }
+
+    if ('PointerEvent' in window) {
+      window.addEventListener('pointermove', handlePointerMove, { passive: true });
+    } else {
+      window.addEventListener('mousemove', handlePointerMove);
+      window.addEventListener('touchmove', handleTouchMove, { passive: true });
+    }
 
     // ---- 重置 ----
     function reset() {
@@ -116,14 +149,15 @@
 
       // 移动篮子
       const speed = 0.62 * dt; // 像素/毫秒
-      const left = state.keys['arrowleft'] || state.keys['a'];
-      const right = state.keys['arrowright'] || state.keys['d'];
+      const keyboardActive = state.inputMode === 'keyboard';
+      const left = keyboardActive && (state.keys['arrowleft'] || state.keys['a']);
+      const right = keyboardActive && (state.keys['arrowright'] || state.keys['d']);
 
       if (left) state.basketX -= speed;
       if (right) state.basketX += speed;
 
-      // 鼠标控制（优先级低于键盘，鼠标没动就不干预）
-      if (pointerX !== null && !left && !right) {
+      // 指针控制只在最近一次主动输入是鼠标 / 触摸时生效。
+      if (state.inputMode === 'pointer' && pointerX !== null) {
         const diff = pointerX - state.basketX;
         state.basketX += Math.max(-speed, Math.min(speed, diff * 0.18));
       }
