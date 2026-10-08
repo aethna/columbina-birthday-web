@@ -82,33 +82,61 @@ try {
   rec(7, "金色引导箭头已移除", false, e.message);
 }
 
-// ---------- 任务2：5 个 NPC 的配置位置都在会场可走区 ----------
+// ---------- 任务2：NPC 分散到各场景，都站在可走格上、相互不重叠 ----------
 //
-// 注意：NPC 是「受邀客人」，主线没走完时 s.npcs 是空的 ——
-//       所以这里直接比对 config 里的坐标和会场碰撞图（确定性检查），
-//       不依赖剧情进度。
+// ★ 2026-10-09（§二十八）规则变了：
+//   以前 13 位客人都挤在会场、靠「站到 '#' 禁行格上」来避免和哥伦比娅重叠；
+//   现在客人分散到 8 个场景，各自站在**可走格**上（人得站在实地上），
+//   改由「立绘的世界包围盒换算成格子 → 这些格子全部注册成禁行」来防重叠。
+//   这里只做确定性检查（不依赖剧情进度）：落点合法 + 四邻有可走格 + 两两不重叠。
+//   占格是否真的被封死，由 venue/_verify_round7.mjs 在客人到场后实测。
 try {
   const r2 = await p.evaluate(async () => {
     const s = window.__venueScene;
-    const m = s.scenes.getMap("venue");
     const NPCS = (await import("/src/config.js")).NPCS;
-    const venueNpcs = NPCS.filter((n) => (n.scene || "venue") === "venue");
-    const out = venueNpcs.map((n) => ({
-      name: n.name,
-      tile: [n.tileX, n.tileY],
-      onWalk: m[n.tileY]?.[n.tileX] === ".",
-    }));
-    // 顺便看看这批位置离地图边缘有多远（太靠边相机会看不到）
-    const edge = venueNpcs.map((n) => Math.min(n.tileX, n.tileY, 39 - n.tileX, 23 - n.tileY));
-    return { out, minEdge: Math.min(...edge) };
+    const out = NPCS.map((n) => {
+      const sid = n.scene || "venue";
+      const m = s.scenes.getMap(sid);
+      const x = n.tileX, y = n.tileY;
+      const neigh = [[x, y - 1], [x, y + 1], [x - 1, y], [x + 1, y]]
+        .map(([nx, ny]) => m[ny]?.[nx]);
+      return {
+        id: n.id, name: n.name, scene: sid,
+        tile: [x, y],
+        walkable: m[y]?.[x] === ".",
+        neighFree: neigh.filter((c) => c === ".").length,
+        // 立绘是「脚底对齐锚点、向上长出 displayHeight」
+        sprTop: y * 64 + 32 - (n.displayHeight || 150),
+        sprBottom: y * 64 + 32 + 16,
+      };
+    });
+    // 同一场景内两两间距
+    let minDist = Infinity, minPair = null;
+    for (let i = 0; i < out.length; i++) {
+      for (let j = i + 1; j < out.length; j++) {
+        if (out[i].scene !== out[j].scene) continue;
+        const d = Math.hypot(out[i].tile[0] - out[j].tile[0], out[i].tile[1] - out[j].tile[1]);
+        if (d < minDist) { minDist = d; minPair = `${out[i].name}/${out[j].name}`; }
+      }
+    }
+    const scenes = [...new Set(out.map((n) => n.scene))];
+    return { out, minDist, minPair, scenes, count: NPCS.length };
   });
-  const nefer = r2.out.find((n) => n.name === "奈芙尔");
-  const allWalk = r2.out.every((n) => n.onWalk);
-  const pass = !!nefer && nefer.onWalk && allWalk && r2.minEdge >= 4;
-  rec(2, "奈芙尔在场且 5 个 NPC 位置都合理", pass,
-      r2.out.map((n) => `${n.name}(${n.tile})`).join(" ") + `  离边缘最近 ${r2.minEdge} 格`);
+  const bad = r2.out.filter((n) => !n.walkable || n.neighFree === 0);
+  const clipped = r2.out.filter((n) => n.sprTop < 0 || n.sprBottom > 1536);
+  const pass = r2.count === 14 && r2.scenes.length >= 8 && bad.length === 0
+            && clipped.length === 0 && r2.minDist >= 2.9;
+  rec(2, "14 位 NPC 分散到 8 个场景，都站在可走格且互相不重叠", pass,
+      `${r2.count} 位 / ${r2.scenes.length} 个场景；同场景最小间距 ${r2.minDist === Infinity ? "n/a" : r2.minDist.toFixed(1)} 格` +
+      ` (${r2.minPair || "-"})；立绘被切 ${clipped.length} 位` +
+      (bad.length
+        ? "  异常: " + bad.map((n) => `${n.name}@${n.scene}(${n.tile}) walkable=${n.walkable} 四邻可走=${n.neighFree}`).join(" ")
+        : "") +
+      (clipped.length
+        ? "  被切: " + clipped.map((n) => `${n.name}(${n.tile}) top=${n.sprTop}`).join(" ")
+        : ""));
 } catch (e) {
-  rec(2, "奈芙尔在场且 5 个 NPC 位置都合理", false, e.message);
+  rec(2, "14 位客人位置合理", false, e.message);
 }
 
 // ---------- 任务3：交互点都有可用动作 ----------
@@ -138,8 +166,10 @@ try {
       .map((e) => e.textContent);
     return { shown };
   });
-  const still = r4.shown.some((t) => t.includes("写下邀请函"));
-  rec(4, "已完成主线不再显示", !still, "列表: " + (r4.shown.join(" | ") || "(空)"));
+  const still = r4.shown.some((t) => t.includes("写邀请函"));
+  const hasDeliver = r4.shown.some((t) => t.includes("投递邀请函"));
+  rec(4, "已完成主线不再显示", !still && hasDeliver,
+      "列表: " + (r4.shown.join(" | ") || "(空)") + `  投递主线还在=${hasDeliver}`);
 } catch (e) {
   rec(4, "已完成主线不再显示", false, e.message);
 }
@@ -223,6 +253,32 @@ try {
   rec("水", "交付后道具立刻出现（水桶）", has, `交付前 ${pr.before} 个 -> ${pr.keys.join(",") || "无"}`);
 } catch (e) {
   rec("水", "交付后道具立刻出现（水桶）", false, e.message);
+}
+
+// ---------- 任务9：13 位客人的 Q 版立绘 / 对话头像素材齐全 ----------
+try {
+  const r9 = await p.evaluate(async () => {
+    const NPCS = (await import("/src/config.js")).NPCS;
+    const venueNpcs = NPCS.filter((n) => (n.scene || "venue") === "venue");
+    const urls = [];
+    for (const n of venueNpcs) {
+      urls.push({ name: n.name, kind: "立绘", url: n.sprite });
+      urls.push({ name: n.name, kind: "头像", url: (n.portrait && n.portrait.url) || "" });
+    }
+    const bad = [];
+    for (const u of urls) {
+      if (!u.url) { bad.push(`${u.name} 无${u.kind}路径`); continue; }
+      try {
+        const res = await fetch(u.url);
+        if (!res.ok) bad.push(`${u.name} ${u.kind} HTTP ${res.status}`);
+      } catch (e) { bad.push(`${u.name} ${u.kind} ${e.message}`); }
+    }
+    return { total: urls.length, bad };
+  });
+  rec(9, "会场全部角色（13 位客人 + 空）的立绘与头像素材齐全", r9.bad.length === 0,
+      `${r9.total} 个文件；缺失/报错 ${r9.bad.length} 个：${r9.bad.join(", ") || "无"}`);
+} catch (e) {
+  rec(9, "会场全部角色（13 位客人 + 空）的立绘与头像素材齐全", false, e.message);
 }
 
 console.log("\n================ 核查结果 ================");

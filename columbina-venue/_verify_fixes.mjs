@@ -95,14 +95,15 @@ try {
     const mw = Q.find((x) => x.id === 'main-write');
     const md = Q.find((x) => x.id === 'main-deliver');
 
-    // ★ 流程改版（2026-09-28）后，这一步是「把桌上的信收起来」
-    //
-    //   旧写法是直接把 lettersWritten 塞满来模拟「写完了」，
-    //   但写信环节已经删掉，main-write 的进度现在看的是 carriedCount（已收起）。
-    //   所以这里改成真的调用 takeLetters()，走一遍真实的收起动作。
-    s.story.data.lettersWritten = ['npc-ainuo', 'npc-nefer', 'npc-philins', 'npc-sandrone', 'npc-lawuma'];
-    s.story.data.onDesk = 5;
-    s.story.takeLetters();
+    // ★ 流程改版（2026-10-04 v5）后：
+    //   写信不再需要「回书桌按 E 收起来」那一步 —— 信纸过场的收尾（收归信封）
+    //   就等于收进怀里，所以直接调 11 次 writeLetter()，走一遍真实的写信动作。
+    //   （更旧的版本是「5 封信、要靠 takeLetters() 收起来」，已经不适用了。）
+    s.story.reset();
+    s.quests.setState(mw, 'active');
+    s.quests.setState(md, 'active');
+    let guard = 0;
+    while (!s.story.allWritten && guard++ < 30) s.story.writeLetter();
     await new Promise((r) => setTimeout(r, 400));
 
     const afterWrite = {
@@ -111,9 +112,8 @@ try {
       counts: s.quests.getCounts(mw),
     };
 
-    // 模拟「已投递」
-    s.story.data.delivered = true;
-    s.story.notify('deliver');
+    // 模拟「走到信箱按 E 投递」（走真实方法，不是直接改 data.delivered）
+    s.story.deliverLetters();
     await new Promise((r) => setTimeout(r, 600));
 
     const afterDeliver = {
@@ -132,7 +132,7 @@ try {
 
   const ok = r.afterWrite.state === 'completed'
     && r.afterWrite.progress === 1
-    && r.afterWrite.counts.got === 5 && r.afterWrite.counts.need === 5
+    && r.afterWrite.counts.got === 11 && r.afterWrite.counts.need === 11
     && r.afterDeliver.state === 'completed'
     && r.afterDeliver.progress === 1
     && r.mainShown.length === 0;

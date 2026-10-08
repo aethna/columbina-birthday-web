@@ -19,9 +19,10 @@
 import { PLAYER } from './config.js';
 
 // 行走图规格（和主流免费素材一致，方便直接套用）
+// ROWS = 8：占位火柴人也按 8 方向出图，和 DIRS 对齐（斜向行沿用 right 的朝向画）
 const FRAME_W = 48;
 const FRAME_H = 64;
-const ROWS = 4;
+const ROWS = 8;
 const COLS = 4;
 
 // ---------------------------------------------------------------------------
@@ -36,7 +37,26 @@ const COLS = 4;
 //   Phaser 的 spritesheet 是等宽高矩形网格，每格尺寸一致就没问题 ——
 //   真正的约束在【动画注册】这一层：不能再用写死的 COLS 去算帧号。
 // ---------------------------------------------------------------------------
-const DEFAULT_FRAMES_PER_DIR = { down: COLS, left: COLS, right: COLS, up: COLS };
+// ---------------------------------------------------------------------------
+// ★ 8 方向（2026-10-06 加斜向行走）
+//
+//   数组下标 = 行号 = 雪碧图里的第几行，**必须和 tools/build-hero-sheet2.py
+//   的 ROWS 顺序逐字对应**，改一边就要改另一边。
+//
+//   为什么用连写（downright 而不是 down-right）：
+//     VenueScene.safePlay() 用 `suffix.split('-')[1]` 取方向名，
+//     方向名里再出现横线就会被截断。
+//
+//   前 4 向 = 旧素材，后 4 向 = 2026-10-06 用制图 AI 新做的 45° 斜向素材。
+// ---------------------------------------------------------------------------
+export const DIRS = [
+  'down', 'left', 'right', 'up',
+  'downright', 'downleft', 'upright', 'upleft',
+];
+
+export const DIR_ROW = DIRS.reduce((m, d, i) => { m[d] = i; return m; }, {});
+
+const DEFAULT_FRAMES_PER_DIR = DIRS.reduce((m, d) => { m[d] = COLS; return m; }, {});
 
 /** 取某个方向的帧数（没配就回落到 4） */
 export function framesOf(info, dir) {
@@ -47,10 +67,8 @@ export function framesOf(info, dir) {
 // 列数 = 所有方向里最多的那个（雪碧图宽度按它算）
 export function colsOf(framesPerDir) {
   const map = framesPerDir || DEFAULT_FRAMES_PER_DIR;
-  return Math.max(...['down', 'left', 'right', 'up'].map((d) => map[d] || COLS));
+  return Math.max(...DIRS.map((d) => map[d] || COLS));
 }
-
-export const DIR_ROW = { down: 0, left: 1, right: 2, up: 3 };
 
 // ---------------------------------------------------------------------------
 // 立绘加载
@@ -221,7 +239,7 @@ export function setCharWalk(sprite, info, dir) {
  *   这里只取真正有内容的那几帧就行 —— 取多了只是重复播放，不影响正确性。
  */
 function registerWalkAnims(scene, key, framesPerDir) {
-  const dirs = ['down', 'left', 'right', 'up'];
+  const dirs = DIRS;
   const cols = colsOf(framesPerDir);
 
   dirs.forEach((dir) => {

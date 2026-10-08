@@ -25,6 +25,17 @@ export default class SceneManager {
     this.obstacles = null;      // 当前场景的碰撞组
     this.exits = [];            // 当前场景的出入口（运行时数据）
     this.switching = false;     // 防止切换过程中重复触发
+    // ★ 额外禁行格改成【多来源登记】（2026-10-08）
+    //
+    //   原来是单个 extraBlocks（只有围桌庆功宴用）。现在有两类需求：
+    //     'party'          -> 庆功宴的桌子 + 14 个坐姿模型占的格子
+    //     'npc:<sceneId>'  -> 各场景【站姿】NPC 模型长宽占的格子
+    //   两者可能同时存在（比如站在会场隔着桌子看外面的 NPC），所以做成
+    //   key -> { sceneId, blocks } 的登记表，再按场景合并成 blockedByScene。
+    //
+    //   跨场景加载保留 —— load() 里会重新加上。
+    this.blockSources = new Map();   // key -> { sceneId, blocks: [[x0,y0,x1,y1],...] }
+    this.blockedByScene = new Map(); // sceneId -> 合并后的 [[x0,y0,x1,y1],...]
   }
 
   /** 取场景配置 */
@@ -59,7 +70,13 @@ export default class SceneManager {
       t.tileY >= 0 && t.tileY < SCENE_ROWS;
 
     const map = this.getMap(cfg.id);
-    const walkable = (t) => map && map[t.tileY] && map[t.tileY][t.tileX] === '.';
+    // 附加挡板（庆功宴的桌子/坐姿 + 站姿 NPC 的模型占格）也要算进「不可走」，
+    // 否则进门会落到桌子/坐姿/NPC 模型里
+    const bl = this.blockedByScene.get(cfg.id) || [];
+    const blocked = (tx, ty) =>
+      bl.some(([x0, y0, x1, y1]) => tx >= x0 && tx <= x1 && ty >= y0 && ty <= y1);
+    const walkable = (t) => map && map[t.tileY] && map[t.tileY][t.tileX] === '.' &&
+      !blocked(t.tileX, t.tileY);
 
     if (okTile(arriveAt) && walkable(arriveAt)) return arriveAt;
 
@@ -71,7 +88,7 @@ export default class SceneManager {
             if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
             const nx = arriveAt.tileX + dx, ny = arriveAt.tileY + dy;
             if (nx >= 0 && nx < SCENE_COLS && ny >= 0 && ny < SCENE_ROWS &&
-                map[ny] && map[ny][nx] === '.') {
+                map[ny] && map[ny][nx] === '.' && !blocked(nx, ny)) {
               console.warn('[场景] 落点不可走，挪到最近可走格', { from: arriveAt, to: { tileX: nx, tileY: ny } });
               return { tileX: nx, tileY: ny };
             }
@@ -138,6 +155,9 @@ export default class SceneManager {
         }
       }
     }
+
+    // ---- 附加挡板（庆祝态的桌子 / 坐姿模型）----
+    this.applyExtraBlocks();
 
     // ---- 出入口（地面光圈）----
     //
@@ -370,6 +390,93 @@ export default class SceneManager {
       this.load(exit.to, land);
       scene.toast(`进入 ${target.name}`);
     });
+  }
+
+  /**
+   * 登记一份额外的禁行格（可以登记多份，各自独立）
+   *
+   * 为什么不直接改 MAP_ROWS：
+   *   这些都是【运行时状态】——
+   *     · 围桌庆功宴：委托没做完时地图还是老样子
+   *     · 站姿 NPC 占格：客人没收到邀请函时不出现，占格也就不该存在
+   *   所以做成一份「附加挡板」，跟着 obstacles 一起在 load() 里重建。
+   *
+   * ★ 附加挡板【会中途变】：
+   *   宴会一开，会场的站姿 NPC 全部撤走，它们原来占的格子必须立刻解封；
+   *   客人到场、玩家又正好站在那个场景，也必须立刻封上。
+   *   所以 applyExtraBlocks() 是「先拆掉上一次补的、再按最新数据补」，
+   *   而不是只加不减（只加不减会留下永远解不开的幽灵挡板）。
+   *
+   * @param {string} key      来源标识（同名覆盖，重新算一遍就更新）
+   * @param {string} sceneId  只在这个场景生效
+   * @param {Array<[number,number,number,number]>} blocks [x0,y0,x1,y1] 含头含尾
+   */
+  setBlockSource(key, sceneId, blocks) {
+    if (!blocks || !blocks.length) {
+      this.blockSources.delete(key);
+    } else {
+      this.blockSources.set(key, { sceneId, blocks });
+    }
+    this.rebuildBlocked();
+    // 只有「改动的就是这个场景」才需要立刻重铺
+    if (this.current && this.current.id === sceneId) this.applyExtraBlocks();
+  }
+
+  /** 按场景把各来源的挡板合并起来 */
+  rebuildBlocked() {
+    this.blockedByScene = new Map();
+    this.blockSources.forEach(({ sceneId, blocks }) => {
+      if (!this.blockedByScene.has(sceneId)) this.blockedByScene.set(sceneId, []);
+      this.blockedByScene.get(sceneId).push(...blocks);
+    });
+  }
+
+  /** 兼容老接口：围桌庆功宴（等价于 setBlockSource('party', ...)） */
+  setExtraBlocks(sceneId, blocks) {
+    this.setBlockSource('party', sceneId, blocks);
+  }
+
+  /**
+   * 按最新数据重铺当前场景的附加挡板
+   *
+   * 先 destroy 掉上一次补的每一块，再重新算一遍 —— 这样「撤掉」也能生效。
+   * （静态组里的 body destroy 之后会自动从组里移除。）
+   */
+  applyExtraBlocks() {
+    // 拆掉上一次补的
+    if (this.extraBodies && this.extraBodies.length) {
+      this.extraBodies.forEach((b) => { if (b && b.destroy) b.destroy(); });
+    }
+    this.extraBodies = [];
+    if (!this.obstacles || !this.current) return 0;
+
+    const blocks = this.blockedByScene.get(this.current.id);
+    if (!blocks || !blocks.length) return 0;
+
+    const map = this.getMap(this.current.id);
+    let n = 0;
+    blocks.forEach(([x0, y0, x1, y1]) => {
+      for (let ty = y0; ty <= y1; ty++) {
+        for (let tx = x0; tx <= x1; tx++) {
+          if (tx < 0 || ty < 0 || tx >= SCENE_COLS || ty >= SCENE_ROWS) continue;
+          // 已经是墙的格子本来就有挡板，跳过（避免重复 body）
+          if ((map[ty] || '')[tx] !== '.') continue;
+          const b = this.obstacles.create(tx * 64 + 32, ty * 64 + 32, undefined);
+          b.setVisible(false);
+          b.body.setSize(64, 64);
+          this.extraBodies.push(b);
+          n++;
+        }
+      }
+    });
+    return n;
+  }
+
+  /** 某个格子现在是不是被附加挡板封着（给外部做可达性判断用） */
+  isBlockedAt(sceneId, tx, ty) {
+    const bl = this.blockedByScene.get(sceneId) || [];
+    return bl.some(([x0, y0, x1, y1]) =>
+      tx >= x0 && tx <= x1 && ty >= y0 && ty <= y1);
   }
 
   /** 当前场景的碰撞组（给玩家加碰撞用） */

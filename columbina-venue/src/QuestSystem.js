@@ -197,6 +197,24 @@ export default class QuestSystem {
 
   // ---- 进度计算 ------------------------------------------------------------
 
+  /**
+   * 所有委托是不是都完成了（判「该不该开庆功宴」用）
+   *
+   * ★ 为什么单独一个方法、不走 snapshot()：
+   *   snapshot() 反过来要问「庆功宴开没开」来决定要不要列出「切蛋糕」那条任务，
+   *   而这里又是 snapshot 的依据 —— 走 snapshot 会绕成死递归。
+   *   celebration.isPartyTime() 优先调用本方法。
+   *
+   * ★ 为什么要排除 afterParty：
+   *   「切蛋糕」是庆功宴开了之后才出现的任务。把它算进来，
+   *   它就永远停在 active，围桌永远开不起来。
+   */
+  allDone() {
+    const list = QUESTS.filter((q) => !q.afterParty);
+    if (!list.length) return false;
+    return list.every((q) => this.getState(q) === 'completed');
+  }
+
   getProgress(quest) {
     const st = this.getState(quest);
     if (st === 'completed' || st === 'ready') return 1;
@@ -204,22 +222,18 @@ export default class QuestSystem {
     const t = quest.target;
 
     // ---- 主线：进度存在 StorySystem 里 --------------------------------
-    //   邀请函收了几封 / 投没投递，都不是本系统的计数器能回答的。
+    //   邀请函写了几封 / 投没投递，都不是本系统的计数器能回答的。
     //
-    // ★ 「writeLetters」类型的进度 = 已收起的信 / 总数（不是"已写好的"）
+    // ★ 「writeLetters」类型的进度 = 已写好的信 / 总数
     //
-    //   流程改版后（去掉写信环节），开局 5 封信就已经是"写好"状态了。
-    //   如果还按 writtenCount 算，任务一进游戏就是 5/5 = 100%，
-    //   会被 syncStoryQuests() 立刻判定为完成 —— 玩家还没走到桌边，
-    //   任务就自己完成了。
-    //
-    //   现在这一步的实际动作是「把桌上写好的信收起来」，
-    //   所以进度应该看【收起来多少】：carriedCount。
-    //   （桌上的还在 onDesk，收进身上才进 carried）
+    //   2026-10-04 写信环节回来了（书桌前按 E → 信纸逐行展开 → 收归信封），
+    //   任务目标就是「把 11 封 invitation 写完」，所以这里必须看 writtenCount。
+    //   （2026-09-28 ~ 2026-10-04 之间那版去掉写信环节的流程看的是 carriedCount，
+    //     现在改回来了；改错会让任务开局就 100% 自己完成。）
     if (t.type === 'writeLetters') {
       if (!this.story) return 0;
-      const need = t.count || this.story.totalCount || 5;
-      return Math.min(1, this.story.carriedCount / need);
+      const need = t.count || this.story.totalCount || 11;
+      return Math.min(1, this.story.writtenCount / need);
     }
     if (t.type === 'deliverLetters') {
       if (!this.story) return 0;
@@ -242,8 +256,11 @@ export default class QuestSystem {
   getCounts(quest) {
     const t = quest.target || {};
     if (t.type === 'writeLetters') {
-      // 和 getProgress 保持一致：看「已收起」的数量
-      return { got: this.story ? this.story.carriedCount : 0, need: t.count || 5 };
+      // 和 getProgress 保持一致：看「已写好」的数量
+      return {
+        got: this.story ? this.story.writtenCount : 0,
+        need: t.count || (this.story ? this.story.totalCount : 11),
+      };
     }
     if (t.type === 'deliverLetters') {
       return { got: this.story && this.story.isDelivered ? 1 : 0, need: t.count || 1 };
@@ -321,22 +338,45 @@ export default class QuestSystem {
   // ---- UI 快照 -------------------------------------------------------------
 
   snapshot() {
-    return QUESTS.map((q) => {
-      const c = this.getCounts(q);
-      return {
-        id: q.id,
-        title: q.title,
-        desc: q.desc,
-        reward: q.reward,
-        giverNpcId: q.giverNpcId,
-        deliverNpcId: q.deliverNpcId || q.giverNpcId,
-        target: q.target,
-        state: this.getState(q),
-        progress: this.getProgress(q),
-        counter: c.got,
-        need: c.need,
-      };
-    });
+    // ★ afterParty 的任务（「切蛋糕」）在庆功宴开起来之前【不出现在列表里】
+    //   用户原话：「围坐吃蛋糕场景出现后，任务列表刷新新任务：切蛋糕」
+    const partyOn = this.allDone();
+
+    return QUESTS
+      .filter((q) => !q.afterParty || partyOn)
+      .map((q) => {
+        const c = this.getCounts(q);
+        return {
+          id: q.id,
+          title: q.title,
+          desc: q.desc,
+          reward: q.reward,
+          giverNpcId: q.giverNpcId,
+          deliverNpcId: q.deliverNpcId || q.giverNpcId,
+          target: q.target,
+          state: this.getState(q),
+          progress: this.getProgress(q),
+          counter: c.got,
+          need: c.need,
+          afterParty: !!q.afterParty,
+        };
+      });
+  }
+
+  /**
+   * 直接把某条任务置为「已完成」（跳过 ready → completed 两步）
+   *
+   * 用途：切蛋糕这种没有「交付 NPC」的收尾任务 —— 玩家在主位按一下 E，
+   * 它就该直接完成，而不是先变 ready 再去问谁要交付。
+   */
+  completeById(questId) {
+    const q = QUESTS.find((x) => x.id === questId);
+    if (!q) return false;
+    if (this.getState(q) === 'completed') return false;
+    this.data.states[q.id] = 'completed';
+    this.save();
+    if (this.onChange) this.onChange(this, q, 'delivered');
+    return true;
   }
 
   /** 当前该去做的事（用于任务追踪指引） */

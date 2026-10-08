@@ -71,6 +71,8 @@ export default class DialogSystem {
     this.lines = lines;
     this.index = 0;
     this.onClose = onClose;
+    // 记住是谁在说话 —— 合影这类选项需要它（见 handleLink）
+    this.currentNpc = npc;
 
     const name = typeof npc === 'string' ? npc : (npc.name || 'NPC');
     const portrait = (typeof npc === 'object' && npc.portrait) || '💬';
@@ -179,6 +181,34 @@ export default class DialogSystem {
    */
   handleLink(link) {
     if (!link) return;
+
+    // ---- 合影（任务4 / 第八轮）----
+    //
+    // 为什么先 close 再派发：
+    //   对话面板是 DOM，全屏插画是 canvas 上 scrollFactor=0 的图层。
+    //   如果先铺插画，对话那层会盖在上面，玩家看不到图。
+    //
+    // ★ photo 有两种取值（m09394 加的围坐互动）：
+    //   · true / 'npc'  → 这位 NPC 和哥伦比娅的单张合影（拍立得）
+    //   · 'cake'        → 刚才那张「所有人围坐、哥伦比娅切蛋糕」的大合影
+    if (link.photo) {
+      const npc = this.currentNpc;
+      const cake = link.photo === 'cake';
+      this.close();
+      window.dispatchEvent(new CustomEvent('venue:photo', { detail: { npc, cake } }));
+      return;
+    }
+
+    // ---- 占位入口（小游戏 / 单品，后期接入）----
+    //
+    // 先把按钮位置和交互路径占住：点下去给一句明确反馈，
+    // 而不是静默什么都不发生（那样玩家会以为是 bug）。
+    if (link.soon) {
+      const label = link.label || '这个';
+      this.close();
+      window.dispatchEvent(new CustomEvent('venue:soon', { detail: { label } }));
+      return;
+    }
 
     // ---- 任务按钮（接取 / 交付）----
     if (link.action) {

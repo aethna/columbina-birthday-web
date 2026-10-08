@@ -6,7 +6,7 @@
  *   因为主会场是林地，没有现成的派对用品，所以任务都是「去别处收集」。
  *
  * 剧情顺序：
- *   主线：写 5 封邀请函 → 投信箱 → NPC 前来
+ *   主线：在书桌写 11 封邀请函 → 收起来 → 投信箱 → 13 位客人前来
  *     ↓
  *   委托：每个 NPC 一个任务，为主题筹备物资
  *
@@ -19,32 +19,33 @@
 
 export const QUESTS = [
   // =========================================================================
-  // 主线：收起邀请函 & 投递
+  // 主线：写邀请函 & 投递
   // 这两个任务不由 NPC 发放，而是推进剧情用的
   //
-  // ★ 流程改版（2026-09-28）：去掉了「写信」环节
-  //   旧：在书桌前写信 → 桌上累积 → 收起 → 投递
-  //   新：　　　　　　　　　　　　　　 收起 → 投递
-  //   开局 = 写信环节已经完成，5 封信直接摆在桌上。
-  //   所以第一个任务的文案改成「邀请函已经写好，去收起来准备寄出」的意思。
+  // ★ 流程改版（2026-10-04）：写信环节回来了，而且升级成一段过场
+  //   旧：　　　　　　　　　　　　　　 收起 → 投递
+  //   新：书桌前按 E 写一封（信纸逐行展开 → 收归信封）→ 桌上累积
+  //       → 收起 → 投递
+  //   正文来自《生日会邀请函.docx》，一共 11 封（见 StorySystem.js 的 GUESTS）。
   // =========================================================================
   {
     id: 'main-write',
     // title 里的 id 保持 main-write 不变 —— 存档、验收脚本都按这个 id 找任务，
     // 改 id 会让老存档和新脚本都对不上。只改给人看的文案。
-    title: '【主线】整理邀请函',
-    desc: '邀请函已经写好了，就摆在桌上 —— 把它们收起来，准备寄出去',
+    title: '【主线】写邀请函',
+    desc: '走到窗前的书桌，把邀请函一封一封写好',
     scene: 'home',
     // 特殊标记：不是 NPC 派发，而是场景交互推进
     special: 'write',
-    target: { type: 'writeLetters', count: 5 },
+    // count 要和 StorySystem.js 的 GUESTS.length 一致（11 封）
+    target: { type: 'writeLetters', count: 11 },
     reward: null,
     autoAccept: true,
   },
   {
     id: 'main-deliver',
     title: '【主线】投递邀请函',
-    desc: '把收好的邀请函投进林间信箱',
+    desc: '把写好的邀请函投进林间信箱',
     scene: 'mailbox',
     special: 'deliver',
     target: { type: 'deliverLetters', count: 1 },
@@ -70,7 +71,7 @@ export const QUESTS = [
     //   用户在图上用红框标了 10 个可放道具的格子，
     //   下面 5 个道具各占其中一个，互不重复。
     //   （红框=1 格；按 64px/格 最小二乘拟合，误差为 0）
-    propReward: { id: 'fish-basket', name: '鱼篓', tileX: 6, tileY: 9, h: 92 },
+    propReward: { id: 'fish-basket', name: '鱼篓', tileX: 5, tileY: 22, h: 92 },
     target: {
       // 改成采集类：由场景里的交互点触发（原来走到就算完成，没过程感）
       type: 'collect',
@@ -90,7 +91,7 @@ export const QUESTS = [
     giverNpcId: 'npc-nefer',
     deliverNpcId: 'npc-nefer',
     // 交付后会在会场出现的道具（和任务一一对应）
-    propReward: { id: 'water-bucket', name: '水桶', tileX: 10, tileY: 6, h: 86 },
+    propReward: { id: 'water-bucket', name: '水桶', tileX: 9, tileY: 22, h: 86 },
     // 接任务时先给一个空桶 —— 没有它到池塘也打不了水
     onAcceptGive: { id: 'bucket-empty', name: '空桶' },
     target: {
@@ -112,7 +113,7 @@ export const QUESTS = [
     giverNpcId: 'npc-philins',
     deliverNpcId: 'npc-philins',
     // 交付后会在会场出现的道具（和任务一一对应）
-    propReward: { id: 'flower-vase', name: '花瓶', tileX: 20, tileY: 5, h: 96 },
+    propReward: { id: 'flower-vase', name: '花瓶', tileX: 12, tileY: 22, h: 96 },
     target: {
       // 改成采集类：由场景里的交互点触发（原来走到就算完成，没过程感）
       type: 'collect',
@@ -132,7 +133,7 @@ export const QUESTS = [
     giverNpcId: 'npc-sandrone',
     deliverNpcId: 'npc-sandrone',
     // 交付后会在会场出现的道具（和任务一一对应）
-    propReward: { id: 'mushroom-lamp', name: '蘑菇灯', tileX: 25, tileY: 7, h: 90 },
+    propReward: { id: 'mushroom-lamp', name: '蘑菇灯', tileX: 28, tileY: 22, h: 90 },
     target: {
       // 改成采集类：由场景里的交互点触发（原来走到就算完成，没过程感）
       type: 'collect',
@@ -152,7 +153,7 @@ export const QUESTS = [
     giverNpcId: 'npc-lawuma',
     deliverNpcId: 'npc-lawuma',
     // 交付后会在会场出现的道具（和任务一一对应）
-    propReward: { id: 'firewood-pile', name: '柴堆', tileX: 26, tileY: 18, h: 74 },
+    propReward: { id: 'firewood-pile', name: '柴堆', tileX: 32, tileY: 22, h: 74 },
     target: {
       // 改成采集类：由场景里的交互点触发（原来走到就算完成，没过程感）
       type: 'collect',
@@ -161,6 +162,30 @@ export const QUESTS = [
       needLabel: '在秘境拾一捆干柴',
     },
     reward: '菈乌玛的故事 ×1',
+  },
+
+  // =========================================================================
+  // 结局：庆功宴上的「切蛋糕」
+  //
+  // ★ 这条任务【不是开局就有的】。它带 afterParty 标记：
+  //     · QuestSystem.snapshot() 在庆功宴开起来之前完全不把它列进任务列表；
+  //     · celebration.isPartyTime() 也把带这个标记的任务排除在
+  //       「是不是所有委托都完成了」的判定之外 ——
+  //       否则它自己会把那个条件顶掉，围桌永远开不起来。
+  //   围桌一开，任务列表里就自动多出这一条（用户原话：「任务列表刷新新任务：切蛋糕」）。
+  // =========================================================================
+  {
+    id: 'q-party-cake',
+    scene: 'venue',
+    title: '【结局】切蛋糕',
+    desc: '大家都到齐了。走到主位，为这场生日会切下第一块蛋糕',
+    afterParty: true,
+    // 出现即「进行中」—— 不需要找谁去接
+    autoAccept: true,
+    // 进度由交互点直接置满（见 QuestSystem.completeById），
+    // 这里写个占位目标只是让任务列表有进度条可画
+    target: { type: 'interact', count: 1 },
+    reward: null,
   },
 ];
 
@@ -193,24 +218,31 @@ export const QUESTS = [
 export const INTERACT_POINTS = [
   // ===== 书桌场景 =====
   //
-  // ★ 流程改版（2026-09-28）：去掉「写信」环节
+  // ★ 流程改版（2026-10-04 第二版）：写信 → 投递，中间不再有「收起来」
   //
-  //   旧流程：写信（书桌）→ 桌上累积 → 收起信件 → 邮箱投递
-  //   新流程：　　　　　　　　　　　 收起信件 → 邮箱投递
+  //   书桌只剩一件事：还没写完就按 E 写下一封（信纸逐行展开 → 收归信封的过场）。
+  //   信纸过场的收尾就是「折起来 → 收进信封 → 封口 → 飞走」，那一刻这封信
+  //   已经进了哥伦比娅怀里（StorySystem 直接记 carried），所以没有
+  //   「先堆在桌上、再回来按 E 收进怀里」这一步了。
   //
-  //   所以这里删掉了原来的 `ip-desk`（action: 'writeLetter'）。
-  //   开局 = 写信环节已经完成，5 封信直接摆在桌上等着收（见 StorySystem.createInitial）。
+  //   为什么删掉那一步：
+  //     它没有任何任务在指引（main-write 写满第 11 封就自动完成，主线立刻把玩家
+  //     指向「投递邀请函 → 前往信箱」），玩家走到信箱却发现 requires 不满足、
+  //     没提示也没反应，直接卡死（用户 2026-10-04 反馈的问题4）。
   //
-  // 桌上一叠写好的信：拿起来
+  //   label / hint / shape / requires 都可以写成 (story) => ... 的函数，
+  //   InteractPoints 会用当期剧情求值（见 InteractPoints.js 的 resolve()）。
   {
-    id: 'ip-letters',
+    id: 'ip-desk',
     scene: 'home',
     tileX: 15, tileY: 5,
-    shape: 'letter',
-    label: '桌上的邀请函',
-    hint: '按 E 收起来',
-    action: 'takeLetters',
-    requires: 'hasLettersOnDesk',
+    shape: 'pen',
+    label: '窗前的书桌',
+    hint: (s) => `按 E 写邀请函（${s.writtenCount}/${s.totalCount}）`,
+    action: 'writeOrTake',
+    // 11 封都写完了，这个点就【整个消失】（连幽灵图标都不留，见 InteractPoints.rebuild）
+    requires: (s) => !s.allWritten,
+    hideWhenUnavailable: true,
   },
 
   // ===== 信箱场景 =====
@@ -222,6 +254,7 @@ export const INTERACT_POINTS = [
     label: '林间信箱',
     hint: '按 E 投递邀请函',
     action: 'deliver',
+    // 11 封都写好、还没投出去 → 信箱可用（信在 carried 里，见 StorySystem.writeLetter）
     requires: 'allWrittenNotDelivered',
   },
 
@@ -302,5 +335,29 @@ export const INTERACT_POINTS = [
     action: 'collectItem',
     collectId: 'firewood',
     okText: '你捡了一捆干燥的枯枝，\n用草绳捆好。',
+  },
+
+  // ===== 主会场：庆功宴主位（切蛋糕） =====
+  //
+  // 位置就是哥伦比娅在围桌场景里站的那个「主位口袋」(19,9) ——
+  // 左边两位旅行者、右边桑多涅。庆典一开她人就在这个点上，
+  // 所以玩家站在那儿按 E 就能切。
+  {
+    id: 'ip-party-cake',
+    questId: 'q-party-cake',
+    scene: 'venue',
+    tileX: 19, tileY: 9,
+    shape: 'cake',
+    label: '切蛋糕',
+    hint: '按 E 切开生日蛋糕',
+    action: 'cake',
+    // 只有庆功宴开了才存在；没开的时候【连这个点都不建】
+    // （hideWhenUnavailable + requires，见 InteractPoints.rebuild）
+    requires: 'partyTime',
+    hideWhenUnavailable: true,
+    // ★ 这个点落在桌子前沿上：图标和文字都要抬到桌面之上，
+    //   否则会被大桌子（depth 450）盖住，玩家根本看不见。
+    iconDy: -34,
+    labelDy: -66,
   },
 ];

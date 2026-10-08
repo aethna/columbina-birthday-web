@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>前往会场 · 哥伦比娅的生日会</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --gold: #ffd97a;
+      --gold-deep: #c9a24a;
+      --muted: #93a8c4;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #04060c;
+      font-family: system-ui, "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ================= 舞台 ================= */
+    #stage {
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+      background: #04060c;
+    }
+
+    /* --------- 底层：虚化的星云，负责把黑色慢慢"点亮" --------- */
+    #sky {
+      position: absolute;
+      inset: -6%;
+      background: url("assets/enter-venue.png") center / cover no-repeat;
+      filter: blur(34px) saturate(1.35) brightness(.75);
+      transform: scale(1.18);
+      opacity: 0;
+      will-change: opacity, transform;
+    }
+    #sky.on {
+      animation: skyIn 2.6s cubic-bezier(.22, .61, .36, 1) forwards;
+    }
+    @keyframes skyIn {
+      from { opacity: 0;    transform: scale(1.18); }
+      to   { opacity: .85;  transform: scale(1.06); }
+    }
+
+    /* --------- 主视觉：星球从下方"升起"，靠 clip-path 圆形遮罩揭开 --------- */
+    #planet {
+      position: absolute;
+      inset: 0;
+      background: url("assets/enter-venue.png") center / cover no-repeat;
+      opacity: 0;
+      transform: translateY(20%) scale(1.16);
+      clip-path: circle(0% at 58% 46%);
+      will-change: opacity, transform, clip-path;
+    }
+    #planet.on {
+      animation: planetRise 3.2s cubic-bezier(.16, .84, .28, 1) forwards;
+    }
+    @keyframes planetRise {
+      0% {
+        opacity: 0;
+        transform: translateY(20%) scale(1.16);
+        clip-path: circle(0% at 58% 46%);
+      }
+      18% { opacity: 1; }
+      100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        clip-path: circle(125% at 58% 46%);
+      }
+    }
+
+    /* 缓慢的呼吸感（升起动画结束后接管） */
+    #planet.drift {
+      animation: planetDrift 14s ease-in-out infinite alternate;
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      clip-path: none;
+    }
+    @keyframes planetDrift {
+      from { transform: translateY(0) scale(1); }
+      to   { transform: translateY(-1.4%) scale(1.035); }
+    }
+
+    /* --------- 暗角，把注意力收到中间 --------- */
+    #vignette {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0;
+      background:
+        radial-gradient(ellipse 62% 58% at 58% 46%, transparent 0%, rgba(4, 6, 12, .35) 62%, rgba(4, 6, 12, .92) 100%),
+        linear-gradient(180deg, rgba(4, 6, 12, .55) 0%, transparent 22%, transparent 62%, rgba(4, 6, 12, .85) 100%);
+      transition: opacity 1.6s ease;
+    }
+    #vignette.on { opacity: 1; }
+
+    /* --------- 飘动的小星尘 --------- */
+    #dust { position: absolute; inset: 0; pointer-events: none; }
+    #dust i {
+      position: absolute;
+      width: 2px; height: 2px;
+      border-radius: 50%;
+      background: #fff;
+      opacity: 0;
+    }
+    #dust.on i { animation: dustFloat linear infinite; }
+    @keyframes dustFloat {
+      0%   { opacity: 0;  transform: translate3d(0, 14px, 0) scale(.6); }
+      22%  { opacity: .85; }
+      75%  { opacity: .55; }
+      100% { opacity: 0;  transform: translate3d(0, -48px, 0) scale(1.1); }
+    }
+
+    /* ================= 文字 ================= */
+    #caption {
+      position: absolute;
+      left: 0; right: 0; bottom: 16%;
+      text-align: center;
+      z-index: 5;
+      padding: 0 24px;
+    }
+
+    #eyebrow {
+      font-size: 12.5px;
+      letter-spacing: .52em;
+      text-indent: .52em;
+      color: var(--gold-deep);
+      margin-bottom: 18px;
+      opacity: 0;
+      transform: translateY(14px);
+    }
+    #title {
+      font-size: clamp(30px, 5.2vw, 58px);
+      font-weight: 800;
+      letter-spacing: .1em;
+      text-indent: .1em;
+      line-height: 1.25;
+      background: linear-gradient(180deg, #ffffff 6%, var(--gold) 54%, var(--gold-deep) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      filter: drop-shadow(0 0 34px rgba(255, 217, 122, .22));
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    #sub {
+      margin-top: 20px;
+      font-size: clamp(12.5px, 1.6vw, 15px);
+      letter-spacing: .34em;
+      text-indent: .34em;
+      color: var(--muted);
+      opacity: 0;
+      transform: translateY(14px);
+    }
+
+    #caption.on #eyebrow { animation: riseIn .9s  .00s cubic-bezier(.22,.61,.36,1) forwards; }
+    #caption.on #title   { animation: riseIn 1.1s .18s cubic-bezier(.22,.61,.36,1) forwards; }
+    #caption.on #sub     { animation: riseIn .9s  .52s cubic-bezier(.22,.61,.36,1) forwards; }
+    @keyframes riseIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ================= 进度条 ================= */
+    #bar-wrap {
+      position: absolute;
+      left: 50%; bottom: 10.5%;
+      transform: translateX(-50%);
+      width: min(320px, 56vw);
+      height: 2px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, .13);
+      overflow: hidden;
+      opacity: 0;
+      transition: opacity .8s ease .3s;
+      z-index: 5;
+    }
+    #bar-wrap.on { opacity: 1; }
+    #bar {
+      height: 100%;
+      width: 0%;
+      border-radius: 2px;
+      background: linear-gradient(90deg, var(--gold-deep), var(--gold));
+      box-shadow: 0 0 12px rgba(255, 217, 122, .5);
+      transition: width .35s linear;
+    }
+
+    /* ================= 跳过 ================= */
+    #skip {
+      position: absolute;
+      right: 26px; bottom: 24px;
+      z-index: 8;
+      padding: 9px 20px;
+      font-family: inherit;
+      font-size: 13px;
+      letter-spacing: .16em;
+      color: var(--muted);
+      background: rgba(8, 12, 20, .5);
+      border: 1px solid rgba(147, 168, 196, .3);
+      border-radius: 99px;
+      cursor: pointer;
+      -webkit-backdrop-filter: blur(6px);
+      backdrop-filter: blur(6px);
+      opacity: 0;
+      transition: opacity .6s ease, color .2s, border-color .2s, background .2s;
+    }
+    #skip.on { opacity: 1; }
+    #skip:hover {
+      color: var(--gold);
+      border-color: rgba(255, 217, 122, .55);
+      background: rgba(255, 217, 122, .1);
+    }
+
+    /* ================= 转场黑幕 ================= */
+    #fade {
+      position: absolute;
+      inset: 0;
+      background: #04060c;
+      opacity: 1;
+      pointer-events: none;
+      z-index: 20;
+      transition: opacity 1.1s ease;
+    }
+    #fade.out { opacity: 0; }
+    #fade.cover { opacity: 1; transition: opacity .75s ease; }
+
+    @media (max-width: 560px) {
+      #caption { bottom: 19%; }
+      #bar-wrap { bottom: 13%; }
+      #skip { right: 14px; bottom: 14px; }
+    }
+  </style>
+</head>
+<body>
+
+  <div id="stage">
+    <div id="sky"></div>
+    <div id="planet"></div>
+    <div id="vignette"></div>
+    <div id="dust"></div>
+
+    <div id="caption">
+      <div id="eyebrow">BIRTHDAY ONLINE EVENT</div>
+      <div id="title">哥伦比娅的生日会</div>
+      <div id="sub">正在前往会场…</div>
+    </div>
+
+    <div id="bar-wrap"><div id="bar"></div></div>
+    <button id="skip" type="button">跳过 &rarr;</button>
+
+    <div id="fade"></div>
+  </div>
+
+  <script>
+    // =====================================================================
+    // 进入会场页面
+    //   整张图先"点亮"（虚化星云淡入）→ 星球从下方升起并揭开圆形遮罩
+    //   → 文字浮现 → 底部进度条走完 → 黑幕淡出 → 切到会场
+    //   点一下 / 按任意键 / 点跳过 都能直接进会场
+    //
+    //   时间轴（毫秒）都放在下面这个 TIMELINE 里，改节奏只动这一处。
+    // =====================================================================
+
+    const TIMELINE = {
+      sky:      300,    // 星云开始淡入
+      planet:   700,    // 星球开始升起
+      driftAt:  3800,   // 升起动画结束，换成缓慢呼吸
+      caption:  1200,   // 文字开始浮现
+      bar:      2900,   // 进度条出现
+      barMs:    2600,   // 进度条走完需要多久
+      goAt:     5800,   // 开始黑幕转场
+      fadeMs:   950,    // 黑幕变黑需要多久（和 CSS transition 对齐）
+      total:    3400,   // 进度条+转场一起用的总时长（用于跳过时压缩）
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const sky    = $('sky');
+    const planet = $('planet');
+    const vign   = $('vignette');
+    const dust   = $('dust');
+    const cap    = $('caption');
+    const barW   = $('bar-wrap');
+    const bar    = $('bar');
+    const skip   = $('skip');
+    const fade   = $('fade');
+
+    const NEXT = 'venue.html';
+    let leaving = false;
+    let finished = false;
+
+    // ---- 星尘 ----
+    (function makeDust() {
+      let html = '';
+      for (let i = 0; i < 46; i++) {
+        const size = (Math.random() * 1.8 + 0.8).toFixed(1);
+        html += `<i style="
+          left:${(Math.random() * 100).toFixed(2)}%;
+          top:${(Math.random() * 100).toFixed(2)}%;
+          width:${size}px;height:${size}px;
+          animation-duration:${(Math.random() * 6 + 6).toFixed(1)}s;
+          animation-delay:${(Math.random() * 6).toFixed(1)}s;
+        "></i>`;
+      }
+      dust.innerHTML = html;
+    })();
+
+    // ---- 进度条（自己用 rAF 推，方便跳过时立刻收尾） ----
+    let barStart = 0;
+    let barRun = false;
+    function tickBar(now) {
+      if (!barRun) return;
+      const p = Math.min(1, (now - barStart) / TIMELINE.barMs);
+      bar.style.width = (p * 100).toFixed(1) + '%';
+      if (p < 1) requestAnimationFrame(tickBar);
+    }
+    function startBar() {
+      barStart = performance.now();
+      barRun = true;
+      bar.style.width = '0%';
+      requestAnimationFrame(tickBar);
+    }
+    function finishBar() {
+      barRun = false;
+      bar.style.width = '100%';
+    }
+
+    // ---- 主时间轴 ----
+    function play() {
+      const t = (fn, ms) => setTimeout(fn, ms);
+
+      t(() => { sky.classList.add('on'); dust.classList.add('on'); }, TIMELINE.sky);
+      t(() => {
+        planet.classList.add('on');
+        vign.classList.add('on');
+      }, TIMELINE.planet);
+      t(() => {
+        planet.classList.remove('on');
+        planet.classList.add('drift');
+      }, TIMELINE.driftAt);
+      t(() => cap.classList.add('on'), TIMELINE.caption);
+      t(() => { barW.classList.add('on'); startBar(); }, TIMELINE.bar);
+      t(() => skip.classList.add('on'), TIMELINE.bar + 200);
+      t(() => { if (!leaving) finishBar(); }, TIMELINE.goAt - 400);
+      t(() => go(), TIMELINE.goAt);
+
+      // 图片本身没加载完也别卡着：黑幕先淡出，动画照跑
+    }
+
+    // ---- 转场到会场 ----
+    function go() {
+      if (leaving) return;
+      leaving = true;
+      if (!planet.classList.contains('drift')) {
+        planet.classList.remove('on');
+        planet.classList.add('drift');
+      }
+      finishBar();
+      fade.classList.remove('out');
+      fade.classList.add('cover');
+      setTimeout(() => {
+        finished = true;
+        location.replace(NEXT);
+      }, TIMELINE.fadeMs);
+    }
+
+    // ---- 跳过 ----
+    function skipNow(e) {
+      if (e) { e.stopPropagation(); e.preventDefault(); }
+      if (leaving) return;
+      finishBar();
+      go();
+    }
+    skip.addEventListener('click', skipNow);
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' || e.key === ' ' || e.key === 'Enter') skipNow();
+      else skipNow();
+    });
+    $('stage').addEventListener('click', skipNow);
+
+    // ---- 图片预加载完再开演，避免黑屏里空跑动画 ----
+    const art = new Image();
+    art.onload = () => {
+      fade.classList.add('out');   // 黑幕淡出，画面开始
+      play();
+    };
+    art.onerror = () => {
+      // 图片挂了就直接进场，不把用户困在这一页
+      location.replace(NEXT);
+    };
+    art.src = 'assets/enter-venue.png';
+
+    // 兜底：1.6s 内没 load 也照常开演（慢网也不至于黑屏干等）
+    setTimeout(() => {
+      if (!leaving && !fade.classList.contains('out')) {
+        fade.classList.add('out');
+        play();
+      }
+    }, 1600);
+
+    // 页面被 bfcache 恢复时不留下黑幕
+    window.addEventListener('pageshow', (e) => {
+      if (e.persisted && !finished) {
+        leaving = false;
+        fade.classList.remove('cover');
+        fade.classList.add('out');
+      }
+    });
+  </script>
+</body>
+</html>

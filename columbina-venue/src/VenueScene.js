@@ -27,19 +27,72 @@ import Phaser from 'phaser';
 import { TILE_SIZE, NPCS, PLAYER, INTERACT } from './config.js';
 import { QUESTS, INTERACT_POINTS } from './quests.js';
 import { SCENES, SCENE_COLS, SCENE_ROWS, SCENE_W, SCENE_H } from './scenes.js';
-import { preloadCharacters, setupCharacters, createCharSprite, CHARACTER_FRAME } from './characters.js';
+import { preloadCharacters, setupCharacters, createCharSprite, CHARACTER_FRAME, DIR_ROW } from './characters.js';
 import DialogSystem from './DialogSystem.js';
+import LetterSystem from './LetterSystem.js';
 import QuestSystem from './QuestSystem.js';
 import SceneManager from './SceneManager.js';
 import Minimap from './Minimap.js';
 import StorySystem from './StorySystem.js';
 import InteractPointSystem from './InteractPoints.js';
+import {
+  PARTY_TABLE, PARTY_SEATS, PARTY_HERO, PARTY_SHADOW_DEPTH, PARTY_BLOCKS, isPartyTime,
+} from './celebration.js';
+import { CAKE_ART } from './cutscene.js';
+import { partyTalkOf, PHOTO_PROMPT, OFFER_PROMPT } from './party-talk.js';
+
+/**
+ * 全屏插画（切蛋糕 / 合影）的绘制层级
+ *
+ * 必须压过现有的一切：
+ *   9000   交互点原来那一层 + 顶部提示条
+ *   9500   小地图
+ *   10000  小游戏
+ * 12000 放最上面，保证插画期间屏幕上只剩它和「点击收起」那一行字。
+ */
+const D_OVERLAY = 12000;
+
+/**
+ * 由移动向量取朝向名（8 方向）
+ *
+ *   两轴都非零 → 斜向（右下 / 左下 / 右上 / 左上）
+ *   只有一个轴 → 上下左右
+ *
+ * 名字必须连写（downright），不能写成 down-right：
+ * safePlay() 用 `suffix.split('-')[1]` 取方向名，横线会被截断。
+ *
+ * 注意：要在 vx/vy 归一化【之前】调用 —— 归一化会把 ±1 变成 ±0.707，
+ * 但符号不变，所以其实取符号就够，这里只是顺手放在前面更直观。
+ *
+ * @returns {string|null} 两轴都为 0 时返回 null
+ */
+export function dirNameFrom(vx, vy) {
+  const sx = Math.sign(vx);
+  const sy = Math.sign(vy);
+  if (sx && sy) {
+    if (sy > 0) return sx > 0 ? 'downright' : 'downleft';
+    return sx > 0 ? 'upright' : 'upleft';
+  }
+  if (sx) return sx > 0 ? 'right' : 'left';
+  if (sy) return sy > 0 ? 'down' : 'up';
+  return null;
+}
 
 export default class VenueScene extends Phaser.Scene {
   constructor() {
     super({ key: 'VenueScene' });
     this.npcs = [];
     this.activeNpc = null;
+    // 庆功宴（所有委托完成后的围桌形态）是否已开启
+    this.party = false;
+    this.partyObjs = [];
+    // 围坐 NPC 的互动对象（大合影完成前是空的可互动集合，见 spawnParty / enablePartyTalk）
+    this.seatedNpcs = [];
+    this.activeSeat = null;
+    // 围坐 NPC 现在能不能搭话：切完蛋糕（大合影看过）才放开
+    this.partyTalk = false;
+    // 全屏插画（切蛋糕 / 合影）的临时对象；非 null 就表示正在展示
+    this.overlay = null;
   }
 
   // ---------------------------------------------------------------------------
@@ -53,6 +106,34 @@ export default class VenueScene extends Phaser.Scene {
     //   在 spawnProps 里临时加载来不及解码就要用，
     //   textures.exists() 会返回 false，道具就静默地不出现。
     this.loadPropTextures();
+
+    // 庆功宴贴图（大桌子 + 14 张坐姿）
+    //
+    // 和道具一样必须在这里排队加载：spawnParty() 在切场景时才跑，
+    // 那时临时 load 来不及解码。用资源路径当 texture key，简单且不会撞名。
+    this.load.image(PARTY_TABLE.tex, PARTY_TABLE.tex);
+    PARTY_SEATS.forEach((s) => {
+      if (!this.textures.exists(s.tex)) this.load.image(s.tex, s.tex);
+    });
+
+    // 切蛋糕的全屏插画（所有人围坐 + 哥伦比娅切蛋糕）
+    //   同样必须提前排队：玩家在主位按 E 那一刻再 load 是来不及解码的。
+    if (!this.textures.exists(CAKE_ART.tex)) {
+      this.load.image(CAKE_ART.tex, CAKE_ART.tex);
+    }
+    // 合影成图（哥伦比娅 + 这位客人 + 他所在场景的背景，tools/gen-photo.py 离线拼的）
+    //
+    // ★ 只给受邀客人排队。空（npc-aether）没有合影素材，
+    //   给他排队只会让 loader 报 loaderror（图不存在）。
+    //
+    // ★ 注意：合影【背景】图（assets/cutscene/bg-*.png）不在游戏里加载 ——
+    //   它只是 tools/gen-photo.py 的拼图素材，拼好的成图已经把背景吃进去了。
+    //   在运行时多排队 8 张 1536×1024 纯属浪费带宽和显存。
+    NPCS.forEach((n) => {
+      if (!n.guest) return;
+      const tex = `assets/cutscene/photo-${n.id}.png`;
+      if (!this.textures.exists(tex)) this.load.image(tex, tex);
+    });
 
     preloadCharacters(this, [
       {
@@ -94,7 +175,7 @@ export default class VenueScene extends Phaser.Scene {
 
     // ---- 玩家 ----
     this.player = this.physics.add.sprite(0, 0, this.playerInfo.key);
-    this.player.setDepth(500);
+    this.player.setDepth(this.isBehindPartyTable() ? PARTY_HERO.depth : 500);
     this.player.setCollideWorldBounds(true);
     this.playerDir = 'down';
 
@@ -155,7 +236,7 @@ export default class VenueScene extends Phaser.Scene {
       Math.max(36, heroH * 0.30), Math.max(12, heroH * 0.10),
       0x000000, 0.30
     );
-    this.playerShadow.setDepth(499);
+    this.playerShadow.setDepth(this.isBehindPartyTable() ? PARTY_SHADOW_DEPTH : 499);
 
     // ---- 输入 ----
     this.cursors = this.input.keyboard.createCursorKeys();
@@ -173,6 +254,8 @@ export default class VenueScene extends Phaser.Scene {
 
     // ---- 系统 ----
     this.dialog = new DialogSystem();
+    // 信纸过场（写邀请函）：书桌前按 E → 信纸逐行展开 → 收归信封
+    this.letter = new LetterSystem();
     // ★ 把 story 传进去：主线进度存在 StorySystem 里（邀请函写了几封 / 投没投递），
     //   QuestSystem 必须能问到它，否则主线永远显示「进行中 0%」。
     this.quests = new QuestSystem((qs, quest, kind) => {
@@ -200,6 +283,12 @@ export default class VenueScene extends Phaser.Scene {
             this.spawnProps('venue');
           }
         });
+      }
+
+      // ★ 委托状态一变就判一次「是不是全做完了」——
+      //   这样用户以后往 QUESTS 里加新委托，庆功宴自动跟着新清单走。
+      if (kind === 'delivered' || kind === 'completed' || kind === 'ready') {
+        this.time.delayedCall(400, () => this.maybeStartParty());
       }
     }, this.story);
 
@@ -237,6 +326,9 @@ export default class VenueScene extends Phaser.Scene {
     //   但 QuestSystem 的状态是另存的。不同步的话，
     //   刷新页面后主线又会显示成「进行中 0%」。
     this.quests.syncStoryQuests();
+
+    // ★ 存档里委托可能早就全做完了 —— 那进游戏就该直接是围桌形态
+    this.maybeStartParty();
 
     this.refreshQuestUI();
     this.showSceneIntro();
@@ -411,6 +503,15 @@ export default class VenueScene extends Phaser.Scene {
     this.spawnNpcsForCurrentScene();
     this.refreshQuestUI();
 
+    // ★ 书桌那一个交互点要跟着剧情走
+    //   （v5 起它只有「写」一种状态，11 封写完后 requires 不成立、点直接消失；
+    //     这里 rebuild 是为了让"刚写满最后一封"时它立刻消失，而不是等切场景）
+    if (kind === 'write' || kind === 'take' || kind === 'reset') {
+      if (this.scenes && this.scenes.current) {
+        this.interactPoints.rebuild(this.scenes.current.id);
+      }
+    }
+
     if (kind === 'deliver') {
       this.toast('邀请函已寄出，朋友们正在赶来…');
       // 稍等一会儿再刷新 NPC，让玩家看到"来了"
@@ -422,10 +523,385 @@ export default class VenueScene extends Phaser.Scene {
   }
 
   // ---------------------------------------------------------------------------
+  // 站姿 NPC 的「模型占格」禁行区
+  //
+  // 需求（2026-10-08 第七轮）：
+  //   - 站姿 NPC 分散到各个场景，站在【可走格】上（不再站禁行格）；
+  //   - 但放下去之后，NPC 模型【长宽所占的所有格子】都要变成主角禁行区 ——
+  //     不只是落点那一格。否则哥伦比娅会走到 NPC 身上，看起来像踩在他头上。
+  //
+  // 为什么必须整块封：
+  //   主角的 depth 是 500 + y*0.001，NPC 是 300 + y*0.001 ——
+  //   主角【永远】画在 NPC 之上，所以只要两个人的模型在屏幕上重叠，
+  //   就是「哥伦比娅踩在 NPC 头上」。封掉模型占的每一格才是根因修复。
+  //
+  // 立绘锚点是 origin=(0.5, 0.85)（见 characters.js），所以：
+  //   头顶 = y - 0.85h    脚底 = y + 0.15h    左右 = x ± 宽/2
+  // ---------------------------------------------------------------------------
+
+  /** 算出某个 NPC 模型在世界坐标里的包围盒 */
+  npcModelRect(def, info) {
+    const x = def.tileX * TILE_SIZE + TILE_SIZE / 2;
+    const y = def.tileY * TILE_SIZE + TILE_SIZE / 2;
+    const h = def.displayHeight || 160;
+
+    let aspect = 0.55;
+    const src = this.textures.get(info.key).getSourceImage?.();
+    if (src && src.height) aspect = src.width / src.height;
+
+    const w = h * aspect;
+    return {
+      x, y, w, h,
+      left: x - w / 2,
+      right: x + w / 2,
+      top: y - 0.85 * h,
+      bottom: y + 0.15 * h,
+    };
+  }
+
+  /** 世界包围盒 -> 格子包围盒 [x0,y0,x1,y1]（含头含尾） */
+  tileRectOf(mr) {
+    return [
+      Math.floor(mr.left / TILE_SIZE + 1e-6),
+      Math.floor(mr.top / TILE_SIZE + 1e-6),
+      Math.floor((mr.right - 1e-6) / TILE_SIZE),
+      Math.floor((mr.bottom - 1e-6) / TILE_SIZE),
+    ];
+  }
+
+  /**
+   * 把所有场景里站姿 NPC 的模型占格登记成禁行区
+   *
+   * 每次「客人到没到 / 庆功宴开没开」变化后都要重算一遍：
+   *   · 还没收到邀请函的客人不出现 -> 也不该封格
+   *   · 庆功宴期间会场里的站姿全部撤走 -> 那一片改由 PARTY_BLOCKS 负责
+   */
+  refreshNpcBlocks() {
+    if (!this.scenes || !this.charInfo) return;
+
+    const byScene = new Map();
+    NPCS.forEach((def) => {
+      const sceneId = def.scene || 'venue';
+      const info = this.charInfo[def.id];
+      if (!info) return;
+
+      // 需要受邀的客人，还没到就没有模型
+      if (def.guest && !this.story.isGuestArrived(def.id)) return;
+      // 庆功宴：会场的站姿全部换成围坐
+      if (this.party && sceneId === 'venue') return;
+
+      const r = this.tileRectOf(this.npcModelRect(def, info));
+      if (!byScene.has(sceneId)) byScene.set(sceneId, []);
+      byScene.get(sceneId).push(r);
+    });
+
+    // 每个场景都登记一遍（没有的传空数组 = 清掉旧登记）
+    SCENES.forEach((s) => {
+      const blocks = byScene.get(s.id) || [];
+      this.scenes.setBlockSource(`npc:${s.id}`, s.id, blocks);
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // 庆功宴：所有委托完成 → 所有人消失，围坐到带生日蛋糕的大桌子旁
+  //
+  // 需求（2026-10-07）：
+  //   - 触发条件是「所有委托都完成」，而且要【动态】判定 ——
+  //     用户还会继续往里加委托，加完不用回来改代码；
+  //   - 触发后林间空地：NPC 全部消失、改摆坐姿围桌、桌子出现；
+  //   - 哥伦比娅不坐下，站在主位（左边两位旅行者、右边桑多涅）；
+  //   - ★ 桌子与每个坐姿模型【实际压住的所有格子】都要变禁行区，
+  //     不只是落点格 —— 否则哥伦比娅会走到 NPC 的模型上面去。
+  // ---------------------------------------------------------------------------
+
+  /** 判定是否该开庆功宴；返回 true 表示「刚刚开启」 */
+  maybeStartParty() {
+    if (this.party) return false;
+    if (!this.quests || !isPartyTime(this.quests)) return false;
+
+    this.party = true;
+    console.log('[庆功宴] 所有委托已完成，切到围桌庆祝形态');
+
+    // ★ 禁行格交给 SceneManager 统一管理：它会跟着场景加载一起重建，
+    //   所以在别的场景里切过去也照样生效。
+    if (this.scenes) this.scenes.setExtraBlocks('venue', PARTY_BLOCKS);
+
+    // 会场里的站姿全部撤走 -> 它们的模型占格也要一起撤掉（哪怕当前不在会场，
+    // 因为玩家随时可能走回来，禁行区必须按最新状态登记好）
+    this.refreshNpcBlocks();
+
+    if (this.scenes && this.scenes.current && this.scenes.current.id === 'venue') {
+      // 主角挪到主位（那里是专门留出来的站立空档）
+      this.placeHeroAtPartySpot();
+      this.spawnNpcsForCurrentScene();
+      // ★ 切蛋糕那个交互点带 requires:'partyTime' + hideWhenUnavailable，
+      //   宴会没开的时候根本不会建。这里必须重建一次 ——
+      //   否则玩家恰好在会场里完成最后一个委托时，人已经站到主位了，
+      //   但地上没有光圈、按 E 也没反应，得退出会场再进来才出现。
+      this.interactPoints.rebuild(this.scenes.current.id);
+      // ★ 相机取景：围桌这一坨（桌子+坐姿）在世界 y 384~1024，中心约 y=704；
+      //   而主位在 y≈608。相机若以主角为正中（视野高 1029），可见范围是 94~1123，
+      //   桌子下方（近排脚底 1002）就贴到屏幕底边了。
+      //   setFollowOffset(0,-96) 让视野中心落到 y=704 → 可见 190~1219，整桌人都在画面里。
+      this.camPartyOffset = -96;
+      this.cameras.main.setFollowOffset(0, this.camPartyOffset);
+      this.cameras.main.flash(420, 255, 236, 170);
+      this.toast('所有委托都完成了 —— 大家围到了蛋糕旁');
+    }
+    return true;
+  }
+
+  /**
+   * 庆功宴取景：围桌时把相机跟随点往上抬，让整桌人都进画面。
+   *
+   * 具体数值见 maybeStartParty() 里的说明（-96 是照桌子包围盒算出来的，不是拍的）。
+   */
+  applyPartyCamera(on) {
+    if (!this.cameras || !this.cameras.main) return;
+    const want = on ? -96 : 0;
+    if (this.camPartyOffset === want) return;
+    this.camPartyOffset = want;
+    this.cameras.main.setFollowOffset(0, want);
+  }
+
+  /** 把哥伦比娅放到主位（并确保不在新的禁行格里） */
+  placeHeroAtPartySpot() {
+    if (!this.player) return;
+    const tx = Math.floor(PARTY_HERO.x / TILE_SIZE);
+    const ty = Math.floor(PARTY_HERO.y / TILE_SIZE);
+    const safe = this.scenes.sanitizeArrive({ tileX: tx, tileY: ty }, this.scenes.current);
+    this.player.setPosition(
+      safe.tileX * TILE_SIZE + TILE_SIZE / 2,
+      safe.tileY * TILE_SIZE + TILE_SIZE / 2
+    );
+    this.player.setVelocity(0, 0);
+  }
+
+  // ---------------------------------------------------------------------------
+  // 全屏插画：切蛋糕 / 合影
+  //
+  // 需求：
+  //   任务2「互动后，全屏显示这个图。点击鼠标收起。」
+  //   任务4「合影直接用哥伦比娅立绘 + NPC 立绘 + 背景拼接即可」
+  //
+  // 实现要点：
+  //   · 用一个 this.overlay 数组管住所有临时对象，收起时一次性销毁；
+  //   · update() 见到 this.overlay 就把玩家冻住
+  //     （不然玩家能一边看图一边把哥伦比娅走出去，回来时人在别处）；
+  //   · 相机 zoom 不是 1（applyCameraFit 按窗口算出来的），
+  //     而 setScrollFactor(0) 的对象照样会被 zoom 缩放，
+  //     所以尺寸要【除以 zoom】才是屏幕上的像素数。
+  // ---------------------------------------------------------------------------
+
+  /**
+   * 铺一张全屏插画，点击任意处收起
+   *
+   * @param {string} tex 贴图 key（就是资源路径）
+   * @param {string} tip 底部那行提示
+   * @returns {boolean} 是否铺上了（贴图没加载好会返回 false）
+   */
+  showOverlay(tex, tip = '点击任意处收起') {
+    if (this.overlay) return false;
+    if (!this.textures.exists(tex)) {
+      console.warn('[插画] 贴图不存在：', tex);
+      return false;
+    }
+
+    const cam = this.cameras.main;
+    const z = cam.zoom || 1;
+    const vw = cam.width / z;    // 相机空间里能看到的宽（= 屏幕像素 / zoom）
+    const vh = cam.height / z;
+    const cx = cam.width / 2;
+    const cy = cam.height / 2;
+
+    const veil = this.add.rectangle(cx, cy, vw, vh, 0x000000, 0.78)
+      .setScrollFactor(0).setDepth(D_OVERLAY);
+
+    const img = this.add.image(cx, cy, tex)
+      .setScrollFactor(0).setDepth(D_OVERLAY + 1);
+    // 等比缩放到画面内（留一圈边，免得顶到屏幕边）
+    const s = Math.min((vw * 0.94) / img.width, (vh * 0.86) / img.height);
+    img.setScale(s);
+
+    const tipObj = this.add.text(cx, cy + vh * 0.43, tip, {
+      fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
+      fontSize: '26px',
+      color: '#ffe9b8',
+      backgroundColor: '#000000cc',
+      padding: { x: 14, y: 8 },
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(D_OVERLAY + 2);
+
+    this.overlay = [veil, img, tipObj];
+
+    // 点一下收起。用 once —— 收起后这里会重新挂一次，不会越积越多。
+    this.input.once('pointerdown', () => this.closeOverlay());
+    return true;
+  }
+
+  /** 收起全屏插画 */
+  closeOverlay() {
+    if (!this.overlay) return;
+    this.overlay.forEach((o) => o.destroy());
+    this.overlay = null;
+  }
+
+  /**
+   * 铺「所有人围坐、哥伦比娅切蛋糕」那张大合影（只看图，不改任务状态）
+   *
+   * 拆出来的原因：切完蛋糕之后还会从围坐 NPC 的「查看合影」再调一次，
+   * 那时候任务早就是 completed 了，不该重复走完成逻辑。
+   */
+  showCakeArt() {
+    if (this.overlay) return false;
+    if (!this.showOverlay(CAKE_ART.tex, '点击任意处收起')) {
+      this.toast('插画还没准备好，稍后再试');
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 切蛋糕：全屏展示那张「所有人围坐、哥伦比娅切蛋糕」的插画
+   *
+   * 位置由交互点 ip-party-cake 决定（庆功宴主位，也就是哥伦比娅站的那格）。
+   *
+   * ★ 看完这张图 = 大合影拍完了 → 放开 14 位围坐 NPC 的搭话（用户 m09394）。
+   */
+  showCakeCutscene() {
+    if (!this.showCakeArt()) return;
+    // 看到图 = 切了蛋糕 -> 任务列表里那一条直接算完成
+    if (this.quests && this.quests.completeById) {
+      this.quests.completeById('q-party-cake');
+    }
+    this.enablePartyTalk();
+  }
+
+  /**
+   * 合影：展示「哥伦比娅 + 这位 NPC + 当前场景背景」拼好的那张图
+   *
+   * 拼图是在 offline 阶段做好放进 assets/cutscene/photo-<npcId>.png 的
+   * （见 tools/gen-photo.py），运行时只负责把它铺满屏幕 ——
+   * 这样不用在浏览器里现拼，省得每次都要重算缩放和站位。
+   */
+  showPhoto(npc) {
+    if (!npc) return;
+    const tex = `assets/cutscene/photo-${npc.id}.png`;
+    if (!this.showOverlay(tex, `与 ${npc.name} 的合影 —— 点击任意处收起`)) {
+      this.toast('合影还没准备好，稍后再试');
+      return;
+    }
+    this.toast(`咔嚓！和${npc.name}的合影拍好了`);
+  }
+
+  /** 清掉上一轮的庆祝贴图 */
+  clearParty() {
+    if (this.partyObjs) this.partyObjs.forEach((o) => o.destroy());
+    this.partyObjs = [];
+    // 围坐 NPC 的图标/名牌也在 partyObjs 里，一起没了；把逻辑侧一起清空
+    this.seatedNpcs = [];
+    this.activeSeat = null;
+    this.partyTalk = false;
+  }
+
+  /**
+   * 摆出庆祝态：大桌子 + 14 张坐姿 + 影子 + （切完蛋糕后）14 个可搭话的围坐 NPC
+   *
+   * ★ 围坐 NPC 的互动规则（用户 m09394）：
+   *   「坐姿 NPC 出现后、到大合影完成前是【不能】互动的；
+   *     大合影完成后，所有坐姿 NPC 此时可以互动。」
+   *   所以这里先把图标建出来但 setVisible(false)，
+   *   只有 partyTalk = true（= q-party-cake 已完成）时才亮起来、才参与接近检测。
+   */
+  spawnParty() {
+    const tbl = this.add.image(PARTY_TABLE.x, PARTY_TABLE.y, PARTY_TABLE.tex)
+      .setOrigin(0, 0)
+      .setDepth(PARTY_TABLE.depth);
+    tbl.setDisplaySize(PARTY_TABLE.w, PARTY_TABLE.h);
+    this.partyObjs.push(tbl);
+
+    PARTY_SEATS.forEach((s) => {
+      if (!this.textures.exists(s.tex)) return;
+      const src = this.textures.get(s.tex).getSourceImage();
+      const sh = this.add.ellipse(
+        s.x, s.y - 2,
+        Math.max(30, s.h * 0.30), Math.max(10, s.h * 0.10),
+        0x000000, 0.25
+      ).setDepth(s.depth - 1);
+
+      const im = this.add.image(s.x, s.y, s.tex)
+        .setOrigin(0.5, 1)
+        .setDepth(s.depth);
+      if (src && src.height) im.setScale(s.h / src.height);
+
+      this.partyObjs.push(sh, im);
+
+      // ---- 围坐 NPC 的可搭话外壳 ----
+      //
+      // 为什么图标深度用 9000：和站姿 NPC 的图标一致（见 spawnNpcsForCurrentScene）。
+      // 围坐贴图深度是 400/460，若图标也用 420 会被近排（460）盖住。
+      const def = NPCS.find((n) => n.id === s.id || n.id === `npc-${s.id}`);
+      if (!def) return;
+
+      const icon = this.add.text(s.x, s.y - s.h - 26, def.icon || '💬', {
+        fontSize: '24px',
+      }).setOrigin(0.5).setDepth(9000).setVisible(false);
+
+      const nameObj = this.add.text(s.x, s.y - s.h - 4, def.name, {
+        fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
+        fontSize: '13px',
+        color: '#dfe9f7',
+        backgroundColor: '#000000cc',
+        padding: { x: 6, y: 2 },
+      }).setOrigin(0.5).setDepth(9000).setVisible(false);
+
+      this.partyObjs.push(icon, nameObj);
+
+      // 模型包围盒：origin(0.5, 1) + setScale -> 上边 y-h、下边 y、左右各 w/2
+      const w = src && src.height ? src.width * (s.h / src.height) : s.h;
+      this.seatedNpcs.push({
+        ...def,
+        x: s.x, y: s.y, seat: s, seated: true,
+        icon, nameObj, iconText: def.icon || '💬', talked: false,
+        rect: { left: s.x - w / 2, right: s.x + w / 2, top: s.y - s.h, bottom: s.y },
+      });
+    });
+
+    // 进会场时如果蛋糕早切过了，直接放开互动（不然要重开一次才亮）
+    if (this.partyTalkReady()) this.enablePartyTalk();
+
+    console.log(`[庆功宴] 摆出桌子 + ${PARTY_SEATS.length} 张坐姿（可搭话 ${this.partyTalk ? this.seatedNpcs.length : 0} 位）`);
+  }
+
+  /** 大合影（= 切蛋糕）看过了没 */
+  partyTalkReady() {
+    if (!this.quests) return false;
+    if (typeof this.quests.getState !== 'function') return false;
+    const q = QUESTS.find((x) => x.id === 'q-party-cake');
+    if (!q) return false;
+    return this.quests.getState(q) === 'completed';
+  }
+
+  /**
+   * 放开围坐 NPC 的互动：亮起图标 + 名牌
+   *
+   * 幂等 —— 切蛋糕的那一刻会调一次，之后每次进会场由 spawnParty 兜一次。
+   */
+  enablePartyTalk() {
+    this.partyTalk = true;
+    this.seatedNpcs.forEach((n) => {
+      if (n.icon) n.icon.setVisible(true);
+      if (n.nameObj) n.nameObj.setVisible(true);
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // NPC
   // ---------------------------------------------------------------------------
   spawnNpcsForCurrentScene() {
     // 清掉旧的
+    this.clearParty();
+    // 一离开会场就恢复默认取景
+    this.applyPartyCamera(false);
     this.npcs.forEach((n) => {
       if (n.body) n.body.destroy();
       if (n.icon) n.icon.destroy();
@@ -435,7 +911,17 @@ export default class VenueScene extends Phaser.Scene {
     this.npcs = [];
     this.activeNpc = null;
 
+    // 站姿 NPC 的模型占格跟着「客人到没到」一起重算
+    this.refreshNpcBlocks();
+
     const sceneId = this.scenes.current ? this.scenes.current.id : SCENES[0].id;
+
+    // ★ 庆功宴形态：本场景的 NPC 一个都不站，全部换成围坐
+    if (this.party && sceneId === 'venue') {
+      this.spawnParty();
+      this.applyPartyCamera(true);
+      return;
+    }
 
     NPCS.filter((def) => {
       // 只出现在所属场景
@@ -454,7 +940,17 @@ export default class VenueScene extends Phaser.Scene {
         displayHeight: def.displayHeight || 160,
       });
       body.setDepth(300 + y * 0.001);
-      body.setInteractive({ useHandCursor: true });
+      // ★ 2026-10-05 按用户要求撤掉鼠标点 NPC 对话
+      //
+      //   原来这里是：
+      //     body.setInteractive({ useHandCursor: true });
+      //     ... 后面 body.on('pointerdown', () => this.startDialog(npc));
+      //
+      //   问题：鼠标点哪都能开对话，**不检查距离** ——
+      //   哥伦比娅站在地图另一头，点一下远处的 NPC 也能聊，
+      //   把「走到他身边」这个动作整个绕过去了。
+      //   现在只剩「走近 → 头顶冒 E 提示 → 按 E」这一条路。
+      //   （已核对：没有任何验收脚本靠点击 NPC，删掉不会破坏 _verify_*。）
 
       const isSprite = info.mode === 'sprite';
       const topOffset = isSprite ? -(def.displayHeight || 160) - 16 : -46;
@@ -481,8 +977,12 @@ export default class VenueScene extends Phaser.Scene {
       );
       shadow.setDepth(299);
 
-      const npc = { ...def, x, y, body, icon, nameObj: name, info, shadow, iconText: def.icon || '💬', talked: false };
-      body.on('pointerdown', () => this.startDialog(npc));
+      const npc = {
+        ...def, x, y, body, icon, nameObj: name, info, shadow,
+        iconText: def.icon || '💬', talked: false,
+        // 模型的世界包围盒（模型占格 = 这个盒子换算出来的格子，见 refreshNpcBlocks）
+        rect: this.npcModelRect(def, info),
+      };
       this.npcs.push(npc);
     });
   }
@@ -567,22 +1067,26 @@ export default class VenueScene extends Phaser.Scene {
     const here = this.scenes.current ? this.scenes.current.id : 'venue';
 
     // ---- 优先：主线剧情 ----
-    // ★ 流程改版（2026-09-28）：去掉了「写信」这一步。
-    //   开局 5 封信就已经写好摆在桌上，所以现在只有两步：
-    //     步骤1：桌上有信 → 去书桌旁收起
-    //     步骤2：信在身上但没投递 → 去信箱
-    //   （原来"步骤1：还没写完 → 去书桌写"整段已删除）
+    // ★ 流程（v5）：写信 → 投递，只有两步。
+    //   第 1 封在书桌写完的瞬间，那封信就已经"收进信封、揣进怀里"了
+    //   （见 StorySystem.writeLetter），所以中途不需要再回书桌"收起来"。
+    //     步骤1：还没写满 11 封 → 去书桌
+    //     步骤2：11 封都写好了、还没投递 → 去信箱
+    //   之前这里判的是 onDeskCount / carriedCount，是"信先堆桌上、再按 E 收"
+    //   那版流程的残留：onDesk 现在恒为 0（第 1 步成了死代码，而且引用的
+    //   ip-letters 早已不存在），carriedCount 又会在第 1 封就 > 0，会把玩家
+    //   在第 1 封之后就引去信箱 —— 和用户反馈的"投递卡死"是同一类误导。
 
-    // 步骤1：桌上有写好的信 → 去拿走
-    if (this.story.onDeskCount > 0) {
+    // 步骤1：还没写完 → 去书桌
+    if (!this.story.allWritten) {
       if (here === 'home') {
-        return this.pointPos('ip-letters');
+        return this.pointPos('ip-desk');
       }
       return this.exitPosTo('home');
     }
 
-    // 步骤2：信在身上但没投递 → 去信箱
-    if (this.story.carriedCount > 0 && !this.story.isDelivered) {
+    // 步骤2：11 封都写好了但没投递 → 去信箱
+    if (!this.story.isDelivered) {
       if (here === 'mailbox') {
         return this.pointPos('ip-mailbox');
       }
@@ -605,7 +1109,7 @@ export default class VenueScene extends Phaser.Scene {
         const npcDef = NPCS.find((n) => n.id === npcId);
         if (npcDef) {
           if ((npcDef.scene || 'venue') === here) {
-            return { x: npcDef.tileX * TILE_SIZE + 32, y: npcDef.tileY * TILE_SIZE + 32, crossScene: false };
+            return { x: npcDef.tileX * TILE_SIZE + 32, y: npcDef.tileY * TILE_SIZE + 32, crossScene: false, sceneId: npcDef.scene || 'venue' };
           }
           return this.exitPosTo(npcDef.scene || 'venue');
         }
@@ -615,16 +1119,39 @@ export default class VenueScene extends Phaser.Scene {
       if (t.type === 'visit') {
         const tScene = t.scene || active.scene || 'venue';
         if (tScene === here) {
-          return { x: t.tileX * TILE_SIZE + 32, y: t.tileY * TILE_SIZE + 32, crossScene: false };
+          return { x: t.tileX * TILE_SIZE + 32, y: t.tileY * TILE_SIZE + 32, crossScene: false, sceneId: here };
         }
         return this.exitPosTo(tScene);
+      }
+
+      // ★ 采集类委托（池塘捉鱼 / 打水 / 采花 / 采蘑菇 / 捡柴）
+      //
+      //   修理由于：目标地点写在**交互点**上，不在任务里 ——
+      //   5 条委托的 `q.scene` 都是 'venue'（那是发布任务的 NPC 所在场景），
+      //   真正要去的池塘 / 秘境在 pond / grove。
+      //   早先这里没有 collect 分支，于是会掉到最下面「去找委托官」那条，
+      //   点「前往」把已经接了任务的玩家又指回会场 —— 用户 2026-10-05 报的
+      //   「提示错地图」有一半来自这里。
+      if (t.type === 'collect') {
+        const ip = INTERACT_POINTS.find((x) => x.questId === active.id);
+        if (ip) {
+          if (ip.scene === here) {
+            return {
+              x: ip.tileX * TILE_SIZE + 32,
+              y: ip.tileY * TILE_SIZE + 32,
+              crossScene: false,
+              sceneId: here,
+            };
+          }
+          return this.exitPosTo(ip.scene);
+        }
       }
 
       if (t.type === 'talk' && t.npcId) {
         const npcDef = NPCS.find((n) => n.id === t.npcId);
         if (npcDef) {
           if ((npcDef.scene || 'venue') === here) {
-            return { x: npcDef.tileX * TILE_SIZE + 32, y: npcDef.tileY * TILE_SIZE + 32, crossScene: false };
+            return { x: npcDef.tileX * TILE_SIZE + 32, y: npcDef.tileY * TILE_SIZE + 32, crossScene: false, sceneId: npcDef.scene || 'venue' };
           }
           return this.exitPosTo(npcDef.scene || 'venue');
         }
@@ -641,7 +1168,7 @@ export default class VenueScene extends Phaser.Scene {
       const npcDef = NPCS.find((n) => n.id === available.giverNpcId);
       if (npcDef) {
         if ((npcDef.scene || 'venue') === here) {
-          return { x: npcDef.tileX * TILE_SIZE + 32, y: npcDef.tileY * TILE_SIZE + 32, crossScene: false };
+          return { x: npcDef.tileX * TILE_SIZE + 32, y: npcDef.tileY * TILE_SIZE + 32, crossScene: false, sceneId: npcDef.scene || 'venue' };
         }
         return this.exitPosTo(npcDef.scene || 'venue');
       }
@@ -654,21 +1181,82 @@ export default class VenueScene extends Phaser.Scene {
   pointPos(pointId) {
     const def = INTERACT_POINTS.find((p) => p.id === pointId);
     if (!def) return null;
-    return { x: def.tileX * TILE_SIZE + 32, y: def.tileY * TILE_SIZE + 32, crossScene: false };
+    return {
+      x: def.tileX * TILE_SIZE + 32,
+      y: def.tileY * TILE_SIZE + 32,
+      crossScene: false,
+      sceneId: def.scene,
+    };
   }
 
-  /** 找到通往目标场景的出口坐标 */
+  /**
+   * 从当前场景去 targetSceneId，第一步应该先走哪个相邻场景
+   *
+   * ★ 为什么需要 BFS（2026-10-05）：
+   *   场景从 5 个扩到 10 个、连成一个环之后，两个场景之间**往往不是直连的** ——
+   *   比如「静谧池塘 ⇄ 林间空地」中间隔着
+   *   青水浅滩 / 星船草甸 / 月面夜路 / 月面彩池 / 冰原遗迹 五个场景。
+   *   而 exitPosTo() 原来是 `exits.find(e => e.to === target)`，
+   *   找不到就直接返回 null，于是「前往」按钮在池塘里点会变成
+   *   「没有需要前往的地方」—— 任务指引等于失效。
+   *
+   *   现在用一趟 BFS 算出「下一跳」，指引玩家沿环走最短的一段。
+   * @returns {string|null} 相邻场景 id；目标就是邻居时返回目标本身；走不到返回 null
+   */
+  nextHopTo(targetSceneId) {
+    const here = this.scenes.current ? this.scenes.current.id : null;
+    if (!here || !targetSceneId || here === targetSceneId) return null;
+
+    // 邻接表直接从 SCENES 的 exits 现算，不额外维护一张表（免得和 scenes.js 脱节）
+    const adj = {};
+    SCENES.forEach((s) => {
+      adj[s.id] = (s.exits || []).map((e) => e.to);
+    });
+    if (!adj[here]) return null;
+
+    const prev = { [here]: null };
+    const queue = [here];
+    while (queue.length) {
+      const cur = queue.shift();
+      if (cur === targetSceneId) break;
+      for (const nxt of adj[cur] || []) {
+        if (prev[nxt] === undefined) {
+          prev[nxt] = cur;
+          queue.push(nxt);
+        }
+      }
+    }
+    if (prev[targetSceneId] === undefined) return null;   // 不连通
+
+    // 从目标往回倒推，一直退到「父节点就是 here」的那一格 —— 那就是第一跳
+    let node = targetSceneId;
+    while (prev[node] !== here && prev[node] !== null && prev[node] !== undefined) {
+      node = prev[node];
+    }
+    return node;
+  }
+
+  /** 找到通往目标场景的出口坐标（自动按 BFS 选最短的那条路的第一步） */
   exitPosTo(targetSceneId) {
     const cfg = this.scenes.current;
     if (!cfg) return null;
+    if (targetSceneId === cfg.id) return null;
 
-    const ex = (cfg.exits || []).find((e) => e.to === targetSceneId);
+    const via = this.nextHopTo(targetSceneId);
+    if (!via) return null;
+
+    const ex = (cfg.exits || []).find((e) => e.to === via);
     if (!ex) return null;
 
     return {
       x: (ex.tileX + ex.w / 2) * TILE_SIZE,
       y: (ex.tileY + ex.h / 2) * TILE_SIZE,
       crossScene: true,
+      // ★ 带上目标场景 id：任务面板的「前往」要报"目标在哪张地图"，
+      //   光有跨场景标记是不够的（用户 2026-10-05 反馈）
+      sceneId: targetSceneId,
+      // 下一跳（可能是目标本身，也可能是中转场景）
+      viaSceneId: via,
     };
   }
 
@@ -865,10 +1453,10 @@ export default class VenueScene extends Phaser.Scene {
     this.player.play(key, ignoreIfPlaying);
   }
 
-  /** 求方向对应的行号（0=down 1=left 2=right 3=up） */
+  /** 求方向对应的行号（见 characters.js 的 DIR_ROW，8 方向） */
   _animRow(suffix) {
     const dir = suffix.split('-')[1];
-    return { down: 0, left: 1, right: 2, up: 3 }[dir] ?? 0;
+    return DIR_ROW[dir] ?? DIR_ROW.down;
   }
 
   // ---------------------------------------------------------------------------
@@ -878,7 +1466,14 @@ export default class VenueScene extends Phaser.Scene {
       return;
     }
 
-    if (window.__venuePaused || this.dialog.isOpen()) {
+    // 全屏插画展示中（切蛋糕 / 合影）：冻住一切，等玩家点一下收起
+    if (this.overlay) {
+      this.player.setVelocity(0);
+      this.safePlay(`idle-${this.playerDir}`);
+      return;
+    }
+
+    if (window.__venuePaused || this.dialog.isOpen() || (this.letter && this.letter.isOpen())) {
       this.player.setVelocity(0);
       this.safePlay(`idle-${this.playerDir}`);
       if (this.interactPoints) this.interactPoints.update(this.player.x, this.player.y);
@@ -908,10 +1503,23 @@ export default class VenueScene extends Phaser.Scene {
     this.handleQuestVisit();
   }
 
+  /**
+   * 庆祝态下，主角是不是站在「桌子的北面」（主位那一侧）。
+   *
+   * 只有站在这一侧才该被桌子挡住；绕到桌子南侧（近排外面）时必须画在桌子前面，
+   * 否则桌子会反过来盖住她的上半身。
+   */
+  isBehindPartyTable() {
+    if (!this.party || !this.player) return false;
+    return this.player.y < PARTY_TABLE.y + PARTY_TABLE.h;
+  }
+
   /** 更新影子位置（跟着主角脚底走） */
   updateShadow() {
     if (this.playerShadow && this.player) {
       this.playerShadow.setPosition(this.player.x, this.player.y - 2);
+      // 庆祝态站在桌子北面时，影子也必须压在桌子底下，否则桌面上会糊一个黑椭圆
+      this.playerShadow.setDepth(this.isBehindPartyTable() ? PARTY_SHADOW_DEPTH : 499);
     }
   }
 
@@ -991,12 +1599,16 @@ export default class VenueScene extends Phaser.Scene {
     if (vx && vy) { const inv = 1 / Math.sqrt(2); vx *= inv; vy *= inv; }
 
     this.player.setVelocity(vx * PLAYER.speed, vy * PLAYER.speed);
-    this.player.setDepth(500 + this.player.y * 0.001);
+    // 庆祝态：站在桌子北侧（含主位）时把图层夹在远排(400)与桌子(450)之间，
+    // 下半身被桌子挡住、只露上半身；走到桌子南侧就必须换回老规则，
+    // 否则桌子会反过来盖住站在它前面的她。
+    this.player.setDepth(this.isBehindPartyTable()
+      ? PARTY_HERO.depth : 500 + this.player.y * 0.001);
 
     if (vx || vy) {
-      const dir = Math.abs(vx) > Math.abs(vy)
-        ? (vx > 0 ? 'right' : 'left')
-        : (vy > 0 ? 'down' : 'up');
+      // ★ 8 方向：两个方向键同时按下就走斜向、播斜向动画
+      //   （旧版这里是「取主轴」，斜着走也只会播上下左右里最接近的那个）
+      const dir = dirNameFrom(vx, vy) || this.playerDir;
       this.playerDir = dir;
       this.safePlay(`walk-${dir}`);
     } else {
@@ -1004,19 +1616,51 @@ export default class VenueScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * 玩家到 NPC 模型包围盒的最近距离（人贴在模型边上就是 0）
+   *
+   * 为什么不用中心点距离：见 handleProximity 里的注释 ——
+   * 模型占格封了 3×3，中心点距离会让玩家永远够不着。
+   */
+  distToNpcRect(px, py, npc) {
+    const r = npc.rect;
+    if (!r) return Phaser.Math.Distance.Between(px, py, npc.x, npc.y);
+    const dx = Math.max(r.left - px, 0, px - r.right);
+    const dy = Math.max(r.top - py, 0, py - r.bottom);
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
   /** NPC 和交互点的接近检测 */
   handleProximity() {
     // --- NPC ---
+    // ★ 距离按【模型包围盒最近的边】算，不再按落点中心算（2026-10-08）
+    //
+    //   站姿 NPC 现在踩在可走格上，而且模型所占的 3×3 格全是禁行区。
+    //   如果还按中心点算距离，玩家最近也只能站到中心外 1.5 格 = 96px，
+    //   已经超过 INTERACT.radius(78)，会导致「永远聊不上天」。
+    //   改成量到盒子边缘的距离后，玩家贴着模型站就是 0 距离，语义也更对
+    //   （和禁行区规则使用同一份几何）。
     let nearest = null, nd = Infinity;
-    for (const n of this.npcs) {
-      const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, n.x, n.y);
+    // 站姿 NPC +（放开之后）围坐 NPC，一起参与「谁离我最近」
+    //
+    // ★ 为什么围坐 NPC 要挂在 handleProximity 里而不是另起一套：
+    //   两者共用同一条「走近 -> 头顶光圈 -> 按 E」的交互路径，
+    //   分开写会出现「两套图标互相不知道对方」的经典 bug。
+    const candidates = this.partyTalk
+      ? this.npcs.concat(this.seatedNpcs)
+      : this.npcs;
+    for (const n of candidates) {
+      const d = this.distToNpcRect(this.player.x, this.player.y, n);
       if (d < INTERACT.radius && d < nd) { nearest = n; nd = d; }
     }
 
     if (nearest !== this.activeNpc) {
       this.activeNpc = nearest;
       this.npcs.forEach((n) => n.icon.setScale(1));
-      if (nearest) nearest.icon.setScale(1.3);
+      this.seatedNpcs.forEach((n) => {
+        if (n.icon) n.icon.setScale(1);
+      });
+      if (nearest && nearest.icon) nearest.icon.setScale(1.3);
     }
 
     // --- 交互点 ---
@@ -1029,10 +1673,16 @@ export default class VenueScene extends Phaser.Scene {
       this.npcTip.setText(`${nearest.iconText} ${nearest.name}\n按 E 对话`).setVisible(true);
       this.activePoint = null;
     } else if (pointActive) {
-      // ★ 这里必须用 pointActive.iconText（字符串），不能用 pointActive.icon。
-      //   icon 是 makeIcon() 返回的 Graphics 对象，
-      //   拼进模板字符串会变成 "[object Object]"（曾经显示成「[object Object] 花丛」）。
-      this.npcTip.setText(`${pointActive.iconText || '◆'} ${pointActive.label}\n${pointActive.hint || '按 E 互动'}`).setVisible(true);
+      // ★ 这里必须用求值后的 getter，不能用原始字段：
+      //   · pointActive.iconText（字符串）—— icon 是 makeIcon() 返回的 Graphics 对象，
+      //     拼进模板字符串会变成 "[object Object]"。曾显示成「[object Object] 花丛」。
+      //   · pointActive.labelText / hintText —— label / hint 在 quests.js 里可以是
+      //     (story) => '...' 的函数，`{...def}` 展开后字段本身还是函数，
+      //     直接拼进模板字符串会把函数源码原样打到屏幕上
+      //     （用户 2026-10-04 截图里的 `(s) => (s.allWritten ? '桌上的邀请函' : ...)`）。
+      this.npcTip
+        .setText(`${pointActive.iconText || '◆'} ${pointActive.labelText}\n${pointActive.hintText || '按 E 互动'}`)
+        .setVisible(true);
       this.activePoint = pointActive;
     } else {
       this.npcTip.setVisible(false);
@@ -1041,6 +1691,9 @@ export default class VenueScene extends Phaser.Scene {
   }
 
   handleInteract() {
+    // 全屏插画展示中：E 不接（收起只能点鼠标）
+    if (this.overlay) return;
+
     if (!Phaser.Input.Keyboard.JustDown(this.keyE)) {
       if (Phaser.Input.Keyboard.JustDown(this.keyQ)) this.toggleQuestPanel();
       return;
@@ -1136,7 +1789,7 @@ export default class VenueScene extends Phaser.Scene {
     }
     if (p.needItem && !this.hasItem(p.needItem)) {
       this.dialog.open(
-        { name: p.label || '提示', portrait: '❓', portraitBg: '#2a2a33' },
+        { name: p.labelText || p.label || '提示', portrait: '❓', portraitBg: '#2a2a33' },
         [{ text: p.needHint || '你还没有需要的东西。' }],
         null
       );
@@ -1149,7 +1802,7 @@ export default class VenueScene extends Phaser.Scene {
 
     if (p.okText) {
       this.dialog.open(
-        { name: p.label || '交互', portrait: '💧', portraitBg: '#223a3d' },
+        { name: p.labelText || p.label || '交互', portrait: '💧', portraitBg: '#223a3d' },
         [{ text: p.okText }],
         null
       );
@@ -1350,7 +2003,7 @@ export default class VenueScene extends Phaser.Scene {
     };
     for (const n of this.npcs || []) dot(Math.floor(n.x / T), Math.floor(n.y / T), 0xc882ff, n.name || '');
     for (const p of this.interactPoints ? this.interactPoints.points : []) {
-      if (this.scenes.current.id === p.scene) dot(p.tileX, p.tileY, 0x50e6e6, p.label || '');
+      if (this.scenes.current.id === p.scene) dot(p.tileX, p.tileY, 0x50e6e6, p.labelText || '');
     }
     for (const pr of this.props || []) {
       if (pr.texture && pr.tileX !== undefined) dot(pr.tileX, pr.tileY, 0xffaa3c, '');
@@ -1380,12 +2033,26 @@ export default class VenueScene extends Phaser.Scene {
    *   采集不需要"消耗前置物品"，只管拿和记进度，逻辑更简单。
    */
   doCollectItem(p) {
-    if (this.hasItem(p.collectId) && !p.repeatable) {
+    // ★ 补计数（修"委托永远做不完"的死锁）
+    //
+    //   老存档 / 边缘情况下，玩家身上已经有这个道具，但任务计数还是 0
+    //   （因为当初拿道具时委托还没接，QuestSystem.markCollect 会拒绝计数）。
+    //   旧写法直接 `已经拿到了 → return`，于是计数器永远补不上，
+    //   委托永远差 1 个 —— 用户 2026-10-05 报的就是这个。
+    //   现在：身上有道具但任务计数还是 0 时，不再重复发道具，但**把计数补上**。
+    const qid = p.questId;
+    const counted = qid ? this.quests.getCounter(qid) : 1;
+    const alreadyHas = this.hasItem(p.collectId) && !p.repeatable;
+
+    if (alreadyHas && counted >= 1) {
       this.toast(p.doneHint || '已经拿到了');
       return;
     }
+
     if (p.collectId) {
-      this.giveItem(p.collectId, p.giveName || p.label);
+      if (!alreadyHas) {
+        this.giveItem(p.collectId, p.giveName || p.labelText || p.label);
+      }
       this.quests.markCollect(p.collectId, 1);
     }
     if (p.okText) {
@@ -1398,13 +2065,41 @@ export default class VenueScene extends Phaser.Scene {
     this.refreshQuestUI();
   }
 
+  /**
+   * 提示玩家「这个采集点还没解锁，得先去找 XX 接委托」
+   *
+   * 用户 2026-10-05 要求：没接对应委托时点互动点不给东西，
+   * 而是告诉他去找谁。文案里同时报出委托人名字和委托名，
+   * 因为玩家不一定记得「池塘捉鱼」是爱诺发的。
+   */
+  toastNeedQuest(p) {
+    const q = QUESTS.find((x) => x.id === p.questId);
+    const npc = q ? NPCS.find((n) => n.id === q.giverNpcId) : null;
+    const who = npc ? npc.name : '委托人';
+    const title = q ? String(q.title || '').replace(/^【[^】]*】/, '') : '';
+
+    if (title) {
+      this.toast(`还没接委托 —— 请先找到「${who}」，接取「${title}」`);
+    } else {
+      this.toast(`还没接委托 —— 请先找到「${who}」接取委托`);
+    }
+  }
+
   /** 触发交互点 */
   triggerPoint(point) {
     const r = this.interactPoints.trigger();
     if (!r) return;
 
-    // ★ 'writeLetter' 分支已随「去掉写信环节」一并删除。
-    if (r.type === 'takeLetters') {
+    if (r.type === 'desk') {
+      // 书桌只有一件事：还没写完就写下一封。
+      // （v5 起信在信纸过场收尾时就进了怀里，书桌点在 11/11 之后直接消失，
+      //   所以「写完了」这个分支正常走不到，留着只是兜底。）
+      if (!this.story.allWritten) {
+        this.startLetterWriting();
+      } else {
+        this.toast('邀请函都写好了，去林间信箱投递吧');
+      }
+    } else if (r.type === 'takeLetters') {
       if (r.ok) {
         this.toast(`收起了 ${r.count} 封邀请函`);
         this.gainToast(`邀请函 x${r.count}`);
@@ -1415,15 +2110,68 @@ export default class VenueScene extends Phaser.Scene {
       if (r.ok) {
         this.gainToast('邀请函已寄出');
       } else {
-        this.toast('要先从书桌把信拿走');
+        this.toast('邀请函还没写好');
       }
+    } else if (r.type === 'cake') {
+      this.showCakeCutscene();
+    } else if (r.type === 'needQuest') {
+      // 没接委托 → 不给东西，告诉他去找谁（见 InteractPointSystem.isQuestAccepted）
+      this.toastNeedQuest(r.point);
     } else if (r.point && r.point.action === 'exchangeItem') {
       this.doExchangeItem(r.point);
     } else if (r.point && r.point.action === 'collectItem') {
       this.doCollectItem(r.point);
+    } else if (r.point) {
+      this.toast(r.point.hintText || r.point.labelText || point.hintText || point.labelText);
     } else {
-      this.toast(point.hint || point.label);
+      this.toast(point.hintText || point.labelText);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // 写邀请函（书桌前的信纸过场）
+  // ---------------------------------------------------------------------------
+  /**
+   * 写「下一封」邀请函。
+   *
+   * 为什么是一封一封写、而不是一次性写完 11 封：
+   *   邀请函的每一封正文都不一样（11 封信，13 位客人，林尼/琳妮特/菲米尼
+   *   三个人共收一封）。一封一封地展开，才能把每一封都真的念一遍；
+   *   一口气写完 11 封，就只能看到一张纸。
+   *
+   * 收到的那一封是 StorySystem 里的哪个 nextGuest()：
+   *   GUESTS 的顺序 = 邀请函 docx 里的出场顺序，
+   *   所以写出来的顺序和用户手里那叠信的顺序是一致的。
+   */
+  startLetterWriting() {
+    // 已经打开（比如连按了两下 E）就不重复开
+    if (this.letter.isOpen()) return;
+
+    const guest = this.story.nextGuest();
+    if (!guest) {
+      this.toast('邀请函都写完了');
+      return;
+    }
+
+    // 「写的是第几封」——用【已经写好多少封】来算，不能用收尾动画里的值：
+    // 这一封要等过场跑完才记进 StorySystem，这里是在打开信纸之前取的值。
+    const index = this.story.writtenCount;
+    const total = this.story.totalCount;
+
+    this.letter.open(guest, {
+      index,
+      total,
+      onDone: (g) => {
+        const written = this.story.writeLetter();
+        if (!written) return;
+        this.toast(`写好了：${written.name}`);
+        this.gainToast(`邀请函「${written.name}」`);
+        // 全部写完 → 提示下一步（quests 那边已经自动把 main-write 标完成）
+        if (this.story.allWritten) {
+          this.time.delayedCall(700, () => this.toast('11 封邀请函都收进信封了，去林间信箱寄出去吧'));
+        }
+      },
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -1438,6 +2186,14 @@ export default class VenueScene extends Phaser.Scene {
   }
 
   buildDialogLines(npc) {
+    // ★ 围坐形态走另一套话（用户 m09394）
+    //
+    //   站姿 NPC 在会场里说的是「委托接没接、交没交」，
+    //   围坐 NPC 说的是「今晚的感受 + 想对哥伦比娅说的话」，
+    //   再接上两个功能入口：查看合影 / 小游戏·单品（占位）。
+    //   两套话共用同一个对话框和同一条「走近 -> 按 E」路径。
+    if (npc.seated) return this.buildSeatedDialogLines(npc);
+
     const lines = [...(npc.dialog || [])];
     const here = this.scenes.current ? this.scenes.current.id : 'venue';
 
@@ -1501,6 +2257,52 @@ export default class VenueScene extends Phaser.Scene {
       lines.push({ text: '（把委托办完，我还有别的东西给你看）' });
     }
 
+    // ---- 合影留念（任务4）----
+    //
+    // 需求：「接委托时，所有NPC增加合影选项。」
+    // 合影 = 哥伦比娅 Q 版立绘 + 这位 NPC 的 Q 版立绘 + 他所在场景的背景，
+    // 由 tools/gen-photo.py 离线拼好（拍立得样式），运行时光铺一张全屏图。
+    //
+    // 为什么放在最后一行：
+    //   接取/交付委托的按钮在中间几行，玩家一路点下去最后才看到合影，
+    //   不会打断做任务的动线。
+    //
+    // 为什么只给 guest：
+    //   空（npc-aether）是旅行者的同伴，不是受邀客人，没有合影素材。
+    if (npc.guest) {
+      lines.push({
+        text: '难得大家都在，要不要一起拍张合影？',
+        link: { label: '📸 合影留念', photo: true },
+      });
+    }
+
+    return lines;
+  }
+
+  /**
+   * 围坐 NPC 的对话（大合影拍完之后才走得到这里）
+   *
+   * 用户 m09394 定的结构：
+   *   1) 打招呼的闲聊 —— 关于本次生日会的感受 / 想对哥伦比娅说的话
+   *   2) 查看合影
+   *   3) 介绍小游戏 / 单品项目（★ 占位，后期接入）
+   *
+   * 修订（用户 m09842）：这里的「查看合影」要的是**这位 NPC 和哥伦比娅的单独合影**，
+   * 不是全体大合影。大合影只在切蛋糕那一下出现。
+   */
+  buildSeatedDialogLines(npc) {
+    const lines = partyTalkOf(npc.id).map((t) => ({ text: t }));
+
+    lines.push({
+      text: PHOTO_PROMPT,
+      link: { label: '📸 查看合影', photo: true },
+    });
+
+    lines.push({
+      text: OFFER_PROMPT,
+      link: { label: '🎮 小游戏 · 单品', soon: true },
+    });
+
     return lines;
   }
 
@@ -1528,13 +2330,41 @@ export default class VenueScene extends Phaser.Scene {
   handleGotoQuest(questId) {
     const q = QUESTS.find((x) => x.id === questId);
     if (!q) return;
-    // 现在用箭头引导，点击「前往」只给出文字提示
-    const t = q.target;
-    if (t && t.type === 'visit') {
-      const s = SCENES.find((x) => x.id === (t.scene || q.scene));
-      this.toast(`目标在「${s ? s.name : '未知'}」，跟着金色箭头走`);
+
+    // 金色引导箭头已经在 2026-09-28 按用户要求撤掉了（见 buildGuideArrow）。
+    // 所以「前往」不能再叫玩家"跟着金色箭头走" —— 直接报出目标在哪张地图。
+    //
+    // ★ 2026-10-05 修：以前跨场景时用 `q.target.scene || q.scene` 猜地图名，
+    //   但 5 条采集委托的 `q.scene` 都是 'venue'（发布任务的 NPC 所在地），
+    //   真正的采集点在 pond / grove —— 于是「前往」会把玩家指去会场。
+    //   现在一律用 getGuideTarget() 算出来的 sceneId（它走的是交互点/出口的真实位置），
+    //   并且**无论同场景还是跨场景都报出地图名**。
+    const target = this.getGuideTarget();
+    if (!target) {
+      this.toast('没有需要前往的地方');
+      return;
+    }
+
+    // 兜底：万一某个分支没带 sceneId，再退回 q.target.scene / q.scene
+    const sceneId =
+      target.sceneId || (q.target && q.target.scene) || q.scene || 'home';
+    const s = SCENES.find((x) => x.id === sceneId);
+    const mapName = s ? s.name : sceneId;
+
+    if (target.crossScene) {
+      // 中转场景：10 个场景连成一环，目标常常不挨着 ——
+      // 光说「目标在 X」玩家还是不知道该往哪走，所以把「第一步先去哪」也报出来。
+      const viaId = target.viaSceneId;
+      const via = viaId && viaId !== sceneId
+        ? SCENES.find((x) => x.id === viaId)
+        : null;
+      if (via) {
+        this.toast(`目标在「${mapName}」—— 先走传送光圈去「${via.name}」`);
+      } else {
+        this.toast(`目标在「${mapName}」—— 从这张地图的传送光圈过去`);
+      }
     } else {
-      this.toast('跟着金色箭头走');
+      this.toast(`目标在「${mapName}」—— 就在眼前这张地图上，找找发光的地方`);
     }
   }
 

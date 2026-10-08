@@ -33,13 +33,23 @@ const C = {
 };
 
 // 场景在地图上的排布（相对坐标 0~1）
-// 按剧情顺序从下到上：书桌 → 信箱 → 会场 → 池塘 → 秘境
+// 10 个场景构成一个环：home → mailbox → venue → icefield → pools →
+// moonpath → starship → shallows → pond → grove → home
+// 所以直接按环的顺序摆成一圈。
+//   x = 0.50 + 0.36·cosθ   y = 0.46 + 0.36·sinθ（θ 从正下方 home 起，每 36° 一个）
+// 纵向半径压到 0.36 是为了给最底下留出图例的位置，
+// 否则「窗前书桌」会和图例文字叠在一起。
 const LAYOUT = {
-  home:     { x: 0.50, y: 0.90 },
-  mailbox:  { x: 0.50, y: 0.68 },
-  venue:    { x: 0.50, y: 0.46 },
-  pond:     { x: 0.22, y: 0.24 },
-  grove:    { x: 0.66, y: 0.10 },
+  home:      { x: 0.500, y: 0.820 },
+  mailbox:   { x: 0.288, y: 0.751 },
+  venue:     { x: 0.158, y: 0.571 },
+  icefield:  { x: 0.158, y: 0.349 },
+  pools:     { x: 0.288, y: 0.169 },
+  moonpath:  { x: 0.500, y: 0.100 },
+  starship:  { x: 0.712, y: 0.169 },
+  shallows:  { x: 0.842, y: 0.349 },
+  pond:      { x: 0.842, y: 0.571 },
+  grove:     { x: 0.712, y: 0.751 },
 };
 
 export default class Minimap {
@@ -47,8 +57,10 @@ export default class Minimap {
     this.scene = scene;
     this.visible = false;
 
-    this.panelW = 260;
-    this.panelH = 300;
+    // 10 个场景排成一圈之后，260x300 会让最下面那排名字互相压住，
+    // 所以面板整体放大一档（320x340）
+    this.panelW = 320;
+    this.panelH = 340;
 
     this.build();
   }
@@ -67,7 +79,8 @@ export default class Minimap {
       .setStrokeStyle(2, C.border);
 
     // 标题
-    this.title = scene.add.text(0, 0, '林间地图', {
+    // 标题：加了 5 个月面场景之后就不只是「林间」了
+    this.title = scene.add.text(0, 0, '世界地图', {
       fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
       fontSize: '15px',
       color: '#ffd97a',
