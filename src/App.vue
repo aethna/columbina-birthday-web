@@ -4,9 +4,7 @@
   <div class="vignette"></div>
 
   <AudioToggle v-if="view !== 'admin'" />
-  <!-- 登录入口：QQ 互联应用审核通过前先不展示；恢复时删掉这三行注释即可
   <UserAuth v-if="view !== 'admin' && view !== 'login'" :return-to="authReturnTo" />
-  -->
 
   <template v-if="view === 'login'">
     <LoginPage :return-to="pendingTarget || '/#/signup'" @back="go('home')" />
@@ -35,7 +33,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import SkyCanvas from './components/SkyCanvas.vue'
 import AudioToggle from './components/AudioToggle.vue'
-// import UserAuth from './components/UserAuth.vue'  // QQ 应用审核通过前先隐藏登录入口
+import UserAuth from './components/UserAuth.vue'
 import LoginPage from './components/LoginPage.vue'
 import HeroSection from './components/HeroSection.vue'
 import IntroSection from './components/IntroSection.vue'
@@ -85,8 +83,9 @@ function go(next) {
 
 const GATE_TARGET = { game: '/game/index.html', venue: '/venue/index.html', signup: '/#/signup' }
 
-/* QQ 互联应用审核期间临时关闭门禁：未登录也放行。
-   审核通过后把这里改回 true，门禁立刻恢复（登录入口那几行注释也一并恢复）。 */
+/* 门禁开关（当前：不与登录挂钩）：
+   false = 小游戏 / 会场 / 报名都能直接进，只有主动点右上角「登录」才进登录界面；
+   改成 true = 恢复「未登录先拦下」的门禁。 */
 const GATE_ENABLED = false
 
 /** 未登录 → 去登录页并记住目标；已登录 → 直接放行 */
