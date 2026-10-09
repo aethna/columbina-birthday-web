@@ -648,6 +648,14 @@ export default class VenueScene extends Phaser.Scene {
       this.cameras.main.flash(420, 255, 236, 170);
       this.toast('所有委托都完成了 —— 大家围到了蛋糕旁');
     }
+
+    // ★ 结局任务「【结局】切蛋糕」是在 allDone() 之后才由 snapshot() 放出来的，
+    //   而任务面板只在 refreshQuestUI() 时重新渲染。
+    //   玩家在别的地图里做完最后一个委托时，面板停在旧的一版上 ——
+    //   回到会场也看不到「切蛋糕」那一条（用户 2026-10-09 反馈 2 的另一半）。
+    //   庆功宴一开就重刷一次，保证这条一定出现在列表里。
+    this.refreshQuestUI();
+
     return true;
   }
 
@@ -1154,6 +1162,37 @@ export default class VenueScene extends Phaser.Scene {
             return { x: npcDef.tileX * TILE_SIZE + 32, y: npcDef.tileY * TILE_SIZE + 32, crossScene: false, sceneId: npcDef.scene || 'venue' };
           }
           return this.exitPosTo(npcDef.scene || 'venue');
+        }
+      }
+
+      // ★ 交互点类委托（结局「切蛋糕」）
+      //
+      //   q-party-cake 的 target 是 { type: 'interact', count: 1 }，
+      //   目标位置同样写在**交互点**上（ip-party-cake → 会场主位 19,9），不在任务里。
+      //
+      //   早先这里没有 interact 分支，于是它一个都不匹配，一路掉到最下面
+      //   「去找委托官」—— 而那时所有委托都已经完成、没有 available 的了，
+      //   getGuideTarget() 直接 return null，任务面板点「前往」只会弹
+      //   「没有需要前往的地方」。
+      //   用户 2026-10-09 报的「结局切蛋糕点击前往，提示没有要前往的地方」就是这个。
+      if (t.type === 'interact') {
+        const ip = INTERACT_POINTS.find((x) => x.questId === active.id);
+        if (ip) {
+          // actionLabel 让 handleGotoQuest 报出「去干什么」，
+          // 不然同场景只会说一句「找找发光的地方」，玩家仍然不知道要去哪
+          const label = ip.label || active.title || '目标地点';
+          if (ip.scene === here) {
+            return {
+              x: ip.tileX * TILE_SIZE + 32,
+              y: ip.tileY * TILE_SIZE + 32,
+              crossScene: false,
+              sceneId: here,
+              actionLabel: label,
+            };
+          }
+          const exit = this.exitPosTo(ip.scene);
+          if (exit) exit.actionLabel = label;
+          return exit;
         }
       }
     }
@@ -1783,11 +1822,38 @@ export default class VenueScene extends Phaser.Scene {
    * 以后别的收集任务也能直接复用。
    */
   doExchangeItem(p) {
-    if (p.doneItem && this.hasItem(p.doneItem)) {
+    // ★ 补计数（修「打水委托永远交不了」的死锁）
+    //
+    //   和 doCollectItem 是【同一类】问题，当时只修了那边、漏了这个：
+    //
+    //   背包 localStorage['venue-items-v1'] —— 【没有按天分桶】；
+    //   任务状态 localStorage['venue-quests-v2'] —— 【按天分桶，跨天自动重置】。
+    //   于是跨天之后：玩家身上还揣着「装满水的桶」，但委托被重置回
+    //   active / 计数 0。再到池塘取水处按 E，旧写法第一句
+    //       if (p.doneItem && this.hasItem(p.doneItem)) { toast(doneHint); return; }
+    //   就提前 return 了 —— 界面提示「桶已经装满了，赶紧送回去吧」，
+    //   可 markCollect() 从来没被调用，计数永远是 0，委托永远到不了 ready，
+    //   回奈芙尔那里自然还是「还在进行中 / 去打水」。
+    //
+    //   用户 2026-10-09 报的就是这个：「提示打好了水可以交了，
+    //   但是回奈芙尔那里还是让我去打水」。
+    //
+    //   现在：身上有成品但任务计数还是 0 时，不再重复发东西，但**把计数补上**。
+    const qid = p.questId;
+    const counted = qid ? this.quests.getCounter(qid) : 1;
+    const alreadyHas = !!(p.doneItem && this.hasItem(p.doneItem));
+
+    // 真的已经换好了：提示一句就走
+    if (alreadyHas && counted >= 1) {
       this.toast(p.doneHint || '已经做好了');
       return;
     }
-    if (p.needItem && !this.hasItem(p.needItem)) {
+
+    // 需要前置物品但身上没有。
+    // ★ 注意要加 !alreadyHas：已经有成品时不该再要空桶 ——
+    //   那个空桶在【上一次】换水的时候就已经被消耗掉了，
+    //   再加这个条件会把补计数分支也挡在门外，死锁照样存在。
+    if (!alreadyHas && p.needItem && !this.hasItem(p.needItem)) {
       this.dialog.open(
         { name: p.labelText || p.label || '提示', portrait: '❓', portraitBg: '#2a2a33' },
         [{ text: p.needHint || '你还没有需要的东西。' }],
@@ -1796,8 +1862,11 @@ export default class VenueScene extends Phaser.Scene {
       return;
     }
 
-    if (p.needItem) this.takeItem(p.needItem);
-    if (p.giveItem) this.giveItem(p.giveItem, p.giveName);
+    // 只有真的要换物时才动物品栏；补计数那一路不重复发东西
+    if (!alreadyHas) {
+      if (p.needItem) this.takeItem(p.needItem);
+      if (p.giveItem) this.giveItem(p.giveItem, p.giveName);
+    }
     if (p.collectId) this.quests.markCollect(p.collectId, 1);
 
     if (p.okText) {
@@ -2324,6 +2393,12 @@ export default class VenueScene extends Phaser.Scene {
       return '把邀请函投进信箱';
     }
     if (t.type === 'openGame') return '玩一次小游戏';
+    // 交互点类（结局切蛋糕）：提示语直接取交互点的 label，
+    // 免得任务列表里这一条的目标栏是空的
+    if (t.type === 'interact') {
+      const ip = INTERACT_POINTS.find((x) => x.questId === q.id);
+      return ip ? `去主会场主位「${ip.label || '互动'}」` : '去主会场主位切蛋糕';
+    }
     return '';
   }
 
@@ -2351,6 +2426,11 @@ export default class VenueScene extends Phaser.Scene {
     const s = SCENES.find((x) => x.id === sceneId);
     const mapName = s ? s.name : sceneId;
 
+    // ★ actionLabel：交互点类目标（结局切蛋糕）在 getGuideTarget 里带上了
+    //   「去干什么」。不带的话同场景只会说「找找发光的地方」，
+    //   玩家仍然不知道该去哪 —— 用户 2026-10-09 要的「正确指引主会场」。
+    const act = target.actionLabel ? `「${target.actionLabel}」` : '';
+
     if (target.crossScene) {
       // 中转场景：10 个场景连成一环，目标常常不挨着 ——
       // 光说「目标在 X」玩家还是不知道该往哪走，所以把「第一步先去哪」也报出来。
@@ -2359,10 +2439,16 @@ export default class VenueScene extends Phaser.Scene {
         ? SCENES.find((x) => x.id === viaId)
         : null;
       if (via) {
-        this.toast(`目标在「${mapName}」—— 先走传送光圈去「${via.name}」`);
+        this.toast(act
+          ? `要去「${mapName}」的${act} —— 先走传送光圈去「${via.name}」`
+          : `目标在「${mapName}」—— 先走传送光圈去「${via.name}」`);
       } else {
-        this.toast(`目标在「${mapName}」—— 从这张地图的传送光圈过去`);
+        this.toast(act
+          ? `要去「${mapName}」的${act} —— 从这张地图的传送光圈过去`
+          : `目标在「${mapName}」—— 从这张地图的传送光圈过去`);
       }
+    } else if (act) {
+      this.toast(`${act}就在这张地图上（「${mapName}」）—— 走到发光的地方按 E`);
     } else {
       this.toast(`目标在「${mapName}」—— 就在眼前这张地图上，找找发光的地方`);
     }

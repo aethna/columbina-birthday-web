@@ -48,6 +48,16 @@ const boot = await p.evaluate(async () => {
   const started = s.maybeStartParty();
   await new Promise((r) => setTimeout(r, 2200));
 
+  // ★ 结局「切蛋糕」的任务指引（用户 2026-10-09 报的第 2 个问题）
+  //   q-party-cake 的 target.type 是 'interact'，而 getGuideTarget() 原来只认
+  //   visit / collect / talk，一个都不匹配 → 返回 null →
+  //   任务面板点「前往」只弹「没有需要前往的地方」。
+  //   正确的行为：算出会场主位那个交互点，并带上「切蛋糕」这个动作名。
+  const guide = s.getGuideTarget();
+  // 注意：InteractPoints 里每个运行时对象是 `{...def, x, y, marker, icon, ...}`，
+  // 字段直接摊平在对象上，**没有** `.def` 这一层
+  const cakeIp = (s.interactPoints.points || []).find((x) => x.id === 'ip-party-cake');
+
   return {
     started, party: s.party,
     seats: s.seatedNpcs.length,
@@ -56,6 +66,26 @@ const boot = await p.evaluate(async () => {
     nameVisible: s.seatedNpcs.filter((n) => n.nameObj && n.nameObj.visible).length,
     iconDepth: s.seatedNpcs.length ? s.seatedNpcs[0].icon.depth : null,
     cakeState: (s.quests.snapshot().find((q) => q.id === 'q-party-cake') || {}).state,
+    guide: guide && {
+      sceneId: guide.sceneId,
+      actionLabel: guide.actionLabel || null,
+      crossScene: !!guide.crossScene,
+      tileX: Math.floor(guide.x / 64),
+      tileY: Math.floor(guide.y / 64),
+    },
+    cakeIpTile: cakeIp ? [cakeIp.tileX, cakeIp.tileY, cakeIp.scene] : null,
+    // ★ 用户 2026-10-09 追加反馈：「结局任务出现后，切蛋糕的互动点没看到」
+    //   根因：宴会桌 depth 450 把 420 层的图标/名牌整个盖住了。
+    //   修法不是把图层抬到桌子之上（那会破坏「互动点在哥伦比娅之下」的规则），
+    //   而是把图标/名牌的**位置**整个抬到桌面之上（世界 y < 桌子顶边）。
+    //   所以这里断言的是「图标底边在桌子顶边之上」，不是 depth。
+    cakeIconY: cakeIp && cakeIp.icon ? cakeIp.icon.y : null,
+    cakeLabelY: cakeIp && cakeIp.labelObj ? cakeIp.labelObj.y : null,
+    tableTop: (() => {
+      const t = s.children.list.find(
+        (o) => o.texture && o.texture.key === 'assets/celebration/banquet-table.png');
+      return t ? t.getBounds().top : null;
+    })(),
   };
 });
 console.log('\n===== ① 大合影【之前】：坐姿 NPC 不可互动 =====');
@@ -66,6 +96,27 @@ ok(boot.cakeState !== 'completed', `切蛋糕还没做（state=${boot.cakeState}
 ok(boot.talk === false, 'partyTalk = false（还没放开搭话）');
 ok(boot.iconVisible === 0 && boot.nameVisible === 0,
    `14 位的图标/名牌全部隐藏（可见 ${boot.iconVisible}/${boot.nameVisible}）`);
+
+// ★ 第 2 个用户反馈：结局「切蛋糕」点「前往」要能正确指到主会场
+ok(boot.guide && boot.guide.sceneId === 'venue',
+   `「切蛋糕」的「前往」算得出目标（sceneId=${boot.guide ? boot.guide.sceneId : 'null'}）`);
+ok(boot.guide && boot.guide.actionLabel === '切蛋糕',
+   `目标带动作名「切蛋糕」（实际 ${boot.guide ? boot.guide.actionLabel : 'null'}）`);
+ok(boot.guide && !boot.guide.crossScene,
+   '目标判定为「就在当前这张地图上」');
+ok(boot.guide && boot.cakeIpTile
+   && boot.guide.tileX === boot.cakeIpTile[0] && boot.guide.tileY === boot.cakeIpTile[1],
+   `指向主会场主位交互点 (${boot.cakeIpTile ? boot.cakeIpTile[0] : '?'},${boot.cakeIpTile ? boot.cakeIpTile[1] : '?'})`
+   + `，实际 (${boot.guide ? boot.guide.tileX : '?'},${boot.guide ? boot.guide.tileY : '?'})`);
+
+// ★ 追加反馈：切蛋糕的互动点必须真的看得见。
+//   修法是把图标/名牌的位置抬到桌面之上（世界 y < 桌子顶边），图层保持全局默认值，
+//   这样既不挡主角（互动点仍在哥伦比娅之下），也不会被桌子盖住。
+ok(boot.cakeIconY != null && boot.tableTop != null && boot.cakeIconY < boot.tableTop - 20,
+   `切蛋糕图标 y=${boot.cakeIconY} 在宴会桌顶边 y=${boot.tableTop} 之上`
+   + '（不然会被桌子整个盖住，玩家根本看不到）');
+ok(boot.cakeLabelY != null && boot.tableTop != null && boot.cakeLabelY < boot.tableTop - 20,
+   `切蛋糕名牌 y=${boot.cakeLabelY} 在宴会桌顶边 y=${boot.tableTop} 之上`);
 
 // 把主角挪到最靠近某个座位的可走格，确认「够得着也不给聊」
 const preTalk = await p.evaluate(async () => {
