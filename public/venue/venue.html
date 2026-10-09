@@ -446,8 +446,174 @@
       transition: opacity .4s;
     }
     #loading.hide { opacity: 0; pointer-events: none; }
+
+    /* ================= 信纸过场（写邀请函） ================= */
+    /*
+     * 整层盖在游戏画面上、对话框之下（z-index 2500）。
+     * 打开时 LetterSystem 会把 window.__venuePaused 置为 true，
+     * VenueScene.update() 第一行就会 return —— 人物不会乱跑，
+     * 也不会在打字的过程中被 W/A/S/D 打断。
+     */
+    #letter-root {
+      position: fixed; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(circle at 50% 42%, rgba(24, 18, 10, .78), rgba(6, 8, 14, .95));
+      opacity: 0; pointer-events: none;
+      transition: opacity .3s;
+      z-index: 2500;
+    }
+    #letter-root.active { opacity: 1; pointer-events: auto; }
+
+    #letter-stage {
+      position: relative;
+      width: min(620px, calc(100% - 48px));
+      /* 往下留出信封的位置：信封挂在信纸下方，靠 margin 把整叠往上顶，
+         否则信封会贴着屏幕底边、和底部的提示文字撞在一起 */
+      margin-bottom: 110px;
+      display: flex; flex-direction: column; align-items: center;
+    }
+
+    /* ---------- 信纸 ---------- */
+    #letter-paper {
+      position: relative;
+      width: 100%;
+      height: min(56vh, 560px);
+      padding: 30px 38px 26px;
+      display: flex; flex-direction: column;
+      background:
+        repeating-linear-gradient(180deg, rgba(0, 0, 0, 0) 0 34px, rgba(140, 112, 66, .10) 34px 35px),
+        linear-gradient(180deg, #fdf8ec, #f1e6cd);
+      border: 1px solid #c9b791;
+      border-radius: 3px;
+      box-shadow: 0 20px 54px rgba(0, 0, 0, .66), inset 0 0 70px rgba(166, 134, 80, .14);
+      color: #3a2c18;
+      overflow: hidden;
+      opacity: 0;
+      transform: translateY(26px) scale(.97);
+      transform-origin: 50% 100%;
+      transition: opacity .42s, transform .5s cubic-bezier(.25, .9, .3, 1);
+      z-index: 3;
+    }
+    #letter-paper.in { opacity: 1; transform: translateY(0) scale(1); }
+    /* 被折起来、落进信封 */
+    #letter-paper.fold {
+      opacity: 0;
+      transform: translateY(190px) scale(.26) rotate(-3deg);
+      transition: opacity .58s ease-in, transform .70s cubic-bezier(.5, 0, .75, 0);
+    }
+    /* 纸上的一圈红框线 */
+    #letter-paper::before {
+      content: ''; position: absolute; inset: 13px;
+      border: 1px solid rgba(176, 58, 46, .26); border-radius: 2px;
+      pointer-events: none;
+    }
+
+    #letter-recipient {
+      flex: 0 0 auto;
+      font-size: 22px; font-weight: 700; letter-spacing: 1px;
+      color: #4b3116; margin-bottom: 14px;
+      font-family: "Songti SC", "SimSun", "Microsoft YaHei", serif;
+    }
+    #letter-body {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      padding-right: 6px;
+      font-size: 16.5px; line-height: 2.05; letter-spacing: .4px;
+      font-family: "Songti SC", "SimSun", "Microsoft YaHei", serif;
+      scrollbar-width: thin;
+    }
+    #letter-body::-webkit-scrollbar { width: 6px; }
+    #letter-body::-webkit-scrollbar-thumb { background: rgba(150, 124, 78, .45); border-radius: 3px; }
+    /* 一行一行地出现 */
+    .letter-line {
+      opacity: 0; transform: translateY(9px);
+      transition: opacity .34s, transform .34s;
+      min-height: 1em;
+      margin-bottom: 10px;
+      white-space: pre-wrap;
+    }
+    .letter-line.show { opacity: 1; transform: translateY(0); }
+
+    #letter-sign {
+      flex: 0 0 auto;
+      margin-top: 14px; text-align: right;
+      font-size: 16px; color: #6b5330; letter-spacing: .5px;
+      opacity: 0; transform: translateY(6px);
+      transition: opacity .5s, transform .5s;
+      font-family: "Songti SC", "SimSun", "Microsoft YaHei", serif;
+    }
+    #letter-sign.show { opacity: 1; transform: translateY(0); }
+
+    /* ---------- 信封 ---------- */
+    #letter-envelope {
+      position: absolute;
+      left: 50%; bottom: -150px;
+      width: 196px; height: 128px; margin-left: -98px;
+      background: linear-gradient(180deg, #f7eeda, #e0cda9);
+      border: 1px solid #b6a07c; border-radius: 3px;
+      box-shadow: 0 16px 34px rgba(0, 0, 0, .55);
+      opacity: 0; transform: scale(.6) translateY(24px);
+      transition: opacity .34s, transform .5s cubic-bezier(.3, .9, .4, 1.15);
+      perspective: 900px;
+      z-index: 2;
+    }
+    #letter-envelope.show { opacity: 1; transform: scale(1) translateY(0); }
+    #letter-envelope.fly {
+      opacity: 0;
+      transform: translateY(-70px) scale(.34) rotate(6deg);
+      transition: opacity .7s ease-in, transform .85s ease-in;
+    }
+    /* 封盖：V 字形，绕上边翻上去 */
+    #letter-envelope::before {
+      content: ''; position: absolute; left: -1px; top: -1px;
+      width: calc(100% + 2px); height: 64%;
+      background: linear-gradient(180deg, #f0e3cb, #d9c6a1);
+      clip-path: polygon(0 0, 100% 0, 50% 100%);
+      border-bottom: 1px solid rgba(150, 128, 92, .55);
+      transform-origin: 50% 0;
+      transition: transform .42s ease;
+      z-index: 2;
+    }
+    #letter-envelope.open::before { transform: rotateX(-168deg); }
+    /* 信封口里的一小片阴影 */
+    #letter-envelope::after {
+      content: ''; position: absolute; left: 6px; right: 6px; top: 4px; height: 40%;
+      background: linear-gradient(180deg, rgba(90, 72, 44, .42), rgba(90, 72, 44, 0));
+      border-radius: 2px;
+    }
+    /* 火漆印：蓝色弯月（2026-10-04 用户要求，原来是红色圆印）
+       弯月是用 mask 挖出来的：先画一个蓝色圆贴片，再在右上角挖掉一个更大的圆，
+       剩下的月牙就是印章本体 —— 挖掉的部分是【真透明】，
+       所以它下面透出的是信封本体（换成别的底色/纹理也不会露馅，
+       比"再盖一个信封色的小圆"稳）。 */
+    #letter-seal {
+      position: absolute; left: 50%; top: 54%;
+      width: 44px; height: 44px; margin: -22px 0 0 -22px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 34% 26%, #8fd0ff, #2f6fc4 46%, #143a78 78%, #0d2551);
+      -webkit-mask: radial-gradient(circle at 63% 31%, transparent 0 19px, #000 19.5px);
+      mask: radial-gradient(circle at 63% 31%, transparent 0 19px, #000 19.5px);
+      /* drop-shadow 在 mask 之后生效，所以阴影是跟着月牙走的 */
+      filter: drop-shadow(0 2px 5px rgba(0, 0, 0, .5)) drop-shadow(0 0 7px rgba(96, 170, 255, .55));
+      opacity: 0; transform: scale(.3);
+      transition: opacity .3s, transform .34s cubic-bezier(.3, 1.5, .5, 1);
+      z-index: 4;
+    }
+    #letter-seal.show { opacity: 1; transform: scale(1); }
+
+    /* ---------- 上下两条提示 ---------- */
+    #letter-count {
+      position: fixed; left: 0; right: 0; top: 32px;
+      text-align: center; font-size: 13px;
+      color: #c9a24a; letter-spacing: 2px;
+    }
+    #letter-hint {
+      position: fixed; left: 0; right: 0; bottom: 30px;
+      text-align: center; font-size: 12.5px;
+      color: #8b7a5d; letter-spacing: .5px;
+    }
   </style>
-  <script type="module" crossorigin src="./assets/venue-CSkCH6l3.js"></script>
+  <script type="module" crossorigin src="./assets/venue-DvavyBdB.js"></script>
 </head>
 <body>
   <div id="game-root"></div>
@@ -487,6 +653,22 @@
         <div id="dialog-links"></div>
         <div id="dialog-hint">点击继续</div>
       </div>
+    </div>
+  </div>
+
+  <!-- 信纸过场：写邀请函（按 E 打开，逐行显示后收归信封） -->
+  <div id="letter-root">
+    <div id="letter-stage">
+      <div id="letter-paper">
+        <div id="letter-recipient"></div>
+        <div id="letter-body"></div>
+        <div id="letter-sign"></div>
+      </div>
+      <div id="letter-envelope">
+        <div id="letter-seal"></div>
+      </div>
+      <div id="letter-count"></div>
+      <div id="letter-hint">按 E / 点击 继续</div>
     </div>
   </div>
 
@@ -709,6 +891,38 @@
       const scene = window.__venueScene;
       if (!scene || typeof scene.handleQuestAction !== 'function') return;
       scene.handleQuestAction(action, questId);
+    });
+
+    // =====================================================================
+    // 合影
+    //
+    //   对话里的「📸 合影留念 / 查看合影」按钮派发上来，转给场景去铺全屏图。
+    //   detail.cake = true 时展示的是「所有人围坐、哥伦比娅切蛋糕」那张大合影；
+    //   否则展示这位 NPC 和哥伦比娅的单张合影（拍立得）。
+    // =====================================================================
+    window.addEventListener('venue:photo', (e) => {
+      const scene = window.__venueScene;
+      if (!scene) return;
+      const d = e.detail || {};
+      if (d.cake) {
+        if (typeof scene.showCakeArt === 'function') scene.showCakeArt();
+        return;
+      }
+      if (typeof scene.showPhoto === 'function') scene.showPhoto(d.npc);
+    });
+
+    // =====================================================================
+    // 占位入口：围坐 NPC 的「小游戏 · 单品」（用户 m09394，后期接入）
+    //
+    //   现在只给一句明确反馈，把按钮位置和交互路径占住。
+    //   真接入时把这里换成打开对应面板/外链即可。
+    // =====================================================================
+    window.addEventListener('venue:soon', (e) => {
+      const scene = window.__venueScene;
+      const label = (e.detail && e.detail.label) || '这个';
+      if (scene && typeof scene.toast === 'function') {
+        scene.toast(`「${label}」还在筹备中，之后再来看看`);
+      }
     });
 
     // =====================================================================

@@ -6,13 +6,21 @@
     "down",
     "left",
     "right",
-    "up"
+    "up",
+    "downright",
+    "downleft",
+    "upright",
+    "upleft"
   ],
   "framesPerDir": {
     "down": 8,
     "left": 8,
     "right": 8,
-    "up": 8
+    "up": 8,
+    "downright": 8,
+    "downleft": 8,
+    "upright": 8,
+    "upleft": 8
   },
   "displayHeight": 192
 }
