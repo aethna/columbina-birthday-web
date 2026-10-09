@@ -66,6 +66,9 @@ export default defineConfig({
       input: {
         index: resolve(__dirname, 'index.html'),
         venue: resolve(__dirname, 'venue.html'),
+        // 入场页：首页「进入主会场」按钮指向它。
+        // 漏了这条 → enter.html 不进构建产物 → 线上点按钮 404（PR #57 遗漏，已补）。
+        enter: resolve(__dirname, 'enter.html'),
       },
     },
   },
