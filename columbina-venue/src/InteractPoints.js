@@ -157,7 +157,7 @@ export default class InteractPointSystem {
       //   emoji 依赖系统字体，在没有该字体的环境里会渲染成「豆腐块」白方块，
       //   而且大小和位置不好控制。
       //   这里改成用代码画：一个圆底 + 一个简单符号，任何环境都一样。
-      const icon = this.makeIcon(x, y + iconDy, resolve(def.shape, this.story));
+      const icon = this.makeIcon(x, y + iconDy, resolve(def.shape, this.story), def.iconDepth);
 
       // 名字（只在靠近时显示，平时不显示以免画面杂乱）
       const labelObj = this.scene.add.text(x, y + labelDy, resolve(def.label, this.story), {
@@ -166,7 +166,7 @@ export default class InteractPointSystem {
         color: '#ffe9b8',
         backgroundColor: '#000000aa',
         padding: { x: 6, y: 2 },
-      }).setOrigin(0.5).setDepth(INTERACT_ICON_DEPTH).setVisible(false);
+      }).setOrigin(0.5).setDepth(def.labelDepth || INTERACT_ICON_DEPTH).setVisible(false);
 
       // 轻微上下浮动，让静物有点生气
       this.scene.tweens.add({
@@ -201,9 +201,10 @@ export default class InteractPointSystem {
    * 做法：半径 13 的圆底 + 中间一个小符号。
    * 符号用 shape 代号，没有对应形状就用一个小菱形兜底。
    * @param {string} s 已经求值过的 shape 代号
+   * @param {number} [depth] 该点单独的图层；不传就用全局 INTERACT_ICON_DEPTH
    */
-  makeIcon(x, y, s) {
-    const g = this.scene.add.graphics().setDepth(INTERACT_ICON_DEPTH);
+  makeIcon(x, y, s, depth) {
+    const g = this.scene.add.graphics().setDepth(depth || INTERACT_ICON_DEPTH);
 
     // 圆底
     g.fillStyle(0x2a2018, 0.72);
