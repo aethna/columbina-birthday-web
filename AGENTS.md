@@ -144,6 +144,21 @@ pwsh scripts/deploy.ps1 -DryRun         # 只构建/打包/上传/备份，不�
 14. 合并 PR 之后**先确认合并成功、再删 head 分支**：曾因合并命令参数被拆坏而失败、却紧接着删了分支，导致 PR 被 GitHub 自动关闭，只能重建分支重开 PR。
 15. **网络命令失败后绝不要继续执行破坏性 git 操作**：曾因 `git fetch` 超时未检查 exit code，紧接着 `git reset --hard origin/main`（用的还是旧的 origin/main）把刚合并的内容从本地工作区 reset 掉——远端安然无恙，本地白忙一场。凡 fetch/push 之后要 reset/checkout，先确认 `$LASTEXITCODE`。
 
+16. **走 REST API 推送后，本地 git 对那次提交一无所知**（本地没跑 merge），于是本地 `main` 与远端分叉。
+    后果很隐蔽：`git checkout main` 会把那次改动**从工作区还原掉**（2026-09-30 实际发生：语言切换/音量按钮「移到左侧」的改动这样被还原，直到下一次构建前才发现，靠线上产物比对才抓住）。
+    规矩：**走 REST 推送之后不要立刻 `git checkout/switch/restore` 切分支**；要切就先核对远端与本地内容一致（`git fetch` 拉齐，或逐文件比对远端 blob），否则下一次提交会把「被还原的旧内容」当成新改动又推回去。
+
+17. **部署备份 → 磁盘写满 → 投稿附件被写坏**（2026-10-10 实际事故，代价最大的一次）：
+    `api-backup-*.tgz` 每次把 1.7G 附件一起打包（每份 2G），一天多次部署就堆到 16G；
+    40G 磁盘写满后，部署里的 `cp -a "$OLD/data"` 写到一半没空间，
+    **6 个附件变成 0 字节、1 个 mp4 被截断** —— 靠「数据库 size 与磁盘 size 对不上」才发现。
+    处置与规矩：
+    - `scripts/deploy.ps1` 已改：api-backup 加 `--exclude=./data`；`data`/`node_modules` 改用 `cp -al`（硬链接，同分区秒完成、不占额外空间、写不坏）
+    - **云盘扩容后必须扩分区**：`growpart /dev/vda 3 && resize2fs /dev/vda3`（ext4 可在线扩容）。本机 vda 早就是 50G，分区却一直只有 39.8G
+    - **清备份之前先证明当前数据健康**（比对数据库字节数与磁盘字节数）：备份是最后一道防线，先删了就没得救
+    - 本次救回数据的副本来自 `.api-old-<时间戳>/data/`（部署切换留下的旧后端目录）：**别急着删 `.api-old-*`**
+    - 磁盘满时后端 `node_modules` 也会不完整（本次是 0 个包），服务只是靠老进程的内存活着 —— **重启服务前先 `npm install --omit=dev`**
+
 ---
 
 ## 6. 常用命令

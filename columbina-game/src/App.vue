@@ -19,6 +19,7 @@ import stageMusicThree from '../p/audio/stage-03.opus'
 import stageMusicFour from '../p/audio/stage-04.opus'
 import ticTacToeBoard from '../p/event/tictactoe-board.webp'
 import { reportBestScore, reportBoardResult } from './gameScore.js'
+import RankBoard from './components/RankBoard.vue'
 import gomokuBoard from '../p/event/gomoku-board.webp'
 import stageOne from '../p/stages/01.jpg'
 import stageTwo from '../p/stages/02.jpg'
@@ -494,6 +495,21 @@ function openRunner() {
   })
 }
 
+/* ---------------- 排行榜弹窗 ---------------- */
+const rankGame = ref('')
+const rankLabel = ref('')
+
+function openRank(game, label) {
+  playSfx('ui')
+  rankGame.value = game
+  rankLabel.value = label || ''
+}
+
+function closeRank() {
+  playSfx('ui')
+  rankGame.value = ''
+}
+
 function openBoard(kind) {
   playSfx('ui')
   playVoice(VOICE_EVENTS.BOARD_ENTER)
@@ -869,9 +885,12 @@ onBeforeUnmount(() => {
                   <h2>云隙轻歌</h2>
                   <p>陪哥伦比娅轻盈起飞，在云隙之间延续她的歌。</p>
                 </div>
-                <button class="enter-button" type="button" @click.stop="openGame">
-                  开始游戏 <span>↗</span>
-                </button>
+                <div class="card-actions">
+                  <button class="rank-button" type="button" @click.stop="openRank('flight', '云隙轻歌')">排行榜</button>
+                  <button class="enter-button" type="button" @click.stop="openGame">
+                    开始游戏 <span>↗</span>
+                  </button>
+                </div>
               </div>
             </article>
 
@@ -907,9 +926,12 @@ onBeforeUnmount(() => {
                   <h2>无尽巡游</h2>
                   <p>踏过月岩与冰晶，在一段、二段、三段跳之间找到属于她的节奏。</p>
                 </div>
-                <button class="enter-button" type="button" @click.stop="openRunner">
-                  开始游戏 <span>↗</span>
-                </button>
+                <div class="card-actions">
+                  <button class="rank-button" type="button" @click.stop="openRank('runner', '无尽巡游')">排行榜</button>
+                  <button class="enter-button" type="button" @click.stop="openRunner">
+                    开始游戏 <span>↗</span>
+                  </button>
+                </div>
               </div>
             </article>
 
@@ -928,7 +950,10 @@ onBeforeUnmount(() => {
               </div>
               <div class="card-body">
                 <div><p class="card-number">DREAM 03 · PVE</p><h2>月亮棋</h2><p>棋盘只保留最近五枚棋子，每一步都可能改写局面。</p></div>
-                <button class="enter-button" type="button" @click.stop="openBoard('tictactoe')">找哥伦比娅下棋 <span>↗</span></button>
+                <div class="card-actions">
+                  <button class="rank-button" type="button" @click.stop="openRank('tictactoe', '月亮棋')">排行榜</button>
+                  <button class="enter-button" type="button" @click.stop="openBoard('tictactoe')">找哥伦比娅下棋 <span>↗</span></button>
+                </div>
               </div>
             </article>
 
@@ -947,7 +972,10 @@ onBeforeUnmount(() => {
               </div>
               <div class="card-body">
                 <div><p class="card-number">DREAM 04 · PVE</p><h2>星月五子棋</h2><p>在十五路棋盘上连成五子，与哥伦比娅来一局。</p></div>
-                <button class="enter-button" type="button" @click.stop="openBoard('gomoku')">找哥伦比娅下棋 <span>↗</span></button>
+                <div class="card-actions">
+                  <button class="rank-button" type="button" @click.stop="openRank('gomoku', '星月五子棋')">排行榜</button>
+                  <button class="enter-button" type="button" @click.stop="openBoard('gomoku')">找哥伦比娅下棋 <span>↗</span></button>
+                </div>
               </div>
             </article>
 
@@ -1130,5 +1158,23 @@ onBeforeUnmount(() => {
       </div>
     </section>
   </main>
+
+  <!-- 排行榜弹窗：大厅每张卡片的「排行榜」按钮打开 -->
+  <RankBoard :open="!!rankGame" :game="rankGame" :label="rankLabel" @close="closeRank" />
   </div>
 </template>
+
+<style scoped>
+/* 大厅卡片底部：「排行榜」+「开始游戏 / 找哥伦比娅下棋」 */
+.card-actions{display:flex;flex:0 0 auto;align-items:center;gap:16px}
+.rank-button{
+  border:1px solid rgba(218,237,255,.42);border-radius:999px;padding:8px 16px;cursor:pointer;
+  background:rgba(125,197,255,.1);color:rgba(239,244,255,.86);
+  font-family:var(--serif);font-size:12px;letter-spacing:.14em;transition:.28s ease;
+}
+.rank-button:hover{color:#101b47;background:#fff;border-color:#fff}
+@media (max-width:520px){
+  .card-actions{gap:10px}
+  .rank-button{padding:7px 12px;font-size:11px;letter-spacing:.1em}
+}
+</style>

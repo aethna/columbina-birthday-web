@@ -282,15 +282,17 @@ SRC="$STAGE/server"
 [ -f "$SRC/index.js" ] || { echo "[remote] 校验失败: 缺 server/index.js"; exit 21; }
 [ -d "$SRC/lib" ]      || { echo "[remote] 校验失败: 缺 server/lib";      exit 22; }
 
-echo "[remote] 备份后端(不含 node_modules)"
-tar -czf "/root/api-backup-$TS.tgz" --exclude=./node_modules -C "$API" . \
+echo "[remote] 备份后端(不含 node_modules 与 data；附件体积大且切换时本就会保留)"
+tar -czf "/root/api-backup-$TS.tgz" --exclude=./node_modules --exclude=./data -C "$API" . \
   && echo "[remote] 备份完成: /root/api-backup-$TS.tgz" || echo "[remote] 备份失败(继续)"
 
 echo "[remote] 切换后端目录（保留线上 data/ 与 node_modules/）"
 mv "$API" "$OLD"
 mv "$SRC" "$API"
-cp -a "$OLD/data" "$API/data"
-cp -a "$OLD/node_modules" "$API/node_modules"
+# data / node_modules 用硬链接复制(cp -al)：同分区秒完成、不占额外空间。
+# 老的 cp -a 会在磁盘空间不足时写出一堆 0 字节附件（2026-10-10 实际踩过，附件全废）
+cp -al "$OLD/data" "$API/data"
+cp -al "$OLD/node_modules" "$API/node_modules"
 chown -R www:www "$API"
 
 echo "[remote] 安装依赖 (--omit=dev)"
