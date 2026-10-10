@@ -10,6 +10,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "render:tile-guide": "node scripts/render-tile-guide-assets.mjs",
     "test": "vitest run",
     "lint": "eslint ."
   },

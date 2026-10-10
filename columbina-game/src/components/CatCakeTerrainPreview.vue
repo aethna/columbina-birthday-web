@@ -22,7 +22,9 @@ const props = defineProps({
   focusPosition: { type: Object, default: null },
   mechanismEvents: { type: Array, default: () => [] },
   live: { type: Boolean, default: false },
+  guideMode: { type: Boolean, default: false },
 })
+const emit = defineEmits(['guideTilesReady'])
 
 const canvas = ref(null)
 const previewShell = ref(null)
@@ -43,6 +45,9 @@ const mechanismInstances = []
 let resizeObserver
 let animationFrame = 0
 let isUnmounted = false
+let guideAssetsReady = false
+let guideModelDimensionsReady = false
+let guideTilesEmitted = false
 
 const TOP = new THREE.Color('#b891bb')
 const SIDE = new THREE.Color('#714d72')
@@ -131,8 +136,9 @@ function topColorsForTile(tile, heightColor, ambientOcclusion) {
 function heightAt(map, x, z) {
   if (x < 0 || x >= map.width || z < 0 || z >= map.height) return 0
   const tile = map.tiles[z][x]
-  // H0 is still a playable ground block; only pits and walls leave a gap.
-  if (!tile || tile.terrainType === 'pit' || tile.terrainType === 'wall') return 0
+  // Guide renders a blocked wall cell as the same terrain block used by the
+  // map so its legend has a visible tile; live gameplay keeps walls empty.
+  if (!tile || tile.terrainType === 'pit' || (tile.terrainType === 'wall' && !props.guideMode)) return 0
   return Math.max(1, tile.baseHeight + 1)
 }
 
@@ -794,6 +800,7 @@ async function loadMechanismAssets() {
       console.warn(`无法加载${keys[index]}模型`, result.reason)
     }
   })
+  guideAssetsReady = true
   if (!isUnmounted) renderTerrain()
 }
 
@@ -805,7 +812,12 @@ function fitCamera(map) {
   const heightProjection = Math.sqrt(3) / 2
   const projectedWidth = map.width + 2
   const visibleDepth = props.live ? Math.min(16, map.height) : map.height
-  const projectedHeight = visibleDepth * tilt + 2.5 * (modelSize.y / modelSize.x) * heightProjection + 2
+  const guideTerrainHeight = props.guideMode
+    ? Math.max(...map.flatTiles.map((tile) => heightAt(map, tile.position.x, tile.position.y))) * (modelSize.y / modelSize.x)
+    : 0
+  const projectedHeight = props.guideMode
+    ? (map.height - 1) * tilt + guideTerrainHeight * heightProjection + 1.4
+    : visibleDepth * tilt + 2.5 * (modelSize.y / modelSize.x) * heightProjection + 2
   camera.left = -aspect
   camera.right = aspect
   camera.top = 1
@@ -822,6 +834,41 @@ function fitCamera(map) {
   camera.updateProjectionMatrix()
 }
 
+function emitGuideTileImages() {
+  if (!props.guideMode || guideTilesEmitted || !guideAssetsReady || !guideModelDimensionsReady || !canvas.value) return
+  const source = canvas.value
+  const pixelRatio = source.width / Math.max(1, source.clientWidth)
+  const images = {}
+  Array.from({ length: 10 }, (_, index) => index).forEach((index) => {
+    const sampleX = 1 + index * 3
+    const tile = props.map.tiles[1][sampleX]
+    if (!tile) return
+    const isPit = index === 2
+    const cropWidth = Math.round((isPit ? 240 : 160) * pixelRatio)
+    const cropHeight = Math.round((isPit ? 240 : 200) * pixelRatio)
+    const cropTop = Math.round((isPit ? cropHeight / 2 : 105) * pixelRatio)
+    const blockHeight = heightAt(props.map, tile.position.x, tile.position.y) * (modelSize.y / modelSize.x)
+    const worldPosition = new THREE.Vector3(
+      tile.position.x + 0.5 - props.map.width / 2,
+      blockHeight,
+      tile.position.y + 0.5 - props.map.height / 2,
+    ).project(camera)
+    const centerX = Math.round((worldPosition.x * 0.5 + 0.5) * source.width)
+    const centerY = Math.round((-worldPosition.y * 0.5 + 0.5) * source.height)
+    const crop = document.createElement('canvas')
+    crop.width = cropWidth
+    crop.height = cropHeight
+    const context = crop.getContext('2d')
+    if (!context) return
+    const cropX = THREE.MathUtils.clamp(centerX - cropWidth / 2, 0, source.width - cropWidth)
+    const cropY = THREE.MathUtils.clamp(centerY - cropTop, 0, source.height - cropHeight)
+    context.drawImage(source, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight)
+    images[`guide-${index}`] = crop.toDataURL('image/png')
+  })
+  guideTilesEmitted = true
+  emit('guideTilesReady', images)
+}
+
 function updateCameraPose(map, immediate = false) {
   const visibleDepth = props.live ? Math.min(16, map.height) : map.height
   const desiredZ = props.live && props.focusPosition
@@ -832,7 +879,10 @@ function updateCameraPose(map, immediate = false) {
     )
     : 0
   cameraFocusZ = immediate ? desiredZ : THREE.MathUtils.lerp(cameraFocusZ, desiredZ, 0.08)
-  const center = new THREE.Vector3(0, 0.6, cameraFocusZ)
+  const guideCenterY = props.guideMode
+    ? Math.max(...map.flatTiles.map((tile) => heightAt(map, tile.position.x, tile.position.y) * (modelSize.y / modelSize.x))) * 0.5
+    : 0.6
+  const center = new THREE.Vector3(0, guideCenterY, cameraFocusZ)
   // 正面斜俯视：由 Top-down 仅沿 X 轴朝正 Z 方向倾斜30°，让较大的地图Y（底部起点）落在画面下方，Yaw和Roll保持为0。
   camera.position.set(center.x, center.y + 20, center.z + 20 * Math.tan(THREE.MathUtils.degToRad(30)))
   camera.lookAt(center)
@@ -866,6 +916,7 @@ function renderTerrain() {
   processedMechanismEvents = props.mechanismEvents.length
   fitCamera(props.map)
   renderer.render(scene, camera)
+  emitGuideTileImages()
 }
 
 function resize() {
@@ -885,12 +936,16 @@ function loadModelDimensions() {
     const box = new THREE.Box3().setFromObject(gltf.scene)
     const size = box.getSize(new THREE.Vector3())
     if (size.x > 0 && size.y > 0 && size.z > 0) modelSize = { x: size.x, y: size.y, z: size.z }
+    guideModelDimensionsReady = true
     gltf.scene.traverse((object) => {
       if (!object.isMesh) return
       object.geometry?.dispose()
       if (Array.isArray(object.material)) object.material.forEach((material) => material.dispose())
       else object.material?.dispose()
     })
+    renderTerrain()
+  }, undefined, () => {
+    guideModelDimensionsReady = true
     renderTerrain()
   })
 }
@@ -915,7 +970,7 @@ onMounted(async () => {
   keyLight.shadow.normalBias = 0.035
   keyLight.shadow.radius = 2.5
   scene.add(keyLight)
-  renderer = new THREE.WebGLRenderer({ canvas: canvas.value, alpha: true, antialias: true })
+  renderer = new THREE.WebGLRenderer({ canvas: canvas.value, alpha: true, antialias: true, preserveDrawingBuffer: props.guideMode })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75))
   renderer.outputColorSpace = THREE.SRGBColorSpace
   renderer.shadowMap.enabled = true
@@ -929,21 +984,23 @@ onMounted(async () => {
   renderTerrain()
   loadModelDimensions()
   loadMechanismAssets()
-  new THREE.TextureLoader().load(props.spriteUrl, (texture) => {
-    texture.colorSpace = THREE.SRGBColorSpace
-    spriteTexture = texture
-    syncOpponentSpriteTextures()
-    renderTerrain()
-  })
+  if (!props.guideMode) {
+    new THREE.TextureLoader().load(props.spriteUrl, (texture) => {
+      texture.colorSpace = THREE.SRGBColorSpace
+      spriteTexture = texture
+      syncOpponentSpriteTextures()
+      renderTerrain()
+    })
+  }
   const animate = (timeMs) => {
     syncMechanismEvents(timeMs)
     updateMechanismFrames(timeMs)
     syncCatSprites(timeMs)
     updateCameraPose(props.map)
     renderer.render(scene, camera)
-    animationFrame = requestAnimationFrame(animate)
+    if (!props.guideMode) animationFrame = requestAnimationFrame(animate)
   }
-  animationFrame = requestAnimationFrame(animate)
+  if (!props.guideMode) animationFrame = requestAnimationFrame(animate)
 })
 
 watch(() => props.map, () => renderTerrain())
@@ -975,13 +1032,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="previewShell" class="terrain-preview-shell" aria-label="正面斜俯视合并地形预览">
-    <canvas ref="canvas" class="terrain-preview-canvas" role="img" aria-label="当前地图的合并地形"></canvas>
+  <div ref="previewShell" class="terrain-preview-shell" :class="{ 'terrain-preview-guide': guideMode }" :aria-label="guideMode ? '地图图例方块渲染源' : '正面斜俯视合并地形预览'">
+    <canvas ref="canvas" class="terrain-preview-canvas" role="img" :aria-label="guideMode ? '地图图例方块渲染源' : '当前地图的合并地形'"></canvas>
   </div>
 </template>
 
 <style scoped>
 .terrain-preview-shell{width:100%;min-width:0;height:560px;overflow:auto;border:1px solid rgba(223,238,255,.2);background:radial-gradient(circle at 50% 42%,rgba(153,111,176,.22),transparent 58%),linear-gradient(145deg,#17182c,#0c1026 72%);scrollbar-color:rgba(185,217,255,.45) rgba(7,12,31,.4)}
 .terrain-preview-canvas{display:block;width:920px;min-width:920px;height:560px}
+.terrain-preview-guide{position:fixed;top:0;left:-10000px;width:2400px!important;min-width:2400px!important;height:420px!important;overflow:hidden;opacity:0;pointer-events:none}.terrain-preview-guide .terrain-preview-canvas{width:2400px;min-width:2400px;height:420px}
 @container app (max-width:800px){.terrain-preview-shell{height:520px}.terrain-preview-canvas{width:820px;min-width:820px;height:520px}}
 </style>

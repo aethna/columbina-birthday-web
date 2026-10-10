@@ -16,6 +16,16 @@ import springModelUrl from '../../p/cat-cake-race/弹簧-动画.gltf?url'
 import pistonModelUrl from '../../p/cat-cake-race/活塞-动画.gltf?url'
 import spikeModelUrl from '../../p/cat-cake-race/地刺.gltf?url'
 import bombModelUrl from '../../p/cat-cake-race/牵引炸弹.gltf?url'
+import tileGuideNormalUrl from '../../p/cat-cake-race/tile-guide/normal.png?url'
+import tileGuideWallUrl from '../../p/cat-cake-race/tile-guide/wall.png?url'
+import tileGuidePitUrl from '../../p/cat-cake-race/tile-guide/pit.png?url'
+import tileGuideSpikesUrl from '../../p/cat-cake-race/tile-guide/spikes.png?url'
+import tileGuideGlueUrl from '../../p/cat-cake-race/tile-guide/glue.png?url'
+import tileGuideSpringUrl from '../../p/cat-cake-race/tile-guide/spring.png?url'
+import tileGuidePistonUrl from '../../p/cat-cake-race/tile-guide/piston.png?url'
+import tileGuideBombUrl from '../../p/cat-cake-race/tile-guide/bomb.png?url'
+import tileGuideCheckpointUrl from '../../p/cat-cake-race/tile-guide/checkpoint.png?url'
+import tileGuideFinishUrl from '../../p/cat-cake-race/tile-guide/finish.png?url'
 import {
   AI_DIFFICULTY,
   CONTROLLER_TYPE,
@@ -25,6 +35,7 @@ import {
   createPlayableRace,
 } from '../games/catCakeRace/domain.js'
 import { createDesignedMaps, createRandomizedMap } from '../games/catCakeRace/maps.js'
+import { tileGuideMap } from '../games/catCakeRace/tileGuideMap.js'
 import CatCakeTerrainPreview from './CatCakeTerrainPreview.vue'
 
 defineEmits(['back'])
@@ -34,6 +45,18 @@ const mapOptions = Object.values(designedMaps)
 const selectedMapId = ref('')
 const generatedMap = ref(mapOptions[0])
 const selectedMap = computed(() => generatedMap.value)
+const tileGuideImages = [
+  tileGuideNormalUrl,
+  tileGuideWallUrl,
+  tileGuidePitUrl,
+  tileGuideSpikesUrl,
+  tileGuideGlueUrl,
+  tileGuideSpringUrl,
+  tileGuidePistonUrl,
+  tileGuideBombUrl,
+  tileGuideCheckpointUrl,
+  tileGuideFinishUrl,
+]
 const selectedDifficulty = ref('')
 const difficultyOptions = [
   { id: AI_DIFFICULTY.EASY, label: '轻松' },
@@ -359,20 +382,20 @@ onBeforeUnmount(() => {
 
       <details class="tile-guide">
         <summary>
-          <span><b>地块与机关图例</b><small>看懂每种地形效果，再决定路线</small></span>
+          <span><b>地块与机关图例</b><small>图片直接取自地图同款渲染，认清地形再规划路线</small></span>
           <span class="guide-toggle" aria-hidden="true">展开说明　＋</span>
         </summary>
         <div class="tile-guide-grid">
-          <div class="tile-guide-item"><span class="tile-mark tile-normal">平</span><span><b>普通地块 / 高台</b><small>普通地块可以通行；遇到高台时试着跳上去。</small></span></div>
-          <div class="tile-guide-item"><span class="tile-mark tile-wall">墙</span><span><b>墙壁</b><small>无法穿过，沿旁边绕行。</small></span></div>
-          <div class="tile-guide-item"><span class="tile-mark tile-pit">坑</span><span><b>坑</b><small>掉入后回到最近的复活线。</small></span></div>
-          <div class="tile-guide-item"><span class="tile-mark tile-spikes">刺</span><span><b>地刺</b><small>碰到后会回到最近的复活线；复活后会暂时安全。</small></span></div>
-          <div class="tile-guide-item"><span class="tile-mark tile-glue">黏</span><span><b>胶水</b><small>会黏住猫猫糕；连续按方向键尝试挣脱。</small></span></div>
-          <div class="tile-guide-item"><span class="tile-mark tile-spring">弹</span><span><b>弹簧</b><small>会朝指向把猫猫糕弹出去，可以借此找捷径。</small></span></div>
-          <div class="tile-guide-item"><span class="tile-mark tile-piston">推</span><span><b>活塞</b><small>启动时会沿指向推动附近猫猫糕，留意它的朝向。</small></span></div>
-          <div class="tile-guide-item"><span class="tile-mark tile-bomb">引</span><span><b>牵引炸弹</b><small>爆炸会牵引附近猫猫糕，可能改变落点和前进路线。</small></span></div>
-          <div class="tile-guide-item"><span class="tile-mark tile-checkpoint">存</span><span><b>复活线</b><small>横向发光线；经过后更新复活位置，失足时从这里继续。</small></span></div>
-          <div class="tile-guide-item"><span class="tile-mark tile-finish">终</span><span><b>终点</b><small>赛道顶部的终点线；抵达后完成比赛并显示名次。</small></span></div>
+          <div class="tile-guide-item"><img class="tile-picture" :src="tileGuideImages[0]" alt="地图中的普通高台" /><span><b>普通地块 / 高台</b><small>普通地块可以通行；遇到高台时试着跳上去。</small></span></div>
+          <div class="tile-guide-item"><img class="tile-picture" :src="tileGuideImages[1]" alt="地图中的墙壁地形" /><span><b>墙壁</b><small>无法穿过，沿旁边绕行。</small></span></div>
+          <div class="tile-guide-item"><img class="tile-picture" :src="tileGuideImages[2]" alt="方块围成一圈、中间是黑色坑洞" /><span><b>坑</b><small>掉入后回到最近的复活线。</small></span></div>
+          <div class="tile-guide-item"><img class="tile-picture" :src="tileGuideImages[3]" alt="地图中的地刺方块" /><span><b>地刺</b><small>碰到后会回到最近的复活线；复活后会暂时安全。</small></span></div>
+          <div class="tile-guide-item"><img class="tile-picture" :src="tileGuideImages[4]" alt="地图中的胶水方块" /><span><b>胶水</b><small>会黏住猫猫糕；连续按方向键尝试挣脱。</small></span></div>
+          <div class="tile-guide-item"><img class="tile-picture" :src="tileGuideImages[5]" alt="地图中的弹簧机关" /><span><b>弹簧</b><small>会朝指向把猫猫糕弹出去，可以借此找捷径。</small></span></div>
+          <div class="tile-guide-item"><img class="tile-picture" :src="tileGuideImages[6]" alt="地图中的活塞机关" /><span><b>活塞</b><small>启动时会沿指向推动附近猫猫糕，留意它的朝向。</small></span></div>
+          <div class="tile-guide-item"><img class="tile-picture" :src="tileGuideImages[7]" alt="地图中的牵引炸弹" /><span><b>牵引炸弹</b><small>爆炸会牵引附近猫猫糕，可能改变落点和前进路线。</small></span></div>
+          <div class="tile-guide-item"><img class="tile-picture" :src="tileGuideImages[8]" alt="地图中的复活线方块" /><span><b>复活线</b><small>横向发光线；经过后更新复活位置，失足时从这里继续。</small></span></div>
+          <div class="tile-guide-item"><img class="tile-picture" :src="tileGuideImages[9]" alt="地图中的终点方块" /><span><b>终点</b><small>赛道顶部的终点线；抵达后完成比赛并显示名次。</small></span></div>
         </div>
       </details>
 
@@ -480,8 +503,10 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .cat-race-page{min-height:var(--app-vh,800px);color:#f8fbff;background:radial-gradient(circle at 72% 8%,rgba(130,91,196,.3),transparent 30%),linear-gradient(145deg,#07142f,#11133b 58%,#25153d)}
+.tile-guide{border-color:rgba(135,211,255,.42);background:rgba(5,12,34,.76)}.tile-guide summary b{color:#fff;font-size:15px}.tile-guide summary small{color:#d4e5ff;font-size:12px}.guide-toggle{color:#b4f0ff;font-size:12px}.tile-guide-grid{gap:10px}.tile-guide-item{min-height:90px;gap:13px;border-color:rgba(154,207,255,.25);background:rgba(13,25,59,.88)}.tile-picture{display:block;width:68px;height:68px;flex:0 0 68px;object-fit:contain;border:1px solid rgba(185,226,255,.38);border-radius:10px;background-color:rgba(7,14,34,.92);box-shadow:0 3px 12px rgba(0,0,0,.32)}.tile-guide-item>span:last-child{display:grid;gap:5px}.tile-guide-item b{color:#fff;font-size:14px}.tile-guide-item small{color:#d8e6fc;font-size:12px;line-height:1.55}
+@container app (max-width:800px){.tile-guide summary b{font-size:15px}.tile-guide summary small{font-size:12px}.tile-guide-item{gap:11px;padding:10px}.tile-picture{width:68px;height:68px;flex-basis:68px}.tile-guide-item b{font-size:14px}.tile-guide-item small{font-size:12px}}
 .race-quick-guide{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:-8px 0 12px;padding:13px 16px;border:1px solid rgba(169,221,255,.22);border-radius:12px;background:rgba(104,151,221,.09)}.guide-step{color:rgba(237,243,255,.78);font-size:12px;line-height:1.6}.guide-step b{display:block;margin-bottom:2px;color:#a9e7ff;font-size:10px;letter-spacing:.12em}
-.tile-guide{margin:0 0 22px;border:1px solid rgba(169,221,255,.2);border-radius:12px;background:rgba(8,17,47,.34)}.tile-guide summary{display:flex;min-height:58px;align-items:center;justify-content:space-between;gap:12px;padding:11px 16px;cursor:pointer;list-style:none}.tile-guide summary::-webkit-details-marker{display:none}.tile-guide summary:focus-visible{outline:2px solid #9fe5ff;outline-offset:3px;border-radius:10px}.tile-guide summary>span:first-child{display:grid;gap:3px}.tile-guide summary b{color:#e8f6ff;font-size:12px}.tile-guide summary small{color:rgba(225,239,255,.58);font-size:10px}.guide-toggle{flex:0 0 auto;color:#9fe5ff;font-size:10px}.guide-toggle::after{content:'＋';margin-left:5px}.tile-guide[open] .guide-toggle::after{content:'－'}.tile-guide-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:0 14px 14px}.tile-guide-item{display:flex;min-width:0;align-items:center;gap:10px;padding:10px;border:1px solid rgba(255,255,255,.09);border-radius:9px;background:rgba(255,255,255,.035)}.tile-guide-item>span:last-child{display:grid;gap:3px}.tile-guide-item b{color:#f1f7ff;font-size:11px}.tile-guide-item small{color:rgba(225,239,255,.58);font-size:10px;line-height:1.5}.tile-mark{display:grid;width:34px;height:34px;flex:0 0 34px;place-items:center;border:1px solid rgba(255,255,255,.22);border-radius:8px;color:#fff;font-size:11px;font-weight:700;text-shadow:0 1px 4px #111}.tile-normal{background:linear-gradient(145deg,#9383c9,#618cb2)}.tile-wall{background:repeating-linear-gradient(135deg,#58637b 0 5px,#30394f 5px 10px)}.tile-pit{background:#101522}.tile-spikes{background:linear-gradient(145deg,#d75b62,#81364f)}.tile-glue{background:linear-gradient(145deg,#9a9da6,#565d6b)}.tile-spring{background:linear-gradient(145deg,#69cdbd,#287e94)}.tile-piston{background:linear-gradient(145deg,#dca86a,#815d83)}.tile-bomb{background:linear-gradient(145deg,#202039,#7142a1)}.tile-checkpoint{background:linear-gradient(0deg,#29446b 0 42%,#8beaff 42% 56%,#29446b 56%)}.tile-finish{background:repeating-conic-gradient(#eaf5ff 0 25%,#233455 0 50%) 50%/12px 12px}
+.tile-guide{margin:0 0 22px;border:1px solid rgba(169,221,255,.2);border-radius:12px;background:rgba(8,17,47,.34)}.tile-guide summary{display:flex;min-height:58px;align-items:center;justify-content:space-between;gap:12px;padding:11px 16px;cursor:pointer;list-style:none}.tile-guide summary::-webkit-details-marker{display:none}.tile-guide summary:focus-visible{outline:2px solid #9fe5ff;outline-offset:3px;border-radius:10px}.tile-guide summary>span:first-child{display:grid;gap:3px}.tile-guide summary b{color:#e8f6ff;font-size:12px}.tile-guide summary small{color:rgba(225,239,255,.58);font-size:10px}.guide-toggle{flex:0 0 auto;color:#9fe5ff;font-size:10px}.guide-toggle::after{content:'＋';margin-left:5px}.tile-guide[open] .guide-toggle::after{content:'－'}.tile-guide-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:0 14px 14px}.tile-guide-item{display:flex;min-width:0;align-items:center;gap:10px;padding:10px;border:1px solid rgba(255,255,255,.09);border-radius:9px;background:rgba(255,255,255,.035)}.tile-guide-item>span:last-child{display:grid;gap:3px}.tile-guide-item b{color:#f1f7ff;font-size:11px}.tile-guide-item small{color:rgba(225,239,255,.58);font-size:10px;line-height:1.5}
 .cat-race-header{min-height:70px;padding:10px clamp(18px,4cqw,58px);display:grid;grid-template-columns:1fr auto 1fr;align-items:center;border-bottom:1px solid rgba(255,255,255,.15);background:rgba(5,11,34,.72);backdrop-filter:blur(18px)}
 .cat-back{justify-self:start;border:0;padding:8px 0;background:transparent;color:rgba(255,255,255,.76);cursor:pointer}.brand{display:flex;flex-direction:column;align-items:center;gap:3px}.brand small,.phase-tag{color:#9fe5ff;font-size:9px;letter-spacing:.2em}.brand strong{font-family:var(--serif);font-size:16px;letter-spacing:.13em}.header-status{justify-self:end;display:flex;align-items:center;gap:10px}.header-status b{font:600 14px/1 monospace;color:#fff}.header-status span{padding:7px 12px;border:1px solid rgba(169,232,255,.35);border-radius:999px;color:#bbecff;background:rgba(107,199,255,.08);font-size:11px}
 .cat-race-content{width:min(1180px,calc(100% - 34px));margin:0 auto;padding:clamp(32px,5cqw,64px) 0}.race-intro{display:flex;align-items:end;justify-content:space-between;gap:28px;margin-bottom:26px}.race-heading{display:flex;align-items:center;gap:clamp(14px,2.2cqw,26px)}.race-title-art{width:clamp(86px,10cqw,132px);height:clamp(86px,10cqw,132px);flex:0 0 auto;object-fit:contain;filter:drop-shadow(0 14px 24px rgba(2,7,28,.38))}.race-heading-copy{min-width:0}.phase-tag{margin:0 0 8px}.race-intro h1{margin:0 0 10px;font-family:var(--serif);font-size:clamp(38px,5cqw,60px);font-weight:600;letter-spacing:.08em}.race-heading-copy>p:last-child{max-width:720px;margin:0;color:rgba(237,243,255,.66);font-size:13px;line-height:1.8}.race-actions{display:flex;flex-shrink:0;gap:10px}.race-actions button{border:1px solid rgba(255,255,255,.65);border-radius:999px;padding:10px 20px;background:#f4f8ff;color:#101638;cursor:pointer}.race-actions .secondary{background:rgba(255,255,255,.06);color:#fff}.race-actions button:disabled{cursor:not-allowed;opacity:.4}
@@ -489,4 +514,6 @@ onBeforeUnmount(() => {
 .ready-overlay{place-items:center;pointer-events:auto}.ready-overlay button{margin-top:14px;border:1px solid rgba(255,255,255,.78);border-radius:999px;padding:11px 30px;background:#f4f8ff;color:#101638;font-weight:700;cursor:pointer;letter-spacing:.08em}.ready-overlay button:disabled{cursor:not-allowed;opacity:.45}
 .stack-overlay{inset:auto;top:50%;left:50%;width:auto;max-width:210px;padding:4px 8px;transform:translate(-50%,-50%);border-radius:999px;border-color:rgba(189,235,255,.36);background:rgba(19,30,69,.62);box-shadow:0 4px 15px rgba(0,0,0,.2);font:600 clamp(9px,1cqw,11px)/1.15 var(--serif);white-space:nowrap;text-shadow:0 1px 6px rgba(125,202,255,.55)}
 @container app (max-width:800px){.cat-race-header{grid-template-columns:1fr auto}.brand{display:none}.header-status{gap:5px}.header-status span{padding:6px 8px}.cat-race-content{width:min(100% - 20px,1180px)}.race-intro{align-items:start;flex-direction:column}.race-heading{align-items:flex-start}.race-title-art{width:78px;height:78px}.race-quick-guide{grid-template-columns:1fr;gap:7px;margin:-8px 0 10px;padding:11px 13px}.guide-step{font-size:11px;overflow-wrap:anywhere}.guide-step b{display:inline;margin:0 8px 0 0}.tile-guide{margin-bottom:16px}.tile-guide summary{min-height:54px;padding:10px 12px}.tile-guide-grid{grid-template-columns:1fr;gap:6px;padding:0 9px 10px}.tile-guide-item{gap:9px;padding:8px}.tile-guide-item small{font-size:10px}.stage-toolbar{align-items:start;flex-direction:column}.stage-meta{justify-content:flex-start}.stage-meta strong{text-align:left}.play-hud{grid-template-columns:1fr}.action-message{justify-self:stretch;text-align:center}.controls-card{flex-direction:column;justify-content:center;gap:8px}.direction-pad button{width:54px;height:48px;touch-action:manipulation}.control-copy{display:block;text-align:center}.control-copy p{max-width:320px;font-size:11px;line-height:1.55}}
+.race-quick-guide{border-color:rgba(242,151,192,.42);background:rgba(72,25,56,.88)}.guide-step{padding:9px 11px;border:1px solid rgba(255,181,210,.17);border-radius:9px;background:rgba(133,48,91,.34)}.tile-guide{border-color:rgba(242,151,192,.48);background:rgba(63,22,52,.92)}.tile-guide[open]{background:rgba(72,25,56,.94)}.tile-guide-item{border-color:rgba(255,181,210,.2);background:rgba(133,48,91,.32)}
+@container app (max-width:800px){.guide-step{padding:8px 10px}.tile-guide-item{padding:8px}}
 </style>
