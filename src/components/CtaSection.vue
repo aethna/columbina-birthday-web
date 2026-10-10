@@ -7,9 +7,7 @@
         <p>如果你也喜欢这位月之少女，欢迎加入这场企划——无论是投稿、赞助、留下祝福，还是仅仅在生日那天说一声「生日快乐」，都是月光的一部分。</p>
         <div class="cta-actions">
           <button class="btn" id="signupBtn" @click="$emit('signup')">我要参与 <span class="arr">→</span></button>
-          <!-- 前往会场：先不展示（QQ 登录门禁打通后再放回）
           <a class="btn" id="venueBtn" href="https://columbina520.com/venue/index.html" @click.prevent="$emit('venue')">前往会场 <span class="arr">→</span></a>
-          -->
           <button class="btn ghost" id="joinBtn" @click="$emit('join')">添加q群 <span class="arr">→</span></button>
         </div>
       </div>

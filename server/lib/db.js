@@ -131,6 +131,34 @@ const SCHEMA = [
      KEY idx_user (user_id),
      KEY idx_expires (expires_at)
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+  /* ---- 小游戏分数（绑定 QQ 访客账号；以后排行榜直接按 game + score 排序） ---- */
+  `CREATE TABLE IF NOT EXISTS game_scores (
+     user_id VARCHAR(32) NOT NULL,
+     game VARCHAR(32) NOT NULL,
+     score INT NOT NULL DEFAULT 0,
+     play_count INT NOT NULL DEFAULT 0,
+     best_single INT NOT NULL DEFAULT 0,
+     created_at DATETIME NOT NULL,
+     updated_at DATETIME NOT NULL,
+     PRIMARY KEY (user_id, game),
+     KEY idx_game_score (game, score)
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+  `CREATE TABLE IF NOT EXISTS game_score_logs (
+     id VARCHAR(32) NOT NULL PRIMARY KEY,
+     user_id VARCHAR(32) NOT NULL,
+     game VARCHAR(32) NOT NULL,
+     kind VARCHAR(8) NOT NULL,
+     difficulty VARCHAR(16) NULL,
+     outcome VARCHAR(16) NULL,
+     raw_score INT NOT NULL DEFAULT 0,
+     points INT NOT NULL DEFAULT 0,
+     ip VARCHAR(64) NULL,
+     created_at DATETIME NOT NULL,
+     KEY idx_user_game (user_id, game, created_at),
+     KEY idx_created (created_at)
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 ];
 
 /* 已有库的增量变更（CREATE TABLE IF NOT EXISTS 不会加列） */
@@ -539,6 +567,63 @@ async function purgeUserSessions() {
   return res.affectedRows || 0;
 }
 
+/* ------------------------------------------------------------ 小游戏分数 */
+
+async function getGameScore(userId, game) {
+  const [rows] = await get().query(
+    'SELECT * FROM game_scores WHERE user_id = ? AND game = ? LIMIT 1',
+    [userId, game]
+  );
+  return rows[0] || null;
+}
+
+async function listGameScores(userId) {
+  const [rows] = await get().query('SELECT * FROM game_scores WHERE user_id = ? ORDER BY game', [userId]);
+  return rows;
+}
+
+/**
+ * 记一次成绩并更新汇总（一个用户一个游戏一行）。
+ * kind='best'：取历史最高、不累加（云隙轻歌 / 无尽巡游）
+ * kind='sum' ：累加已折算好的 points（月亮棋 / 星月五子棋）
+ * 返回更新后的汇总行。
+ */
+async function addGameScore(row) {
+  if (row.kind === 'best') {
+    await get().query(
+      `INSERT INTO game_scores (user_id, game, score, play_count, best_single, created_at, updated_at)
+       VALUES (?,?,?,1,?,?,?)
+       ON DUPLICATE KEY UPDATE
+         score = GREATEST(score, VALUES(score)),
+         best_single = GREATEST(best_single, VALUES(best_single)),
+         play_count = play_count + 1,
+         updated_at = VALUES(updated_at)`,
+      [row.userId, row.game, row.rawScore, row.rawScore, now(), now()]
+    );
+  } else {
+    await get().query(
+      `INSERT INTO game_scores (user_id, game, score, play_count, best_single, created_at, updated_at)
+       VALUES (?,?,?,1,?,?,?)
+       ON DUPLICATE KEY UPDATE
+         score = score + VALUES(score),
+         best_single = GREATEST(best_single, VALUES(best_single)),
+         play_count = play_count + 1,
+         updated_at = VALUES(updated_at)`,
+      [row.userId, row.game, row.points, row.points, now(), now()]
+    );
+  }
+  return getGameScore(row.userId, row.game);
+}
+
+async function addGameScoreLog(row) {
+  await get().query(
+    `INSERT INTO game_score_logs (id, user_id, game, kind, difficulty, outcome, raw_score, points, ip, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    [row.id, row.userId, row.game, row.kind, row.difficulty || null, row.outcome || null,
+     Number(row.rawScore) || 0, Number(row.points) || 0, row.ip || null, now()]
+  );
+}
+
 module.exports = {
   loadConfig, readAdminSecret, init, get, now,
   createUpload, getUpload, touchUpload, findUploadByNameSize, staleUploads, dropUpload,
@@ -551,4 +636,5 @@ module.exports = {
   createSession, getSession, deleteSession, purgeSessions, revokeUserSessions,
   getQqUserByOpenid, getQqUserById, upsertQqUser, countQqUsers,
   createUserSession, getUserSession, deleteUserSession, purgeUserSessions,
+  getGameScore, listGameScores, addGameScore, addGameScoreLog,
 };

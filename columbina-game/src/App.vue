@@ -18,6 +18,7 @@ import stageMusicTwo from '../p/audio/stage-02.opus'
 import stageMusicThree from '../p/audio/stage-03.opus'
 import stageMusicFour from '../p/audio/stage-04.opus'
 import ticTacToeBoard from '../p/event/tictactoe-board.webp'
+import { reportBestScore, reportBoardResult } from './gameScore.js'
 import gomokuBoard from '../p/event/gomoku-board.webp'
 import stageOne from '../p/stages/01.jpg'
 import stageTwo from '../p/stages/02.jpg'
@@ -543,10 +544,12 @@ function reloadBoard() {
   nextTick(() => window.scrollTo({ top: 0, behavior: 'instant' }))
 }
 
-function saveBoardResult({ game, outcome }) {
+function saveBoardResult({ game, outcome, difficulty }) {
   if (!boardStats.value[game]) boardStats.value[game] = { wins: 0, losses: 0, draws: 0 }
   boardStats.value[game][outcome] += 1
   localStorage.setItem('columbina-board-stats', JSON.stringify(boardStats.value))
+  /* 与 QQ 账号绑定：胜 3 分 / 负 1 分 / 平 0 分，再乘难度倍数（倍数与判定都在后端） */
+  reportBoardResult(game, outcome, difficulty)
 }
 
 function returnToLobby() {
@@ -646,6 +649,8 @@ function endGame() {
     bestScore.value = score.value
     localStorage.setItem('columbina-best', String(score.value))
   }
+  /* 云隙轻歌：跟 QQ 账号绑定，后端取历史最高（不累加） */
+  reportBestScore('flight', score.value)
 }
 
 function gameLoop(timestamp) {

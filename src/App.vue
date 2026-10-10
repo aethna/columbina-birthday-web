@@ -83,10 +83,8 @@ function go(next) {
 
 const GATE_TARGET = { game: '/game/index.html', venue: '/venue/index.html', signup: '/#/signup' }
 
-/* 门禁开关（当前：不与登录挂钩）：
-   false = 小游戏 / 会场 / 报名都能直接进，只有主动点右上角「登录」才进登录界面；
-   改成 true = 恢复「未登录先拦下」的门禁。 */
-const GATE_ENABLED = false
+/* 门禁开关：true = 未登录点「小游戏 / 前往会场 / 我要参与」会先被引导到登录页 */
+const GATE_ENABLED = true
 
 /** 未登录 → 去登录页并记住目标；已登录 → 直接放行 */
 function gate(action) {
