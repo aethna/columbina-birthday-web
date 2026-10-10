@@ -83,29 +83,25 @@ function go(next) {
 
 const GATE_TARGET = { game: '/game/index.html', venue: '/venue/index.html', signup: '/#/signup' }
 
-/* 门禁开关：true = 未登录点「小游戏 / 前往会场 / 我要参与」会先被引导到登录页 */
+/* 门禁开关：true = 未登录点「小游戏 / 前往会场」会先被引导到登录页。
+   注意：「我要参与」/ 报名页始终不需要登录（不跟账号绑定），不参与门禁判断。 */
 const GATE_ENABLED = true
 
-/** 未登录 → 去登录页并记住目标；已登录 → 直接放行 */
+/** 未登录 → 去登录页并记住目标；已登录 → 直接放行；报名页不受门禁影响 */
 function gate(action) {
+  if (action === 'signup') { go('signup'); return }
   const target = GATE_TARGET[action] || '/'
   if (GATE_ENABLED && !user.value) {
     pendingTarget.value = target
     go('login')
     return
   }
-  if (action === 'signup') go('signup')
-  else window.location.href = target
+  window.location.href = target
 }
 
-/* 直接敲 #/signup 或登录返回时的兜底：登录态一确定就复查视图 */
+/* 登录返回后的兜底：登录态一确定就复查视图（报名页不拦） */
 watch([view, ready], ([v, r]) => {
   if (!r) return
-  if (v === 'signup' && !user.value && GATE_ENABLED) {
-    pendingTarget.value = '/#/signup'
-    go('login')
-    return
-  }
   if (v === 'login' && user.value) {
     const t = pendingTarget.value
     pendingTarget.value = ''
