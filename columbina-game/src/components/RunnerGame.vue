@@ -16,6 +16,7 @@ import { collidesWithAlpha, loadAlphaMask } from '../games/alphaCollision.js'
 import { playSfx } from '../games/sound.js'
 import { setBgm } from '../games/bgm.js'
 import { playVoice, stopVoice, VOICE_EVENTS } from '../games/voice.js'
+import { reportBestScore } from '../gameScore.js'
 
 const emit = defineEmits(['back'])
 
@@ -419,6 +420,8 @@ function endGame() {
     bestScore.value = score.value
     localStorage.setItem('columbina-runner-best', String(score.value))
   }
+  /* 无尽巡游：跟 QQ 账号绑定，后端取历史最高（不累加） */
+  reportBestScore('runner', score.value)
 }
 
 function updateScore() {

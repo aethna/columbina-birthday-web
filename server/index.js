@@ -54,6 +54,23 @@ const MEMBER_TTL_HOURS = Math.max(1, Number(cfg.userSessionTTLHours || 168));
 const QQ_STATES = new Map();
 const QQ_STATE_TTL_MS = 10 * 60 * 1000;
 
+/* ---- 小游戏计分规则（服务端权威，前端只上报原始事实） ----
+   best 型：云隙轻歌 / 无尽巡游 —— 取历史最高，不累加
+   sum  型：月亮棋 / 星月五子棋 —— 胜 3 分、负 1 分、平 0 分，再乘难度倍数后累加
+   提瓦特战力党 / 娅娅猫向前冲：不计分（不放进这张表即可） */
+const GAME_RULES = {
+  flight: { kind: 'best', label: '云隙轻歌' },
+  runner: { kind: 'best', label: '无尽巡游' },
+  tictactoe: { kind: 'sum', label: '月亮棋' },
+  gomoku: { kind: 'sum', label: '星月五子棋' },
+};
+const DIFFICULTY_MULT = { easy: 1, medium: 2, hard: 3 };
+const BOARD_POINTS = { wins: 3, losses: 1, draws: 0 };
+const MAX_RAW_SCORE = 100000;
+/* 同一用户同一游戏 5 秒内重复上报视为重复提交（累加型尤其怕这个） */
+const SCORE_DEDUPE_MS = 5 * 1000;
+const gameScoreAt = new Map();
+
 /* ------------------------------------------------------------ 小工具 */
 
 function json(res, code, payload) {
@@ -644,6 +661,76 @@ function requireUser(me, res) {
   return true;
 }
 
+/* ---------------- 小游戏分数 ---------------- */
+
+/** 上报一局成绩：跑分类报原始分；棋盘类报胜负 + 难度，分数由服务端算 */
+async function handleGameScore(req, res) {
+  const me = await resolveUser(req);
+  if (requireUser(me, res)) return;
+
+  const body = await readJsonBody(req);
+  const game = String(body.game || '');
+  const rule = GAME_RULES[game];
+  if (!rule) return json(res, 400, { ok: false, error: '这个游戏不计分' });
+
+  const dedupeKey = `${me.user.id}|${game}`;
+  if (Date.now() - (gameScoreAt.get(dedupeKey) || 0) < SCORE_DEDUPE_MS) {
+    return json(res, 200, { ok: true, ignored: true, error: '重复提交已忽略' });
+  }
+
+  let rawScore = 0;
+  let points = 0;
+  let outcome = null;
+  let difficulty = null;
+
+  if (rule.kind === 'best') {
+    rawScore = Math.floor(Number(body.score) || 0);
+    if (!(rawScore > 0) || rawScore > MAX_RAW_SCORE) {
+      return json(res, 400, { ok: false, error: '分数不合法' });
+    }
+    points = rawScore;
+  } else {
+    outcome = String(body.outcome || '');
+    if (!(outcome in BOARD_POINTS)) return json(res, 400, { ok: false, error: '对局结果不合法' });
+    difficulty = String(body.difficulty || 'medium');
+    if (!(difficulty in DIFFICULTY_MULT)) difficulty = 'medium';
+    points = BOARD_POINTS[outcome] * DIFFICULTY_MULT[difficulty];
+    if (points <= 0) return json(res, 200, { ok: true, ignored: true, error: '本局不计分' });
+  }
+
+  gameScoreAt.set(dedupeKey, Date.now());
+  const summary = await db.addGameScore({
+    userId: me.user.id, game, kind: rule.kind, points, rawScore,
+  });
+  await db.addGameScoreLog({
+    id: auth.newId(16), userId: me.user.id, game, kind: rule.kind,
+    difficulty, outcome, rawScore, points, ip: clientIp(req),
+  });
+  console.log(`[game] ${rule.label} user=${me.user.id} +${points}${difficulty ? ` (${difficulty})` : ''} 累计=${summary.score}`);
+  return json(res, 200, { ok: true, game, points, total: Number(summary.score) });
+}
+
+/** 我的分数（先给验证与后续排行榜用） */
+async function handleGameMe(req, res) {
+  const me = await resolveUser(req);
+  if (!me) return json(res, 200, { ok: true, loggedIn: false, scores: [], total: 0 });
+  const rows = await db.listGameScores(me.user.id);
+  const scores = rows.map((r) => ({
+    game: r.game,
+    label: (GAME_RULES[r.game] || {}).label || r.game,
+    score: Number(r.score),
+    playCount: Number(r.play_count),
+    bestSingle: Number(r.best_single),
+    updatedAt: r.updated_at,
+  }));
+  return json(res, 200, {
+    ok: true,
+    loggedIn: true,
+    scores,
+    total: scores.reduce((n, s) => n + s.score, 0),
+  });
+}
+
 /* ---------------- 投稿列表 / 详情 ---------------- */
 
 async function handleAdminList(req, res, url) {
@@ -905,6 +992,10 @@ const ROUTES = [
   ['GET', /^\/api\/auth\/qq\/callback\/?$/, async (req, res, m, url) => handleQqCallback(req, res, url), null],
   ['GET', /^\/api\/auth\/me\/?$/, handleUserMe, null],
   ['POST', /^\/api\/auth\/logout\/?$/, handleUserLogout, null],
+
+  /* 小游戏分数（需登录 cookie） */
+  ['POST', /^\/api\/game\/score\/?$/, handleGameScore, null],
+  ['GET', /^\/api\/game\/me\/?$/, handleGameMe, null],
 
   /* 管理端 */
   ['POST', /^\/api\/admin\/login\/?$/, handleLogin, null],

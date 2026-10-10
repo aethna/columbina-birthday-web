@@ -63,7 +63,7 @@ function recordResult() {
   playSfx(outcome === 'wins' ? 'win' : outcome === 'losses' ? 'lose' : 'draw')
   if (outcome === 'wins') playVoice(VOICE_EVENTS.BOARD_PLAYER_WIN)
   else if (outcome === 'losses') playVoice(VOICE_EVENTS.BOARD_COLUMBINA_WIN)
-  emit('result', { game: props.kind, outcome })
+  emit('result', { game: props.kind, outcome, difficulty: difficulty.value })
 }
 
 function getTicTacToeWorkerMove(aiState, level, signal) {
