@@ -624,6 +624,42 @@ async function addGameScoreLog(row) {
   );
 }
 
+/** 排行榜前 N 名（并列时先到先得：同分按更新时间早的排前面） */
+async function topGameScores(game, limit) {
+  const [rows] = await get().query(
+    `SELECT g.user_id, g.score, g.play_count, u.nickname, u.avatar
+       FROM game_scores g
+       JOIN qq_users u ON u.id = g.user_id
+      WHERE g.game = ? AND g.score > 0
+      ORDER BY g.score DESC, g.updated_at ASC
+      LIMIT ?`,
+    [game, Number(limit) || 10]
+  );
+  return rows;
+}
+
+/** 某人在某个游戏的名次与总人数（没成绩时 rank=0） */
+async function gameScoreRank(game, userId) {
+  const [mine] = await get().query(
+    'SELECT score FROM game_scores WHERE user_id = ? AND game = ? LIMIT 1',
+    [userId, game]
+  );
+  if (!mine.length) return { score: 0, rank: 0, total: 0 };
+  const [better] = await get().query(
+    'SELECT COUNT(*) AS n FROM game_scores WHERE game = ? AND score > ?',
+    [game, mine[0].score]
+  );
+  const [total] = await get().query(
+    'SELECT COUNT(*) AS n FROM game_scores WHERE game = ? AND score > 0',
+    [game]
+  );
+  return {
+    score: Number(mine[0].score),
+    rank: Number(better[0].n) + 1,
+    total: Number(total[0].n),
+  };
+}
+
 module.exports = {
   loadConfig, readAdminSecret, init, get, now,
   createUpload, getUpload, touchUpload, findUploadByNameSize, staleUploads, dropUpload,
@@ -637,4 +673,5 @@ module.exports = {
   getQqUserByOpenid, getQqUserById, upsertQqUser, countQqUsers,
   createUserSession, getUserSession, deleteUserSession, purgeUserSessions,
   getGameScore, listGameScores, addGameScore, addGameScoreLog,
+  topGameScores, gameScoreRank,
 };

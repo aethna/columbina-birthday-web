@@ -710,8 +710,7 @@ async function handleGameScore(req, res) {
   return json(res, 200, { ok: true, game, points, total: Number(summary.score) });
 }
 
-/** 我的分数（先给验证与后续排行榜用） */
-async function handleGameMe(req, res) {
+/** 我的分数（先给验证与后续排行榜用） */async function handleGameMe(req, res) {
   const me = await resolveUser(req);
   if (!me) return json(res, 200, { ok: true, loggedIn: false, scores: [], total: 0 });
   const rows = await db.listGameScores(me.user.id);
@@ -729,6 +728,46 @@ async function handleGameMe(req, res) {
     scores,
     total: scores.reduce((n, s) => n + s.score, 0),
   });
+}
+
+/**
+ * 排行榜：前 10 名 + 自己的名次。
+ * 看榜不需要登录；登录了才附带「你自己」那一段。
+ * 名次按分数降序（同分先达到的靠前），百分位 = ceil(名次 / 有成绩人数 × 100)。
+ */
+async function handleGameLeaderboard(req, res, url) {
+  const game = String(url.searchParams.get('game') || '');
+  const rule = GAME_RULES[game];
+  if (!rule) return json(res, 400, { ok: false, error: '这个游戏没有排行榜' });
+
+  const rows = await db.topGameScores(game, 10);
+  const top = rows.map((r, i) => ({
+    rank: i + 1,
+    nickname: r.nickname || '匿名旅行者',
+    avatar: r.avatar || '',
+    score: Number(r.score),
+  }));
+
+  let me = { loggedIn: false };
+  const who = await resolveUser(req);
+  if (who) {
+    const s = await db.gameScoreRank(game, who.user.id);
+    if (s.rank > 0 && s.total > 0) {
+      const percent = Math.max(1, Math.ceil((s.rank / s.total) * 100));
+      me = {
+        loggedIn: true,
+        score: s.score,
+        rank: s.rank,
+        total: s.total,
+        inTop: s.rank <= top.length,
+        percent,
+      };
+    } else {
+      me = { loggedIn: true, score: 0, rank: 0, total: 0, inTop: false, percent: 0 };
+    }
+  }
+
+  return json(res, 200, { ok: true, game, label: rule.label, top, me });
 }
 
 /* ---------------- 投稿列表 / 详情 ---------------- */
@@ -996,6 +1035,7 @@ const ROUTES = [
   /* 小游戏分数（需登录 cookie） */
   ['POST', /^\/api\/game\/score\/?$/, handleGameScore, null],
   ['GET', /^\/api\/game\/me\/?$/, handleGameMe, null],
+  ['GET', /^\/api\/game\/leaderboard\/?$/, async (req, res, m, url) => handleGameLeaderboard(req, res, url), null],
 
   /* 管理端 */
   ['POST', /^\/api\/admin\/login\/?$/, handleLogin, null],
