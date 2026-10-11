@@ -27,6 +27,8 @@ import stageThree from '../p/stages/03.jpg'
 import stageFour from '../p/stages/04.jpg'
 import characterRun from '../p/columbina-run-transparent.webp'
 import catRaceTitle from '../p/cat-cake-race/标题.png'
+import matchThreeBoard from '../p/match-three/board/board-8x8.png'
+import matchThreeGemOne from '../p/match-three/tiles/normal/gem-01.png'
 import ticTacToeWorkerUrl from './games/ticTacToe.worker.js?worker&url'
 import gomokuWorkerUrl from './games/gomoku.worker.js?worker&url'
 import { playSfx } from './games/sound.js'
@@ -48,6 +50,7 @@ const RunnerGame = defineAsyncComponent(() => import('./components/RunnerGame.vu
 const BoardGame = defineAsyncComponent(() => import('./components/BoardGame.vue'))
 const TeyvatDiceGame = defineAsyncComponent(() => import('./components/TeyvatDiceGame.vue'))
 const CatCakeRaceGame = defineAsyncComponent(() => import('./components/CatCakeRaceGame.vue'))
+const MatchThreeGame = defineAsyncComponent(() => import('./components/MatchThreeGame.vue'))
 
 const eventLogo = isEnglish ? './english-logo.png' : eventLogoZh
 
@@ -184,6 +187,7 @@ function applyBgm() {
   else if (screen.value === 'board') setBgm(stageMusicThree)
   else if (screen.value === 'dice') setBgm(stageMusicThree)
   else if (screen.value === 'catRace') setBgm(stageMusicThree)
+  else if (screen.value === 'matchThree') setBgm(stageMusicThree)
 }
 watch([screen, () => Math.floor(score.value / 10)], applyBgm, { immediate: true })
 function preloadStage(index) { const image = new Image(); image.src = stageBackgrounds[index % stageBackgrounds.length] }
@@ -553,6 +557,13 @@ function openCatCakeRace() {
   screen.value = 'catRace'
   nextTick(() => window.scrollTo({ top: 0, behavior: 'instant' }))
 }
+function openMatchThree() {
+  playSfx('ui')
+  stopVoice()
+  cancelAnimationFrame(animationFrame)
+  screen.value = 'matchThree'
+  nextTick(() => window.scrollTo({ top: 0, behavior: 'instant' }))
+}
 
 /* 五子棋重开会重挂棋盘组件（避免残局/语音状态残留） */
 function reloadBoard() {
@@ -853,8 +864,8 @@ onBeforeUnmount(() => {
 
         <div id="games" class="lobby-content">
           <div class="section-heading">
-            <div><p class="eyebrow">DREAM ARCADE · 05</p><h1>月下游廊</h1></div>
-            <p class="intro">选择一段梦境，与她一同飞行、奔跑，或在月色中落下一枚棋子。</p>
+            <div><p class="eyebrow">DREAM ARCADE · 07</p><h1>月下游廊</h1></div>
+            <p class="intro">选择一段梦境，与她一同飞行、奔跑、落下一枚棋子，或交换一枚月光方块。</p>
           </div>
 
           <div class="game-grid" aria-label="小游戏列表">
@@ -1036,6 +1047,30 @@ onBeforeUnmount(() => {
                 </button>
               </div>
             </article>
+            <article
+              class="game-card featured match-three-card"
+              role="button"
+              tabindex="0"
+              @click="openMatchThree"
+              @keydown.enter="openMatchThree"
+              @keydown.space.prevent="openMatchThree"
+            >
+              <div class="card-art match-three-card-art game-cover" :style="{ backgroundImage: 'linear-gradient(rgba(5, 11, 38, .2), rgba(5, 11, 38, .42)), url(' + matchThreeBoard + ')' }">
+                <span class="match-three-card-glow"></span>
+                <img class="match-three-gem gem-center" :src="matchThreeGemOne" alt="" draggable="false" />
+                <span class="play-orbit"><span>07</span><b>进入</b></span>
+              </div>
+              <div class="card-body">
+                <div>
+                  <p class="card-number">DREAM 07 · MATCH THREE</p>
+                  <h2>月下消消乐</h2>
+                  <p>在八乘八棋盘交换六种角色方块，组合消除并触发特别效果。</p>
+                </div>
+                <button class="enter-button" type="button" @click.stop="openMatchThree">
+                  开始游戏 <span>↗</span>
+                </button>
+              </div>
+            </article>
           </div>
 
           <section class="lobby-stats" aria-label="我的棋类战绩">
@@ -1131,6 +1166,7 @@ onBeforeUnmount(() => {
       <RunnerGame v-else-if="screen === 'runner'" key="runner" @back="returnToLobby" />
       <TeyvatDiceGame v-else-if="screen === 'dice'" key="dice" @back="closeDice" />
       <CatCakeRaceGame v-else-if="screen === 'catRace'" key="catRace" @back="returnToLobby" />
+      <MatchThreeGame v-else-if="screen === 'matchThree'" key="matchThree" @back="returnToLobby" />
       <BoardGame v-else :key="`board-${boardKind}-${boardSessionKey}`" :kind="boardKind" @back="closeBoard" @reload="reloadBoard" @result="saveBoardResult" />
     </Transition>
 

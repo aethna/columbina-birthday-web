@@ -268,3 +268,9 @@ html:not(.app-scale-on) .asset-loader{
   inset:0;
   height:auto;
 }
+/* DREAM 07 · 月下消消乐的棋盘与角色方块封面 */
+.match-three-card-art{display:grid;place-items:center;background-position:center;background-size:100% 100%;background-repeat:no-repeat;isolation:isolate}
+.match-three-card-glow{position:absolute;width:58%;aspect-ratio:1;border-radius:50%;background:#9bcfff;opacity:.24;filter:blur(62px)}
+.match-three-gem{position:absolute;z-index:2;bottom:7%;width:clamp(108px,13cqw,172px);height:auto;filter:drop-shadow(0 12px 16px rgba(0,6,29,.48));transition:transform .38s ease}
+.match-three-gem.gem-center{left:50%;z-index:3;transform:translateX(-50%) translateY(-10px) scale(1.08)}
+.match-three-card:hover .gem-center{transform:translateX(-50%) translateY(-17px) scale(1.12)}
