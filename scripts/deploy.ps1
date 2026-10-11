@@ -314,6 +314,26 @@ echo "[remote] API_DONE"
   if ($apiCode -eq '200') { Ok "后端 /api/health 200" } else { Warn "后端健康检查未通过（HTTP $apiCode），请查看 systemctl status $Service" }
 }
 
+# ============================================================ 5.5 清理旧备份
+# 每类只留最近 2 份：site-backup / site-dist / api-backup / api-src。
+# 2026-10-10 事故：备份堆到 16G 把磁盘写满，附件与 qq.json 被写坏，所以这里必须自动收口。
+if (-not $DryRun) {
+  Say "清理旧备份（每类只保留最近 2 份）"
+  $cleanTpl = @'
+removed=0
+for pat in site-backup site-dist api-backup api-src; do
+  for f in $(ls -t /root/$pat-*.tgz 2>/dev/null | tail -n +3); do
+    rm -f "$f" && removed=$((removed+1))
+  done
+done
+total=$(ls /root/*.tgz 2>/dev/null | wc -l)
+size=$(du -ch /root/*.tgz 2>/dev/null | tail -1 | cut -f1)
+echo "[remote] 清理完成：删除 $removed 个，现有 $total 个 / 共 $size"
+'@
+  $rc = Invoke-Remote -Script $cleanTpl
+  $rc.Output | ForEach-Object { if ($_ -match '^\[remote\]') { Ok ($_ -replace '^\[remote\]\s*','') } }
+}
+
 # ============================================================ 6. 小结
 Write-Host ""
 Say "完成（时间戳 $Ts）"
