@@ -134,8 +134,8 @@ export function hasLegalMove(board) {
     const y = Math.floor(index / MATCH_BOARD_SIZE)
     for (const next of [x + 1 < MATCH_BOARD_SIZE ? index + 1 : -1, y + 1 < MATCH_BOARD_SIZE ? index + MATCH_BOARD_SIZE : -1]) {
       if (next < 0) continue
-      // Any adjacent special can be activated by swapping, even if no match forms.
-      if (board[index]?.special || board[next]?.special) return true
+      // Only a color bomb can be activated by swapping without making a match.
+      if (board[index]?.special === 'color-bomb' || board[next]?.special === 'color-bomb') return true
       ;[board[index], board[next]] = [board[next], board[index]]
       const hasMatch = getMatchGroups(board).length > 0
       ;[board[index], board[next]] = [board[next], board[index]]
