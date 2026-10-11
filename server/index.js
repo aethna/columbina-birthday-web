@@ -55,12 +55,13 @@ const QQ_STATES = new Map();
 const QQ_STATE_TTL_MS = 10 * 60 * 1000;
 
 /* ---- 小游戏计分规则（服务端权威，前端只上报原始事实） ----
-   best 型：云隙轻歌 / 无尽巡游 —— 取历史最高，不累加
+   best 型：云隙轻歌 / 无尽巡游 / 月下消消乐（排位模式） —— 取历史最高，不累加
    sum  型：月亮棋 / 星月五子棋 —— 胜 3 分、负 1 分、平 0 分，再乘难度倍数后累加
-   提瓦特战力党 / 娅娅猫向前冲：不计分（不放进这张表即可） */
+   提瓦特战力党 / 娅娅猫向前冲 / 消消乐无尽模式：不计分（不放进这张表即可） */
 const GAME_RULES = {
   flight: { kind: 'best', label: '云隙轻歌' },
   runner: { kind: 'best', label: '无尽巡游' },
+  matchthree: { kind: 'best', label: '月下消消乐' },
   tictactoe: { kind: 'sum', label: '月亮棋' },
   gomoku: { kind: 'sum', label: '星月五子棋' },
 };

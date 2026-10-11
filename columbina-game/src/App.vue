@@ -1066,9 +1066,12 @@ onBeforeUnmount(() => {
                   <h2>月下消消乐</h2>
                   <p>在八乘八棋盘交换六种角色方块，组合消除并触发特别效果。</p>
                 </div>
-                <button class="enter-button" type="button" @click.stop="openMatchThree">
-                  开始游戏 <span>↗</span>
-                </button>
+                <div class="card-actions">
+                  <button class="rank-button" type="button" @click.stop="openRank('matchthree', '月下消消乐')">排行榜</button>
+                  <button class="enter-button" type="button" @click.stop="openMatchThree">
+                    开始游戏 <span>↗</span>
+                  </button>
+                </div>
               </div>
             </article>
           </div>

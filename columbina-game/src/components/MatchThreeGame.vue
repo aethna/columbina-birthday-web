@@ -9,6 +9,8 @@ import {
   MATCH_BOARD_SIZE,
 } from '../games/matchThreeEngine.js'
 
+import { reportBestScore } from '../gameScore.js'
+
 const emit = defineEmits(['back'])
 
 const normalModules = import.meta.glob('../../p/match-three/tiles/normal/gem-*.png', {
@@ -53,7 +55,7 @@ const toast = ref('')
 const endlessBest = ref(readEndlessBest())
 const moveLabel = computed(() => mode.value === 'ranked' ? moves.value : '∞')
 const modeTitle = computed(() => mode.value === 'ranked' ? '排位模式' : '无尽模式')
-const scoreTip = computed(() => mode.value === 'ranked' ? '30 步挑战 · 本局成绩暂不提交' : '无步数限制 · 成绩仅保存在本机')
+const scoreTip = computed(() => mode.value === 'ranked' ? '30 步挑战 · 成绩计入排行榜' : '无步数限制 · 成绩仅保存在本机')
 
 let toastTimer = 0
 let nextTileId = 0
@@ -344,9 +346,14 @@ async function selectCell(index) {
 }
 
 function finishGame() {
-  if (mode.value === 'endless' && score.value > endlessBest.value) {
-    endlessBest.value = score.value
-    writeEndlessBest(score.value)
+  if (mode.value === 'endless') {
+    if (score.value > endlessBest.value) {
+      endlessBest.value = score.value
+      writeEndlessBest(score.value)
+    }
+  } else {
+    /* 排位模式（30 步挑战）：成绩与 QQ 账号绑定，后端取历史最高；无尽模式无步数上限，不计入排行榜 */
+    reportBestScore('matchthree', score.value)
   }
   status.value = 'over'
   selectedIndex.value = null
@@ -389,7 +396,7 @@ onBeforeUnmount(() => window.clearTimeout(toastTimer))
       <div class="match-mode-cards">
         <button class="match-mode-card ranked-mode" type="button" @click="startMode('ranked')">
           <span class="mode-card-icon">30</span>
-          <span class="mode-card-copy"><small>RANKED CHALLENGE</small><strong>排位模式</strong><em>30 步挑战，结束后显示本局成绩。排行榜暂未接入。</em></span>
+          <span class="mode-card-copy"><small>RANKED CHALLENGE</small><strong>排位模式</strong><em>30 步挑战，结束后显示本局成绩，并计入排行榜。</em></span>
           <span class="mode-card-arrow">↗</span>
         </button>
         <button class="match-mode-card endless-mode" type="button" @click="startMode('endless')">
@@ -447,7 +454,7 @@ onBeforeUnmount(() => window.clearTimeout(toastTimer))
                 <p class="match-eyebrow">{{ mode === 'ranked' ? 'CHALLENGE COMPLETE' : 'ENDLESS COMPLETE' }}</p>
                 <h2>{{ mode === 'ranked' ? '挑战结束' : '本局结束' }}</h2>
                 <p class="match-final-score">{{ score.toLocaleString() }} <span>分</span></p>
-                <p v-if="mode === 'ranked'" class="match-result-note">本局成绩已记录在此页面，排行榜功能暂未接入。</p>
+                <p v-if="mode === 'ranked'" class="match-result-note">本局成绩已计入排行榜。</p>
                 <p v-else class="match-result-note">无尽模式成绩只保存在本机，不计入排名。</p>
                 <div class="match-result-actions">
                   <button class="match-primary-button" type="button" @click="startMode(mode)">再玩一局</button>
