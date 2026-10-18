@@ -120,8 +120,12 @@ export default class InteractPointSystem {
   rebuild(sceneId) {
     // 清掉旧的
     this.points.forEach((p) => {
+      // 图标上有 repeat:-1 的浮动 tween，只 destroy 不 kill 会留下永久 tween
+      if (p.icon) {
+        this.scene.tweens.killTweensOf(p.icon);
+        p.icon.destroy();
+      }
       if (p.marker) p.marker.destroy();
-      if (p.icon) p.icon.destroy();
       if (p.labelObj) p.labelObj.destroy();
     });
     this.points = [];

@@ -280,8 +280,8 @@ const photoClick = await p.evaluate(async () => {
   };
 });
 console.log('  ' + JSON.stringify(photoClick));
-ok(photoClick.overlayCount === 3 && photoClick.tex === 'assets/cutscene/photo-npc-ainuo.png',
-   `点「查看合影」→ 该 NPC 与哥伦比娅的【单独】合影（贴图 ${photoClick.tex}）`);
+ok(photoClick.overlayCount === 3 && /^assets\/cutscene\/photo-npc-ainuo-\d\.jpg$/.test(photoClick.tex || ''),
+   `点「查看合影」→ 该 NPC 与哥伦比娅的【单独】合影（随机变体，贴图 ${photoClick.tex}）`);
 ok(photoClick.dialogOpen === false, '对话框已自动收起，不会盖住插画');
 
 await sleep(500);
@@ -325,7 +325,8 @@ const assets = await p.evaluate(async () => {
   const out = [];
   for (const n of guests) {
     const slug = n.id.startsWith('npc-') ? n.id : `npc-${n.id}`;
-    const tex = `assets/cutscene/photo-${n.id}.png`;
+    // 2026-10-18：单人合影改成每人 3 张随机变体 photo-<id>-<k>.jpg
+    const texs = [1, 2, 3].map((k) => `assets/cutscene/photo-${n.id}-${k}.jpg`);
     // 立绘源文件是否同名可用（headless 里用 Image 探测，避免 404 静默）
     const portOk = await new Promise((res) => {
       const im = new Image();
@@ -333,13 +334,13 @@ const assets = await p.evaluate(async () => {
       im.onerror = () => res(null);
       im.src = `/assets/chars/${slug}-portrait.png`;
     });
-    out.push({ id: n.id, tex, loaded: window.__venueScene.textures.exists(tex), portrait: portOk });
+    out.push({ id: n.id, texs, loaded: texs.every((t) => window.__venueScene.textures.exists(t)), portrait: portOk });
   }
   return out;
 });
 console.log('\n===== ⑤ 合影素材 =====');
 ok(assets.length === 13, `受邀客人 ${assets.length} 位（空不算）`);
-ok(assets.every((a) => a.loaded), `13 张 photo-*.png 全部加载（缺 ${assets.filter((a) => !a.loaded).length}）`);
+ok(assets.every((a) => a.loaded), `13 位 × 3 张合影变体 photo-<id>-<k>.jpg 全部加载（缺 ${assets.filter((a) => !a.loaded).length}）`);
 ok(assets.every((a) => a.portrait && a.portrait[0] > 100),
    `13 位都有正脸立绘 chars/npc-<id>-portrait.png（缺 ${assets.filter((a) => !a.portrait).length}）`);
 

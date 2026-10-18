@@ -67,8 +67,6 @@ export default class SceneManager {
    *   - 落点在一个障碍格里（玩家一进去就被卡住）
    */
   sanitizeArrive(arriveAt, cfg) {
-    const valid = (v) => Number.isFinite(v) && v >= 0 && v < (v < 100 ? 1e9 : 1e9);
-
     const okTile = (t) =>
       t && Number.isFinite(t.tileX) && Number.isFinite(t.tileY) &&
       t.tileX >= 0 && t.tileX < SCENE_COLS &&
@@ -326,8 +324,7 @@ export default class SceneManager {
   }
 
   /** 清空当前场景的所有对象 */
-  clear() {
-    this.objects.forEach((o) => {
+  clear() {    this.objects.forEach((o) => {
       if (o && o.destroy) o.destroy();
     });
     this.objects = [];

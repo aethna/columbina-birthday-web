@@ -3,12 +3,12 @@
 // 覆盖 2026-10-04 用户反馈的四个问题里的三个「流程类」问题：
 //   1. 书桌提示里出现函数源码（`(s) => ...`）—— 这里断言 npcTip 的文本里不含 '=>'
 //   2. 信纸逐行显示的速度（那部分靠 _shoot-letter.mjs 截图看，这里只保证不被改回来）
-//   3. 「投递邀请函」走到信箱前没提示、按 E 无反应、任务卡死
+//   3. 「投递邀请函」走到信箱前没提示、按 F 无反应、任务卡死
 //
 // 检查项：
 //   1. 写信环节：home 只有一个 ip-desk，开局一封都没写，提示文字是求值后的字符串
-//   2. 书桌写满 → 点消失、11 封信直接进怀里（不再有「按 E 收起来」这一步）
-//   3. 信箱投递：写满 11 封 → 信箱有提示 → 按 E 投递成功、主线完成（问题4 的回归测试）
+//   2. 书桌写满 → 点消失、11 封信直接进怀里（不再有「按 F 收起来」这一步）
+//   3. 信箱投递：写满 11 封 → 信箱有提示 → 按 F 投递成功、主线完成（问题4 的回归测试）
 //   4. 左下角初始化按钮：清存档 + 刷新，进度全部复位
 
 import puppeteer from 'puppeteer';
@@ -75,9 +75,9 @@ try {
   });
   const okState = r.hasDesk && !r.hasSplitTake && r.total === 11
     && r.written === 0 && r.onDesk === 0 && r.carried === 0 && !r.allWritten;
-  // ★ 问题1：提示文字必须是「✎ 窗前的书桌\n按 E 写邀请函（0/11）」，
+  // ★ 问题1：提示文字必须是「✎ 窗前的书桌\n按 F 写邀请函（0/11）」，
   //   不能把 quests.js 里的 (story) => '...' 函数原样打出来
-  const okTip = r.tip.includes('窗前的书桌') && r.tip.includes('按 E 写邀请函')
+  const okTip = r.tip.includes('窗前的书桌') && r.tip.includes('按 F 写邀请函')
     && r.tip.includes('0/11') && !r.tip.includes('=>');
   rec(1, '写信环节：书桌单点、开局空白、提示文字已求值（问题1）', okState && okTip,
       `home 交互点=${r.pts.map((x) => `${x.id}(${x.label})`).join('/')}  `
@@ -115,7 +115,7 @@ try {
   });
   const okBefore = !!r.before && r.before.label === '窗前的书桌'
     && r.before.hint.includes('写邀请函') && r.before.hint.includes('0/11') && r.before.icon === '✎';
-  // ★ 写满 11 封后书桌点应当【消失】（requires 不成立），不再有「桌上的邀请函 / 按 E 收起来」
+  // ★ 写满 11 封后书桌点应当【消失】（requires 不成立），不再有「桌上的邀请函 / 按 F 收起来」
   const okAfter = r.after === null;
   // ★ 信必须在 carried 里（写信过场的收归信封 = 收进怀里），不能留在桌上
   const okBooks = r.written === 11 && r.carried === 11 && r.onDesk === 0;
@@ -170,7 +170,7 @@ try {
     };
   });
 
-  // 3b. 按 E 投递
+  // 3b. 按 F 投递
   const done = await p.evaluate(async () => {
     const s = window.__venueScene;
     const Q = (await import('/src/quests.js')).QUESTS;
@@ -187,18 +187,18 @@ try {
   });
 
   const okSeen = !seen.missing && seen.available && seen.activeId === 'ip-mailbox'
-    && seen.label === '林间信箱' && seen.hint === '按 E 投递邀请函'
-    && seen.tip.includes('林间信箱') && seen.tip.includes('按 E 投递邀请函')
+    && seen.label === '林间信箱' && seen.hint === '按 F 投递邀请函'
+    && seen.tip.includes('林间信箱') && seen.tip.includes('按 F 投递邀请函')
     && !seen.tip.includes('=>');
   const okDone = done.delivered === true && done.state === 'completed'
     && done.counts.got === 1 && done.counts.need === 1;
-  rec(3, '信箱投递：写满 11 封后信箱有提示且按 E 投得出去（问题4 回归）',
+  rec(3, '信箱投递：写满 11 封后信箱有提示且按 F 投得出去（问题4 回归）',
       okSeen && okDone,
       `信箱点=${seen.missing ? '缺失' : `${seen.label} / ${seen.hint}`}  `
     + `可用=${seen.available} active=${seen.activeId} 提示=${JSON.stringify(seen.tip || '')}  `
     + `投递后 delivered=${done.delivered} main-deliver=${done.state} ${done.counts.got}/${done.counts.need}`);
 } catch (e) {
-  rec(3, '信箱投递：写满 11 封后信箱有提示且按 E 投得出去（问题4 回归）', false, e.message);
+  rec(3, '信箱投递：写满 11 封后信箱有提示且按 F 投得出去（问题4 回归）', false, e.message);
 }
 
 // ---------- 4. 初始化按钮 ----------
@@ -269,5 +269,8 @@ for (const r of results) {
   if (r.pass) passN++;
 }
 console.log(`\n${passN}/${results.length} 通过`);
+const failed = results.length - passN;
+if (failed) console.error(`\n${failed} 项未通过`);
+process.exitCode = failed ? 1 : 0;
 console.log('\n运行时报错:', errs.length ? [...new Set(errs)].slice(0, 4).join('\n') : '无');
 await b.close();

@@ -259,9 +259,8 @@ try {
 try {
   const r9 = await p.evaluate(async () => {
     const NPCS = (await import("/src/config.js")).NPCS;
-    const venueNpcs = NPCS.filter((n) => (n.scene || "venue") === "venue");
     const urls = [];
-    for (const n of venueNpcs) {
+    for (const n of NPCS) {
       urls.push({ name: n.name, kind: "立绘", url: n.sprite });
       urls.push({ name: n.name, kind: "头像", url: (n.portrait && n.portrait.url) || "" });
     }
@@ -275,10 +274,10 @@ try {
     }
     return { total: urls.length, bad };
   });
-  rec(9, "会场全部角色（13 位客人 + 空）的立绘与头像素材齐全", r9.bad.length === 0,
+  rec(9, "全部角色（13 位客人 + 空）的立绘与头像素材齐全", r9.bad.length === 0,
       `${r9.total} 个文件；缺失/报错 ${r9.bad.length} 个：${r9.bad.join(", ") || "无"}`);
 } catch (e) {
-  rec(9, "会场全部角色（13 位客人 + 空）的立绘与头像素材齐全", false, e.message);
+  rec(9, "全部角色（13 位客人 + 空）的立绘与头像素材齐全", false, e.message);
 }
 
 console.log("\n================ 核查结果 ================");
@@ -289,5 +288,10 @@ for (const r of results) {
   if (r.pass) passN++;
 }
 console.log(`\n${passN}/${results.length} 通过`);
+// ★ 2026-10-18：以前只打印通过数、永远 exit 0，FAIL 也当成成功（假绿）。
+//   现在失败即 exit 1，这个脚本才能真正当门禁用。
+const failed = results.length - passN;
+if (failed) console.error(`\n${failed} 项未通过`);
+process.exitCode = failed ? 1 : 0;
 console.log("\n运行时报错:", errs.length ? [...new Set(errs)].slice(0, 4).join("\n") : "无");
 await b.close();

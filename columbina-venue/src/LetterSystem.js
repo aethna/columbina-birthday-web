@@ -258,8 +258,10 @@ export default class LetterSystem {
     this._stopTyping();
     this._clearTimers();
     // 把还没显示的段落一次性补上（不展开打字，直接给全文，避免突变太生硬）
+    // ★ 2026-10-18：判断从 `>` 改为 `>=` —— 打字中按 Esc 时当前行只显示了半句，
+    //   旧写法会跳过它，半截句子直接折进信封。
     this.lineEls.forEach((el, i) => {
-      if (i > this.index) {
+      if (i >= this.index) {
         el.textContent = el.dataset.text || '';
         el.classList.add('show');
       }

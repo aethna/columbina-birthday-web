@@ -232,7 +232,7 @@ const t4 = await p.evaluate(async () => {
   const s = window.__venueScene;
   const { NPCS } = await import('/src/config.js');
   const guests = NPCS.filter((n) => n.guest);
-  const missing = guests.filter((n) => !s.textures.exists(`assets/cutscene/photo-${n.id}.png`)).map((n) => n.id);
+  const missing = guests.filter((n) => ![1, 2, 3].every((k) => s.textures.exists(`assets/cutscene/photo-${n.id}-${k}.jpg`))).map((n) => n.id);
 
   s.scenes.load('venue', { tileX: 20, tileY: 18 }, true);
   await new Promise((r) => setTimeout(r, 1400));
@@ -283,7 +283,7 @@ if (t4.hasLine) {
       overlayCount: (s.overlay || []).length,
       dialogOpen: s.dialog.isOpen(),
       npcName: npc.name,
-      texExists: s.textures.exists(`assets/cutscene/photo-${npc.id}.png`),
+      texExists: [1, 2, 3].every((k) => s.textures.exists(`assets/cutscene/photo-${npc.id}-${k}.jpg`)),
     };
   });
   console.log('  ' + JSON.stringify(t4b));

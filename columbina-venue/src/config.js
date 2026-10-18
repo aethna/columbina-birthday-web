@@ -219,7 +219,7 @@ export const NPCS = [
     id: 'npc-lynette',
     scene: 'pond',
     guest: true,
-    tileX: 2, tileY: 9,
+    tileX: 8, tileY: 14,
     name: '琳妮特',
     icon: '🐱',
     color: 0x9fb6d8,
@@ -239,7 +239,7 @@ export const NPCS = [
     id: 'npc-freminet',
     scene: 'grove',
     guest: true,
-    tileX: 32, tileY: 10,
+    tileX: 29, tileY: 10,
     name: '菲米尼',
     icon: '🤿',
     color: 0x7fd0c8,
@@ -411,7 +411,9 @@ export const PLAYER = {
 // ---------------------------------------------------------------------------
 export const INTERACT = {
   radius: 78,
-  key: 'E',
+  // 2026-10-18：从 'E' 改回 'F' —— 第 11 轮就把交互键改成 F 了，
+  // 但这里一直没跟着改，成了"文档是 F、配置是 E、代码硬编码 F"的三份真源。
+  key: 'F',
 };
 
 // ---------------------------------------------------------------------------

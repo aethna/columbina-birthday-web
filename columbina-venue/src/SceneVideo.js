@@ -36,10 +36,12 @@
 
 import { SCENE_W, SCENE_H } from './scenes.js';
 
-/** 有动态背景视频的场景。缺文件会自动退回静态图，不会报错。 */
+/**
+ * 有动态背景视频的场景。缺文件会自动退回静态图，不会报错。
+ */
 export const VIDEO_SCENES = new Set([
-  'home', 'mailbox', 'venue', 'icefield', 'pools',
-  'moonpath', 'starship', 'shallows', 'pond', 'grove',
+  'venue', 'home', 'icefield', 'grove', 'mailbox', 'pools',
+  'moonpath', 'starship', 'shallows', 'pond',
 ]);
 
 /** 静态图 depth=0，传送光圈标记 depth=2 —— 视频夹在 0 和 2 之间。 */

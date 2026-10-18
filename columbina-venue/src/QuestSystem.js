@@ -13,7 +13,13 @@
  *   openGame  打开小游戏
  *   collect   收集 N 个
  *
- * 进度存 localStorage，按日期分桶；"每日"任务次日自动重置。
+ * 进度存 localStorage，跨天保留。
+ *
+ * ★ 2026-10-18 修复：之前按日期整桶丢弃（date !== today 就返回全新存档），
+ *   会把 14 条一次性委托、q-party-cake 的 completed、点位采集登记
+ *   （takenPoints）全部清掉 —— 表现是跨午夜重载后结局任务重现、围桌散场、
+ *   已采点位又能再采；而背包（venue-items-v1）不分日期桶，造成两边不一致。
+ *   本作没有"每日任务"，所以不再按天重置，只更新日期戳。
  */
 
 import { QUESTS } from './quests.js';
@@ -60,12 +66,19 @@ export default class QuestSystem {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (parsed.date === todayKey()) return parsed;
+        if (parsed && typeof parsed === 'object') {
+          // 只刷新日期戳，不再丢弃进度（见文件头的 2026-10-18 说明）
+          if (parsed.date !== todayKey()) parsed.date = todayKey();
+          if (!parsed.states || typeof parsed.states !== 'object') parsed.states = {};
+          if (!parsed.counters || typeof parsed.counters !== 'object') parsed.counters = {};
+          if (!parsed.takenPoints || typeof parsed.takenPoints !== 'object') parsed.takenPoints = {};
+          return parsed;
+        }
       }
     } catch (e) {
       console.warn('读取任务进度失败，重新开始', e);
     }
-    return { date: todayKey(), states: {}, counters: {} };
+    return { date: todayKey(), states: {}, counters: {}, takenPoints: {} };
   }
 
   save() {

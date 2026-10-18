@@ -98,8 +98,52 @@ export default class VenueScene extends Phaser.Scene {
   }
 
   // ---------------------------------------------------------------------------
+  /**
+   * 2026-10-18 任务5：站立 idle 帧
+   *
+   *   原来 idle 用的是走路循环的第 0 帧（contact pose，一脚前一脚后），
+   *   所以松开 WASD 后会「定格在迈步」。这里：
+   *     - down  ：用 AI 重画的独立站立图（脚并拢、手自然下垂）
+   *     - left/right/up：用走路循环里腿部最收拢的那一帧（实测 col4 / col4 / col3）
+   *   帧号按每行 8 格算（DIR_ROW 顺序 down/left/right/up/...，见 characters.js）。
+   */
+  applyHeroIdleFrames() {
+    const key = this.playerInfo?.key || 'hero';
+    const cols = this.playerInfo?.cols || 8;
+
+    if (this.textures.exists('hero-stand')) {
+      this.anims.remove(`${key}-idle-down`);
+      this.anims.create({
+        key: `${key}-idle-down`,
+        frames: [{ key: 'hero-stand', frame: 0 }],
+        frameRate: 1,
+        repeat: -1,
+      });
+    } else {
+      console.warn('[动画] hero-stand.png 缺失，idle-down 继续用走路首帧');
+    }
+
+    const picks = { left: 4, right: 4, up: 3 };
+    Object.entries(picks).forEach(([dir, col]) => {
+      const animKey = `${key}-idle-${dir}`;
+      const row = DIR_ROW[dir];
+      if (row === undefined) return;
+      this.anims.remove(animKey);
+      this.anims.create({
+        key: animKey,
+        frames: [{ key, frame: row * cols + col }],
+        frameRate: 1,
+        repeat: -1,
+      });
+    });
+  }
+
   preload() {
     SCENES.forEach((s) => this.load.image(`scene-bg-${s.id}`, s.bg));
+
+    // ★ 2026-10-18 任务5：独立的正面站立帧（AI 重画，脚并拢、手垂）
+    //   只替换 idle-down；左右/背面用走路循环里最接近并腿的那一帧。
+    this.load.image('hero-stand', 'assets/chars-scene/hero-stand.png');
 
     // 动态壁纸用的水面波光帧（只对有水的那几个场景真正排队，见 LiveBackground.js）
     loadWaterFrames(this);
@@ -136,8 +180,11 @@ export default class VenueScene extends Phaser.Scene {
     //   在运行时多排队 8 张 1536×1024 纯属浪费带宽和显存。
     NPCS.forEach((n) => {
       if (!n.guest) return;
-      const tex = `assets/cutscene/photo-${n.id}.png`;
-      if (!this.textures.exists(tex)) this.load.image(tex, tex);
+      // 2026-10-18 任务5：每位客人 3 张变体（主角站姿随机），运行时随机抽一张
+      for (let k = 1; k <= 3; k++) {
+        const tex = `assets/cutscene/photo-${n.id}-${k}.jpg`;
+        if (!this.textures.exists(tex)) this.load.image(tex, tex);
+      }
     });
 
     preloadCharacters(this, [
@@ -177,6 +224,10 @@ export default class VenueScene extends Phaser.Scene {
       ...NPCS,
     ]);
     this.playerInfo = this.charInfo['player'];
+
+    // ★ 2026-10-18 任务5：停步不再是「迈步定格」
+    //   idle-down 换成独立的站立图；左右/背面取走路循环里最接近并腿的帧。
+    this.applyHeroIdleFrames();
 
     // ---- 玩家 ----
     this.player = this.physics.add.sprite(0, 0, this.playerInfo.key);
@@ -252,7 +303,7 @@ export default class VenueScene extends Phaser.Scene {
     // 互动键：F（2026-10-12 用户要求由 E 改为 F）。
     // ★ 字段名不再叫 keyE：名字必须跟着实际按键走，否则以后读代码的人会以为要按旧键。
     //   F1/F2 走的是 keydown-F1 / keydown-F2 独立事件，与这个 Key 对象互不干扰。
-    this.keyInteract = this.input.keyboard.addKey('F');
+    this.keyInteract = this.input.keyboard.addKey(INTERACT.key);
     this.keyQ = this.input.keyboard.addKey('Q');
     this.keyM = this.input.keyboard.addKey('M');
     // F1：切换可走区显示（调试用）
@@ -317,7 +368,7 @@ export default class VenueScene extends Phaser.Scene {
     window.addEventListener('venue:scene-changed', (e) => this.onSceneChanged(e.detail));
 
     this.scenes.load(SCENES[0].id, null, true);
-    this.physics.add.collider(this.player, this.scenes.getObstacleGroup());
+    this._obstacleCollider = this.physics.add.collider(this.player, this.scenes.getObstacleGroup());
 
     // ---- 交互点（要在场景加载后建）----
     // 第三个参数是任务系统 —— 交互点要能判断「这个委托做完了没」，
@@ -447,6 +498,9 @@ export default class VenueScene extends Phaser.Scene {
       const ty = d.tileY * TILE_SIZE + TILE_SIZE / 2;
 
       const sp = this.add.image(tx, ty, key).setOrigin(0.5, 1);
+      // 全图核对（toggleFullMap）要画道具点，需要格坐标；Phaser Image 本身没有
+      sp.tileX = d.tileX;
+      sp.tileY = d.tileY;
       // 按目标高度缩放
       const src = this.textures.get(key).getSourceImage();
       sp.setScale(d.h / src.height);
@@ -495,7 +549,9 @@ export default class VenueScene extends Phaser.Scene {
       // 动态背景视频层在 SceneManager.load() 里就已经挂好了，不用重复处理
       // 如果开着可走区显示，切场景后要重画
       if (this.walkDebug) { this.walkDebug.destroy(); this.walkDebug = null; this.toggleWalkDebug(); }
-      this.physics.add.collider(this.player, this.scenes.getObstacleGroup());
+      // 旧 collider 必须先销毁：obstacle 组是换场景重建的，不销毁会越积越多
+      if (this._obstacleCollider) this.physics.world.removeCollider(this._obstacleCollider);
+      this._obstacleCollider = this.physics.add.collider(this.player, this.scenes.getObstacleGroup());
       this.interactPoints.rebuild(this.scenes.current.id);
       this.spawnNpcsForCurrentScene();
       this.showSceneIntro();
@@ -750,7 +806,8 @@ export default class VenueScene extends Phaser.Scene {
     const s = Math.min((vw * 0.94) / img.width, (vh * 0.86) / img.height);
     img.setScale(s);
 
-    const tipObj = this.add.text(cx, cy + vh * 0.43, tip, {
+    // 提示条放画面顶部：原来放底部会压住拍立得的标题/副题
+    const tipObj = this.add.text(cx, cy - vh * 0.455, tip, {
       fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
       fontSize: '26px',
       color: '#ffe9b8',
@@ -812,7 +869,13 @@ export default class VenueScene extends Phaser.Scene {
    */
   showPhoto(npc) {
     if (!npc) return;
-    const tex = `assets/cutscene/photo-${npc.id}.png`;
+    // 2026-10-18 任务5：合影有 3 张变体（主角站姿随机），每次点开随机抽一张
+    const pool = [1, 2, 3]
+      .map((k) => `assets/cutscene/photo-${npc.id}-${k}.jpg`)
+      .filter((t) => this.textures.exists(t));
+    const tex = pool.length
+      ? pool[Math.floor(Math.random() * pool.length)]
+      : `assets/cutscene/photo-${npc.id}.png`;
     if (!this.showOverlay(tex, `与 ${npc.name} 的合影 —— 点击任意处收起`)) {
       this.toast('合影还没准备好，稍后再试');
       return;
@@ -1090,8 +1153,13 @@ export default class VenueScene extends Phaser.Scene {
    * 求出当前应该引导去哪
    * @returns {{x:number, y:number, crossScene:boolean}|null}
    */
-  getGuideTarget() {
+  getGuideTarget(questId = null) {
     const here = this.scenes.current ? this.scenes.current.id : 'venue';
+
+    // ★ 2026-10-18：点某条委托的「前往」时只算那一条的目标。
+    //   以前无论点哪条都走下面的「第一条 active」，多条委托时必指错。
+    const want = questId ? QUESTS.find((q) => q.id === questId) : null;
+    const mainRelevant = !questId || !!(want && want.special);
 
     // ---- 优先：主线剧情 ----
     // ★ 流程（v5）：写信 → 投递，只有两步。
@@ -1105,7 +1173,7 @@ export default class VenueScene extends Phaser.Scene {
     //   在第 1 封之后就引去信箱 —— 和用户反馈的"投递卡死"是同一类误导。
 
     // 步骤1：还没写完 → 去书桌
-    if (!this.story.allWritten) {
+    if (mainRelevant && !this.story.allWritten) {
       if (here === 'home') {
         return this.pointPos('ip-desk');
       }
@@ -1113,7 +1181,7 @@ export default class VenueScene extends Phaser.Scene {
     }
 
     // 步骤2：11 封都写好了但没投递 → 去信箱
-    if (!this.story.isDelivered) {
+    if (mainRelevant && !this.story.isDelivered) {
       if (here === 'mailbox') {
         return this.pointPos('ip-mailbox');
       }
@@ -1122,6 +1190,7 @@ export default class VenueScene extends Phaser.Scene {
 
     // ---- 其次：进行中的委托 ----
     const active = QUESTS.find((q) => {
+      if (questId && q.id !== questId) return false;
       const st = this.quests.getState(q);
       return (st === 'active' || st === 'ready') && !q.special;
     });
@@ -1220,7 +1289,7 @@ export default class VenueScene extends Phaser.Scene {
     // 委托没解锁前不指引（NPC 还没到场）
     const storyDone = this.story.allWritten && this.story.isDelivered;
     const available = storyDone
-      ? QUESTS.find((q) => this.quests.getState(q) === 'available' && !q.special)
+      ? QUESTS.find((q) => (!questId || q.id === questId) && this.quests.getState(q) === 'available' && !q.special)
       : null;
     if (available) {
       const npcDef = NPCS.find((n) => n.id === available.giverNpcId);
@@ -1570,7 +1639,13 @@ export default class VenueScene extends Phaser.Scene {
    */
   isBehindPartyTable() {
     if (!this.party || !this.player) return false;
-    return this.player.y < PARTY_TABLE.y + PARTY_TABLE.h;
+    // 2026-10-18：同时限制 x —— 以前只判 y，站在桌子左右两侧的远处
+    // 也会被强制 depth 430（画到桌子后面）。
+    return (
+      this.player.y < PARTY_TABLE.y + PARTY_TABLE.h
+      && this.player.x >= PARTY_TABLE.x
+      && this.player.x <= PARTY_TABLE.x + PARTY_TABLE.w
+    );
   }
 
   /** 更新影子位置（跟着主角脚底走） */
@@ -2486,7 +2561,7 @@ export default class VenueScene extends Phaser.Scene {
     //   真正的采集点在 pond / grove —— 于是「前往」会把玩家指去会场。
     //   现在一律用 getGuideTarget() 算出来的 sceneId（它走的是交互点/出口的真实位置），
     //   并且**无论同场景还是跨场景都报出地图名**。
-    const target = this.getGuideTarget();
+    const target = this.getGuideTarget(questId);
     if (!target) {
       this.toast('没有需要前往的地方');
       return;
@@ -2536,11 +2611,16 @@ export default class VenueScene extends Phaser.Scene {
         // 接任务时发放的东西（比如打水任务给一个空桶）
         if (q.onAcceptGive) this.giveItem(q.onAcceptGive.id, q.onAcceptGive.name);
         this.refreshQuestUI();
+      } else {
+        // 不提示的话，任务状态不匹配时按钮像"点了没反应"（2026-10-18）
+        this.toast('这条委托现在接不了（可能已经接过或已完成）');
       }
     } else if (action === 'deliver') {
       if (this.quests.deliver(q)) {
         this.gainToast(q.reward);
         this.refreshQuestUI();
+      } else {
+        this.toast('还不能交付：先完成目标，再回来找委托人');
       }
     }
   }
