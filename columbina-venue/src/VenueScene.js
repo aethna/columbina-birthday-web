@@ -111,30 +111,39 @@ export default class VenueScene extends Phaser.Scene {
     const key = this.playerInfo?.key || 'hero';
     const cols = this.playerInfo?.cols || 8;
 
-    if (this.textures.exists('hero-stand')) {
-      this.anims.remove(`${key}-idle-down`);
+    const makeIdle = (dir, texKey, frame = 0) => {
+      const animKey = `${key}-idle-${dir}`;
+      this.anims.remove(animKey);
       this.anims.create({
-        key: `${key}-idle-down`,
-        frames: [{ key: 'hero-stand', frame: 0 }],
+        key: animKey,
+        frames: [{ key: texKey, frame }],
         frameRate: 1,
         repeat: -1,
       });
+    };
+
+    if (this.textures.exists('hero-stand')) {
+      makeIdle('down', 'hero-stand');
     } else {
       console.warn('[动画] hero-stand.png 缺失，idle-down 继续用走路首帧');
     }
 
-    const picks = { left: 4, right: 4, up: 3 };
-    Object.entries(picks).forEach(([dir, col]) => {
-      const animKey = `${key}-idle-${dir}`;
+    // 2026-10-19：7 个非正向方向改用独立站立图（AI 重画 → build-hero-idle2.py 统一后处理）
+    // 缺图时回落到「该行最收拢的那一帧」，不会崩。
+    const IDLE_FALLBACK = { left: 4, right: 4, up: 3, downright: 0, downleft: 0, upright: 0, upleft: 0 };
+    Object.entries(IDLE_FALLBACK).forEach(([dir, col]) => {
       const row = DIR_ROW[dir];
       if (row === undefined) return;
-      this.anims.remove(animKey);
-      this.anims.create({
-        key: animKey,
-        frames: [{ key, frame: row * cols + col }],
-        frameRate: 1,
-        repeat: -1,
-      });
+      const tex = `hero-idle-${dir}`;
+      if (this.textures.exists(tex)) {
+        makeIdle(dir, tex);
+      } else {
+        if (!this._idleWarned) {
+          this._idleWarned = true;
+          console.warn('[动画] hero-idle-*.png 缺失，idle 回落走路帧');
+        }
+        makeIdle(dir, key, row * cols + col);
+      }
     });
   }
 
@@ -144,6 +153,11 @@ export default class VenueScene extends Phaser.Scene {
     // ★ 2026-10-18 任务5：独立的正面站立帧（AI 重画，脚并拢、手垂）
     //   只替换 idle-down；左右/背面用走路循环里最接近并腿的那一帧。
     this.load.image('hero-stand', 'assets/chars-scene/hero-stand.png');
+
+    // ★ 2026-10-19：7 个非正向方向的独立站立帧（0.5px 描边，与 sheet 同规格）
+    ['left', 'right', 'up', 'downright', 'downleft', 'upright', 'upleft'].forEach((d) => {
+      this.load.image(`hero-idle-${d}`, `assets/chars-scene/hero-idle-${d}.png`);
+    });
 
     // 动态壁纸用的水面波光帧（只对有水的那几个场景真正排队，见 LiveBackground.js）
     loadWaterFrames(this);
