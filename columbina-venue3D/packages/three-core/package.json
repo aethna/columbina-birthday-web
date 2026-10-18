@@ -1,0 +1,17 @@
+{
+  "name": "three-core",
+  "version": "0.1.0",
+  "type": "module",
+  "peerDependencies": {
+    "leva": ">=0.9.0",
+    "three": ">=0.182.0",
+    "zustand": ">=5.0.0",
+    "react": ">=19.0.0"
+  },
+  "devDependencies": {
+    "leva": "^0.9.35",
+    "three": "^0.182.0",
+    "zustand": "^5.0.0",
+    "@types/react": "^19.0.0"
+  }
+}

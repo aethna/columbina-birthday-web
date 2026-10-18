@@ -1,0 +1,70 @@
+import { useRef, useMemo } from 'react'
+import { useFrame, useThree } from '@react-three/fiber'
+import * as THREE from 'three/webgpu'
+import { useGridSnapping } from '../../core/utils/gridSnapping'
+import { GrassLOD } from './GrassLOD'
+import type { GrassProps } from './core/config'
+import { DEFAULT_BLADE_STEPS_PER_CELL } from './core/config'
+import { useGameStore } from '../../core/store/gameStore'
+import { useGrassUniforms } from './hooks/useGrassUniforms'
+import { useGrassCompute } from './hooks/useGrassCompute'
+
+export default function GrassWebGPU({ cullCamera, visible = true }: GrassProps = {} as GrassProps) {
+  const { camera: defaultCamera } = useThree()
+  const groupRef = useRef<THREE.Group>(null)
+
+  const cameraToUse = cullCamera || defaultCamera
+
+  const characterRef = useGameStore((state) => state.characterRef)
+
+  const characterPos = useMemo(() => new THREE.Vector3(), [])
+
+  const { uniforms, params } = useGrassUniforms()
+  const { lodBuffers, grassData } = useGrassCompute(uniforms, cameraToUse)
+
+  // Use centralized grid snapping hook
+  useGridSnapping({
+    camera: cameraToUse,
+    onSnap: ({ snappedX, snappedZ, currentCellX, currentCellZ }) => {
+      if (!groupRef.current) return;
+
+      groupRef.current.position.set(snappedX, 0, snappedZ)
+      groupRef.current.updateMatrixWorld(true)
+
+      if (groupRef.current) {
+        uniforms.compute.uGroupOffset.value.setFromMatrixPosition(groupRef.current.matrixWorld)
+        uniforms.material.uGroupOffset.value.copy(uniforms.compute.uGroupOffset.value)
+        if (uniforms.compute.uGridIndex) {
+          // Convert snap-cell index to blade-level index so the PCG seed
+          // stays aligned with the world position (snappedX = cellX * bladeStepsPerCell * BLADE_SPACING)
+          uniforms.compute.uGridIndex.value.set(
+            currentCellX * DEFAULT_BLADE_STEPS_PER_CELL,
+            currentCellZ * DEFAULT_BLADE_STEPS_PER_CELL,
+          )
+        }
+      }
+    },
+  })
+
+  useFrame(() => {
+    if (characterRef?.current) {
+      characterRef.current.getWorldPosition(characterPos);
+      uniforms.material.uCharacterWorldPos.value.copy(characterPos);
+      uniforms.compute.uCharacterWorldPos.value.copy(characterPos);
+    }
+  })
+
+  return (
+    <group ref={groupRef} visible={visible}>
+      {lodBuffers.map((lodBuffer) => (
+        <GrassLOD
+          key={`lod-${lodBuffer.segments}-${lodBuffer.minDistance}-${lodBuffer.maxDistance}`}
+          grassParams={params}
+          grassData={grassData}
+          lodBuffer={lodBuffer}
+          uniforms={uniforms.material}
+        />
+      ))}
+    </group>
+  )
+}
