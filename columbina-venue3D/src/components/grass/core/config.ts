@@ -4,8 +4,13 @@
 import { struct } from 'three/tsl'
 import { instancedArray, storage } from 'three/tsl'
 import * as THREE from 'three/webgpu'
+import { PRESET } from '../../../core/qualityPresets'
 
-export const DEFAULT_BLADES_PER_AXIS = 1024;
+// 2026-10-19：草叶密度随画质档位走（?quality=low|high|max，默认 high = 768²）。
+// 原版 1024² 保留在 max 档（?quality=max 回到改动前的观感）。
+// ⚠ 该值决定 grass compute 的 storage buffer 尺寸与 shader 常量，
+//   运行时不能热切换 —— 换档请重载页面。
+export const DEFAULT_BLADES_PER_AXIS = PRESET.bladesPerAxis;
 export const DEFAULT_GRASS_AREA_SIZE = 80;
 /** Number of blade spacings per grid snap step. gridCellSize = BLADE_SPACING * this. */
 export const DEFAULT_BLADE_STEPS_PER_CELL = 1;
