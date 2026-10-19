@@ -125,6 +125,16 @@ location /venue3D/ {
 2. **GitHub Release 附件**——打一个 `assets-v1.zip`，clone 后下载解包，有版本号、不进 git 历史；
 3. **线下传输**——网盘/微信直接发。
 
+> **实际已采用：方案 2（GitHub Release 附件）**（2026-10-19 落地）
+>
+> - 下载：<https://github.com/aethna/columbina-birthday-web/releases/tag/venue3d-assets-v1>
+> - 文件：`columbina-venue3D-assets-v1.zip`（306,110,433 字节 / 291.9 MB，zip 内 421 个条目）
+> - SHA256：`C5CE9F16E2AD57425556AF4260323213D313AB09822D1FB41BAC24181857AC06`
+> - 解压位置：解到 `columbina-venue3D/` 下即可（zip 内就是 `public/` 与 `src/assets/`）
+> - 校验：`sha256sum columbina-venue3D-assets-v1.zip` 应与上面一致
+>
+> 线上站点 <https://3d.columbina520.com/> 的运行时素材即来源于这个包。
+
 若选 1 或 2，建议仓库里保留一份 `assets-manifest.json`（文件名 + 大小 + sha256，几 KB 文本），
 用来校验「代码版本 ↔ 素材版本」是否错配。需要的话我们可以生成。
 
