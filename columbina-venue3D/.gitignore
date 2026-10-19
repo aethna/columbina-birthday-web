@@ -2,3 +2,8 @@
 node_modules/
 package-lock.json
 dist
+
+# 运行时素材（约 393 MB，不进 git，见本目录 README 第 5 节）
+# 解包自 columbina-venue3D-assets-v1.zip（SHA256 AA2BC735…39F84）
+public/
+src/assets/
