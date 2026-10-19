@@ -261,13 +261,10 @@
     #back-home .arw { transition: transform .15s; }
     #back-home:hover .arw { transform: translateX(-3px); }
 
-    /* 任务面板要避开返回按钮 */
-    #quest-panel { top: 62px; }
-
     /* ================= 任务面板 ================= */
     #quest-panel {
       position: fixed;
-      top: 16px; right: 16px;
+      top: 62px; right: 16px;   /* 62px：避开右上角的「返回」按钮（它 top:14、高约 42） */
       width: 290px;
       max-height: calc(100% - 200px);
       background: linear-gradient(180deg, rgba(20, 26, 38, .96), rgba(12, 16, 24, .96));
@@ -643,7 +640,7 @@
       color: #8b7a5d; letter-spacing: .5px;
     }
   </style>
-  <script type="module" crossorigin src="./assets/venue-D47v4Zdd.js"></script>
+  <script type="module" crossorigin src="./assets/venue-B1IAcjus.js"></script>
 </head>
 <body>
   <div id="game-root"></div>
@@ -967,13 +964,11 @@
     //   清掉之后重新加载，游戏自然从初始状态跑起来 ——
     //   NPC 不在场、道具没摆、任务全是初始态，一步到位。
     //
-    // 为什么用 localStorage.clear() 而不是逐个 removeItem：
-    //   游戏数据的键有 4 个（venue-quests-v2 / venue-story-v1 /
-    //   venue-props-v1 / venue-items-v1），而且以后还会加。
-    //   逐个删容易漏，漏一个就会"复位不干净"。
-    //   这个页面除了游戏数据没有任何别的东西要保留，所以整体清空最可靠。
-    //
-    // 加了二次确认：进度是玩家攒出来的，误点一下全没了太伤。
+    // 为什么按前缀删而不是 localStorage.clear()：
+    //   存档键有 4 个（venue-quests-v2 / venue-story-v1 / venue-props-v1 /
+    //   venue-items-v1），以后还会加 —— 所以按 `venue-` 前缀扫一遍，
+    //   既能一个不漏，又不会清掉同一域名下主站/其他页面的键。
+    //   （2026-10-18：以前用 clear() 会把同源其它游戏的进度一起清空。）
     // =====================================================================
     const resetBtn = document.getElementById('reset-btn');
     if (resetBtn) {
@@ -986,7 +981,12 @@
         if (!ok) return;
 
         try {
-          localStorage.clear();
+          const doomed = [];
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith('venue-')) doomed.push(k);
+          }
+          doomed.forEach((k) => localStorage.removeItem(k));
         } catch (e) {
           console.warn('清空存档失败', e);
         }
