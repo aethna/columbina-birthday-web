@@ -159,6 +159,17 @@ pwsh scripts/deploy.ps1 -DryRun         # 只构建/打包/上传/备份，不�
     - 本次救回数据的副本来自 `.api-old-<时间戳>/data/`（部署切换留下的旧后端目录）：**别急着删 `.api-old-*`**
     - 磁盘满时后端 `node_modules` 也会不完整（本次是 0 个包），服务只是靠老进程的内存活着 —— **重启服务前先 `npm install --omit=dev`**
 
+18. **子域 nginx 配置会污染主站站点根探测**（2026-10-22 实际事故）：
+    `scripts/deploy.ps1` 用 `grep -l "columbina520.com" /www/server/panel/vhost/nginx/*.conf | head -1` 找主站配置。
+    给 3D 会场加了 `3d.columbina520.com.conf` 之后，文件名里也含 `columbina520.com`，
+    而 `3d.` 按 ASCII 排在 `47.`（主站目录名）之前 → `head -1` 选中子域配置 →
+    **主站产物被解包进 `/www/wwwroot/3d.columbina520.com/`**，3D 的 `index.html`/`assets/` 被覆盖，
+    3D 站入口 JS 直接 404（**首页仍返回 200，很容易漏看**）。
+    处置与规矩：
+    - 探测已改为排除子域配置：`... | grep -v "\.${DOMAIN}\.conf\$" | head -1`
+    - **新增任何子域站点后，先跑一遍 `deploy.ps1 -DryRun`，确认输出里「站点根（自动探测）」指向 `/www/wwwroot/<公网IP>`** 再继续
+    - 恢复靠 `site-backup-<时间戳>.tgz`（那次备份的恰好是被错误当成站点根的那个目录）；坏现场会留在 `/www/wwwroot/.site3d-broken-*`，确认无误再删
+
 ---
 
 ## 6. 常用命令
