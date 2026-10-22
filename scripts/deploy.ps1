@@ -91,7 +91,12 @@ if ([string]::IsNullOrWhiteSpace($SiteRoot)) {
   Say "探测站点根目录（读线上 nginx 站点配置）"
   $probe = Invoke-Remote -AllowFail -Script @'
 DOMAIN=columbina520.com
-CONF=$(grep -l -- "$DOMAIN" /www/server/panel/vhost/nginx/*.conf 2>/dev/null | head -1)
+# 2026-10-22 事故修复：子域配置（3d.columbina520.com.conf）文件名里也含 "columbina520.com"，
+# 而 '3d.' 按 ASCII 排在 '47.'（主站 IP 目录名）之前，原先的 `grep -l | head -1` 会选中子域配置，
+# 导致主站产物被解包进 3D 站点目录（3D 站入口 JS 直接 404）。
+# 修法：排除「<子域>.columbina520.com.conf」这类文件名，只留主站配置。
+CONF=$(grep -l -- "$DOMAIN" /www/server/panel/vhost/nginx/*.conf 2>/dev/null \
+  | grep -v "\.${DOMAIN}\.conf\$" | head -1)
 if [ -z "$CONF" ]; then echo "PROBE_FAILED"; exit 0; fi
 grep -m1 -oE '^[[:space:]]*root[[:space:]]+[^;]+' "$CONF" | sed 's/^[[:space:]]*root[[:space:]]*//'
 '@
