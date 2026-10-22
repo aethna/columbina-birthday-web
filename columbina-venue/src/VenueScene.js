@@ -42,6 +42,9 @@ import { CAKE_ART } from './cutscene.js';
 import { partyTalkOf, PHOTO_PROMPT, OFFER_PROMPT } from './party-talk.js';
 import { createLiveBackground, loadWaterFrames } from './LiveBackground.js';
 import SceneVideo from './SceneVideo.js';
+import {
+  touchState, consumeTouch, resetTouchState, initMobileControls, isTouchDevice,
+} from './MobileControls.js';
 
 /**
  * 全屏插画（切蛋糕 / 合影）的绘制层级
@@ -78,6 +81,18 @@ export function dirNameFrom(vx, vy) {
   if (sx) return sx > 0 ? 'right' : 'left';
   if (sy) return sy > 0 ? 'down' : 'up';
   return null;
+}
+
+/**
+ * 提示文案里的「按 F」在触屏上要换成「点互动」，否则手机上会让人去找一个不存在的键。
+ * （quests.js 里的 hint 是给桌面写的，这里只做显示层替换，不改数据。）
+ */
+function interactHint(text) {
+  if (!text) return text;
+  if (!isTouchDevice()) return text;
+  return text
+    .replace(/按\s*F/g, '点互动')
+    .replace(/按\s*M/g, '点地图');
 }
 
 export default class VenueScene extends Phaser.Scene {
@@ -320,6 +335,12 @@ export default class VenueScene extends Phaser.Scene {
     this.keyInteract = this.input.keyboard.addKey(INTERACT.key);
     this.keyQ = this.input.keyboard.addKey('Q');
     this.keyM = this.input.keyboard.addKey('M');
+    // 手机端：虚拟方向键 + 动作键（粗指针设备才激活，桌面返回 null）。
+    // 它不伪造 KeyboardEvent —— 只写 touchState / 脉冲，由下面几个 handle* 取或，
+    // 所以键盘和触摸走的是同一条输入路径，行为不会分叉。
+    this.mobile = initMobileControls();
+    this.events.once('shutdown', resetTouchState);
+    this.events.once('destroy', resetTouchState);
     // F1：切换可走区显示（调试用）
     this.input.keyboard.on('keydown-F1', () => this.toggleWalkDebug());
     // F2：全图核对视图（一屏看完整个地图）
@@ -1407,7 +1428,12 @@ export default class VenueScene extends Phaser.Scene {
   buildUI() {
     const font = 'system-ui, "Microsoft YaHei", sans-serif';
 
-    this.add.text(16, 14, 'WASD 移动   F 交互 / 对话   Q 任务   M 地图', {
+    // 触屏上键位提示要说实话：没有键盘，也没有常驻方向键 ——
+    // 拖动屏幕是走，点屏幕是互动。桌面端文案保持不变。
+    const hint = isTouchDevice()
+      ? '拖动屏幕移动   点屏幕 互动 / 对话'
+      : 'WASD 移动   F 交互 / 对话   Q 任务   M 地图';
+    this.add.text(16, 14, hint, {
       fontFamily: font, fontSize: '15px', color: '#e8eef8',
       backgroundColor: '#00000088', padding: { x: 10, y: 6 },
     }).setScrollFactor(0).setDepth(9000);
@@ -1739,10 +1765,11 @@ export default class VenueScene extends Phaser.Scene {
 
   handleKeyboardMove() {
     let vx = 0, vy = 0;
-    if (this.cursors.left.isDown || this.keyA.isDown) vx -= 1;
-    if (this.cursors.right.isDown || this.keyD.isDown) vx += 1;
-    if (this.cursors.up.isDown || this.keyW.isDown) vy -= 1;
-    if (this.cursors.down.isDown || this.keyS.isDown) vy += 1;
+    // 键盘与虚拟方向键取或：触摸的按住状态放在 touchState 里，语义与 isDown 一致
+    if (this.cursors.left.isDown || this.keyA.isDown || touchState.left) vx -= 1;
+    if (this.cursors.right.isDown || this.keyD.isDown || touchState.right) vx += 1;
+    if (this.cursors.up.isDown || this.keyW.isDown || touchState.up) vy -= 1;
+    if (this.cursors.down.isDown || this.keyS.isDown || touchState.down) vy += 1;
 
     if (vx && vy) { const inv = 1 / Math.sqrt(2); vx *= inv; vy *= inv; }
 
@@ -1818,7 +1845,7 @@ export default class VenueScene extends Phaser.Scene {
 
     // --- 显示提示（NPC 优先）---
     if (nearest) {
-      this.npcTip.setText(`${nearest.iconText} ${nearest.name}\n按 F 对话`).setVisible(true);
+      this.npcTip.setText(`${nearest.iconText} ${nearest.name}\n${interactHint('按 F 对话')}`).setVisible(true);
       this.activePoint = null;
     } else if (pointActive) {
       // ★ 这里必须用求值后的 getter，不能用原始字段：
@@ -1829,7 +1856,7 @@ export default class VenueScene extends Phaser.Scene {
       //     直接拼进模板字符串会把函数源码原样打到屏幕上
       //     （用户 2026-10-04 截图里的 `(s) => (s.allWritten ? '桌上的邀请函' : ...)`）。
       this.npcTip
-        .setText(`${pointActive.iconText || '◆'} ${pointActive.labelText}\n${pointActive.hintText || '按 F 互动'}`)
+        .setText(`${pointActive.iconText || '◆'} ${pointActive.labelText}\n${interactHint(pointActive.hintText || '按 F 互动')}`)
         .setVisible(true);
       this.activePoint = pointActive;
     } else {
@@ -1842,8 +1869,11 @@ export default class VenueScene extends Phaser.Scene {
     // 全屏插画展示中：F 不接（收起只能点鼠标）
     if (this.overlay) return;
 
-    if (!Phaser.Input.Keyboard.JustDown(this.keyInteract)) {
-      if (Phaser.Input.Keyboard.JustDown(this.keyQ)) this.toggleQuestPanel();
+    // 触摸的互动键是脉冲（按下时打一个 200ms 的票），消费即清，
+    // 不会被 DialogSystem 的 window keydown 重复吃成「一次点击翻两页」。
+    const touchInteract = consumeTouch('interact');
+    if (!Phaser.Input.Keyboard.JustDown(this.keyInteract) && !touchInteract) {
+      if (Phaser.Input.Keyboard.JustDown(this.keyQ) || consumeTouch('quest')) this.toggleQuestPanel();
       return;
     }
 
@@ -2322,9 +2352,9 @@ export default class VenueScene extends Phaser.Scene {
     } else if (r.point && r.point.action === 'collectItem') {
       this.doCollectItem(r.point);
     } else if (r.point) {
-      this.toast(r.point.hintText || r.point.labelText || point.hintText || point.labelText);
+      this.toast(interactHint(r.point.hintText || r.point.labelText || point.hintText || point.labelText));
     } else {
-      this.toast(point.hintText || point.labelText);
+      this.toast(interactHint(point.hintText || point.labelText));
     }
   }
 
@@ -2609,7 +2639,7 @@ export default class VenueScene extends Phaser.Scene {
           : `目标在「${mapName}」—— 从这张地图的传送光圈过去`);
       }
     } else if (act) {
-      this.toast(`${act}就在这张地图上（「${mapName}」）—— 走到发光的地方按 F`);
+      this.toast(`${act}就在这张地图上（「${mapName}」）—— 走到发光的地方${interactHint('按 F')}`);
     } else {
       this.toast(`目标在「${mapName}」—— 就在眼前这张地图上，找找发光的地方`);
     }
@@ -2682,7 +2712,7 @@ export default class VenueScene extends Phaser.Scene {
   handleMinimap() {
     if (!this.minimap) return;
 
-    if (Phaser.Input.Keyboard.JustDown(this.keyM)) {
+    if (Phaser.Input.Keyboard.JustDown(this.keyM) || consumeTouch('map')) {
       const on = this.minimap.toggle();
       if (on) this.toast('世界地图');
     }

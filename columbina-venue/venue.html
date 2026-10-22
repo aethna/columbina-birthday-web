@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>生日会主会场</title>
   <!-- 内联 favicon，避免浏览器请求不存在的文件产生 404 -->
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
@@ -639,11 +639,189 @@
       text-align: center; font-size: 12.5px;
       color: #8b7a5d; letter-spacing: .5px;
     }
+
+    /* ================= 手机适配 ================= */
+    html, body {
+      overscroll-behavior: none;
+      -webkit-text-size-adjust: 100%;
+    }
+    #game-root {
+      touch-action: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* 全屏按钮（默认隐藏，coarse 指针才显示） */
+    #fs-btn {
+      display: none;
+      position: fixed; top: 14px; left: 96px; z-index: 1600;
+      height: 34px; padding: 0 12px;
+      border-radius: 17px;
+      border: 1px solid rgba(201, 162, 74, .55);
+      background: rgba(20, 28, 24, .82);
+      color: #e7d7ae; font-size: 13px; letter-spacing: .5px;
+      -webkit-appearance: none; appearance: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      cursor: pointer;
+      backdrop-filter: blur(6px);
+    }
+    #fs-btn.on {
+      background: rgba(201, 162, 74, .9);
+      color: #1a1410;
+      border-color: rgba(201, 162, 74, .9);
+    }
+
+    /* 触控层容器：本身不吃事件，只有按钮吃 */
+    #mobile-act {
+      display: none;
+      position: fixed; z-index: 1550;
+      pointer-events: none;
+      touch-action: none;
+      right: calc(16px + env(safe-area-inset-right, 0px));
+      bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+      align-items: flex-end; gap: 10px;
+    }
+
+    /* ---- 隐形摇杆 ----
+       屏幕上不摆任何常驻控件，拖动时也不画圆环/摇杆芯 —— 完全隐形。
+       手指按在画面哪里，哪里就是摇杆圆心；原地松手 = 一次普通点击；
+       按住并滑出阈值 = 开始移动。
+       所以这里没有任何摇杆相关的样式或 DOM，触控逻辑全在
+       src/MobileControls.js 的 bindFloatingJoystick() 里。 */
+
+    #mp-interact {
+      pointer-events: auto;
+      width: 76px; height: 76px; border-radius: 50%;
+      border: 1px solid rgba(201, 162, 74, .6);
+      background: rgba(201, 162, 74, .28);
+      color: #f3e6c4; font-size: 15px; font-weight: 600;
+      display: flex; align-items: center; justify-content: center;
+      -webkit-appearance: none; appearance: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: none;
+      user-select: none; -webkit-user-select: none;
+      backdrop-filter: blur(4px);
+      transition: background .08s, transform .08s;
+    }
+    #mp-interact.on {
+      background: rgba(201, 162, 74, .9);
+      color: #1a1410;
+      transform: scale(.94);
+    }
+    #mp-map {
+      pointer-events: auto;
+      width: 54px; height: 54px; border-radius: 50%;
+      border: 1px solid rgba(201, 162, 74, .45);
+      background: rgba(20, 28, 24, .62);
+      color: #e7d7ae; font-size: 13px;
+      display: flex; align-items: center; justify-content: center;
+      -webkit-appearance: none; appearance: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: none;
+      user-select: none; -webkit-user-select: none;
+      backdrop-filter: blur(4px);
+      margin-bottom: 4px;
+      transition: background .08s, transform .08s;
+    }
+    #mp-map.on {
+      background: rgba(201, 162, 74, .85);
+      color: #1a1410;
+      transform: scale(.94);
+    }
+
+    /* 触屏设备：显示触控层，并重排顶部/底部 HUD 避让 */
+    @media (pointer: coarse) {
+      #fs-btn { display: block; }
+      #mobile-act { display: flex; }
+
+      #reset-btn {
+        top: 14px; left: 16px; bottom: auto; right: auto;
+        height: 34px; padding: 0 12px; border-radius: 17px;
+      }
+      #quest-tab {
+        bottom: calc(120px + env(safe-area-inset-bottom, 0px));
+      }
+      /* 手机端把任务面板收窄：390 宽时 62vw=242px 会压住画布正中，
+         而屏幕正中恰恰是玩家点「空白处 = 点鼠标」最常点的位置。
+         限到 56vw 并让列表更紧凑，同时默认收起（见脚本里的 setPanelOpen(false)）。 */
+      #quest-panel {
+        top: 62px; right: 12px; width: min(252px, 56vw);
+        max-height: calc(100% - 190px);
+      }
+    }
+
+    /* ---- CSS 假横屏：设备不会自己转时，把画面转 90° 当横屏用 ----
+       关键约束：Phaser RESIZE 是从 #game-root 的 getBoundingClientRect() 取尺寸的，
+       而物理屏幕只有竖屏那么大（390×844）。
+         · 若直接转 #game-root（或 body），AABB 变成 844×390，内容有 454px 落在屏幕外；
+         · 若把 game-root 设成 844×390 再转，AABB 又变回 390×844，Phaser 读到竖屏。
+       所以拆开：game-root 保持横屏布局尺寸且不转（Phaser 读到 844×390，正确）；
+       只把 canvas 转 90° 铺回物理屏幕（AABB 恰好 390×844，一屏装下）；
+       HUD 各自转 90° 并按「物理屏幕坐标」重新贴边（屏幕右边缘 = 用户视角的上边）。
+       外层 @media 保证：设备真的转成横屏后这些规则自动失效，不会二次旋转。 */
+    @media (orientation: portrait) {
+      html.venue-force-landscape body { overflow: hidden; }
+
+      /* game-root：布局 844×390（宽=屏高、高=屏宽），不旋转 */
+      html.venue-force-landscape #game-root {
+        position: fixed; top: 0; left: 0;
+        width: 100vh; height: 100vw;
+        /* ★ 必须解除裁剪：基础样式里 #game-root 是 overflow:hidden，
+           而 canvas 旋转 90° 后 AABB 高 844px，超出 game-root 的 390px 高度。
+           不放开就会只显示最上面一条、下面全黑（实测截图即如此）。 */
+        overflow: visible;
+      }
+      /* canvas：转 90° 后左上角对齐屏幕原点，AABB = 390×844 */
+      html.venue-force-landscape #game-root canvas {
+        transform-origin: 0 0;
+        transform: rotate(90deg) translateY(-100%);
+      }
+
+      /* 动作键：转 90°，贴用户视角的右下角。
+         摇杆是浮动的（跟随手指位置），不需要按屏幕坐标重贴。 */
+      html.venue-force-landscape #mobile-act {
+        left: calc(16px + env(safe-area-inset-left, 0px));
+        bottom: calc(30px + env(safe-area-inset-bottom, 0px));
+        right: auto;
+        transform: rotate(90deg);
+      }
+
+      /* 顶部按钮：沿屏幕右边缘竖排 = 用户视角的一行顶栏 */
+      html.venue-force-landscape #back-home,
+      html.venue-force-landscape #fs-btn,
+      html.venue-force-landscape #reset-btn,
+      html.venue-force-landscape #quest-tab {
+        right: calc(12px + env(safe-area-inset-right, 0px));
+        left: auto; bottom: auto;
+        transform: rotate(90deg);
+      }
+      html.venue-force-landscape #back-home { top: 56px; }
+      html.venue-force-landscape #fs-btn    { top: 172px; }
+      html.venue-force-landscape #reset-btn { top: 286px; }
+      html.venue-force-landscape #quest-tab { top: 396px; }
+
+      /* 任务面板：居中，转 90° 后整块能装进竖屏 */
+      html.venue-force-landscape #quest-panel {
+        top: 50%; left: 50%; right: auto;
+        width: min(290px, 62vh);
+        max-height: min(260px, 66vw);
+        transform: translate(-50%, -50%) rotate(90deg);
+      }
+    }
   </style>
 </head>
 <body>
   <div id="game-root"></div>
   <div id="loading">正在搭建会场…</div>
+
+  <!-- 手机：横屏全屏切换（不会自动横屏的设备靠这个） -->
+  <button id="fs-btn" type="button" aria-pressed="false" title="横屏全屏显示">横屏全屏</button>
+
+  <!-- 手机：动作键（映射 F 互动 / M 地图） -->
+  <div id="mobile-act">
+    <button id="mp-map" type="button" title="地图">地图</button>
+    <button id="mp-interact" type="button" title="互动">互动</button>
+  </div>
 
   <!-- 返回首页 -->
   <a id="back-home" href="index.html">
@@ -910,6 +1088,14 @@
     window.addEventListener('venue:toggle-quest-panel', () => {
       setPanelOpen(questPanel.classList.contains('hidden'));
     });
+
+    // 手机端默认收起任务面板。
+    //  桌面上屏幕宽绰，展开的面板不挡视线；手机上它占掉右侧大半并压住画布正中，
+    //  而「点屏幕空白处 = 点鼠标」正是手机端最常用的操作，一进去就点不到画布。
+    //  收起后右下角的「任务」标签仍然在，点一下就能展开，功能不减。
+    if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+      setPanelOpen(false);
+    }
 
     // =====================================================================
     // 任务操作：接取 / 交付
