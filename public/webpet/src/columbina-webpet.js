@@ -32,6 +32,22 @@
   var CANVAS_W = 640;
   var CANVAS_H = 360;
 
+  /* ------------------------------------------------------------------ 资源根
+   * 素材和本脚本同住 webpet/ 下（…/webpet/src/columbina-webpet.js + …/webpet/assets/anim/*.webm）。
+   * 但宿主页面可能在任何层级引用它 —— 挂到站点首页时页面在 /，素材却在 /webpet/assets/。
+   * 所以不能写相对页面，必须从**本脚本自己的 URL** 反推：
+   *   http://host/webpet/src/columbina-webpet.js  →  http://host/webpet/
+   * 想覆盖就提前设 window.WEBPET_BASE。
+   */
+  var SELF_BASE = (function () {
+    try {
+      var s = document.currentScript;
+      if (!s || !s.src) return '';
+      return s.src.replace(/src\/columbina-webpet\.js(\?[^/]*)?$/, '')
+                  .replace(/columbina-webpet\.js(\?[^/]*)?$/, '');
+    } catch (e) { return ''; }
+  })();
+
   /* 命中盒：只有这一块响应拖拽/点击，避免整块透明区域挡住宿主页面的链接 */
   var HIT = { x0: 200, y0: 50, x1: 440, y1: 335 };
 
@@ -172,7 +188,7 @@
     v.setAttribute('webkit-playsinline', '');
     v.preload = 'auto';
     v.dataset.name = name;
-    v.src = (global.WEBPET_BASE || '') + 'assets/anim/' + encodeURIComponent(name) + '.webm';
+    v.src = (global.WEBPET_BASE || SELF_BASE || '') + 'assets/anim/' + encodeURIComponent(name) + '.webm';
     this.stage.appendChild(v);
     this.layers[name] = v;
     return v;
