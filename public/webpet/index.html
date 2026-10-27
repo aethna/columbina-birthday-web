@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>哥伦比娅 · 网页桌宠</title>
+<link rel="icon" href="favicon.png" type="image/png">
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; min-height: 100vh;
+    background: radial-gradient(circle at 30% 18%, #1a2340 0%, #0b0d14 55%, #06070b 100%);
+    color: #dfe5f5;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  .card {
+    text-align: center; padding: 40px 48px;
+    border: 1px solid #1e2434; border-radius: 18px;
+    background: rgba(12, 15, 23, .72);
+    box-shadow: 0 22px 60px rgba(0,0,0,.55);
+    max-width: 560px;
+  }
+  h1 { font-size: 24px; font-weight: 600; letter-spacing: .5px; margin: 0 0 10px; }
+  .sub { color: #7f8aa6; font-size: 14px; margin: 0 0 26px; line-height: 1.8; }
+  .tip { color: #55627d; font-size: 12.5px; line-height: 1.9; margin: 0; }
+  code {
+    background: #151a26; border: 1px solid #222a3c; border-radius: 5px;
+    padding: 1px 6px; font-size: 12.5px;
+    font-family: "Cascadia Code", Consolas, monospace; color: #a9c0e8;
+  }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h1>哥伦比娅 · 网页桌宠</h1>
+  <p class="sub">她已经在页面右下角了。<br>可以拖着她走，点一下她会回应你。</p>
+  <p class="tip">
+    任意网页想挂一只，加这一行即可：<br>
+    <code>&lt;script src="…/columbina-webpet.js" defer&gt;&lt;/script&gt;</code><br><br>
+    关掉这个标签页，她就消失了。
+  </p>
+</div>
+
+<script src="src/columbina-webpet.js" defer></script>
+
+</body>
+</html>
