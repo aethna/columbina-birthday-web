@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
   新月再梦听羽生 · 一键构建并部署到阿里云服务器（站点 + 可选后端）。
 
@@ -220,7 +220,12 @@ D='__HOST__'
 c1=$(curl -sk -o /dev/null -w '%{http_code}' -H "Host: $D" https://127.0.0.1/)
 c2=$(curl -sk -o /dev/null -w '%{http_code}' -H "Host: $D" https://127.0.0.1/game/index.html)
 c3=$(curl -sk -o /dev/null -w '%{http_code}' -H "Host: $D" https://127.0.0.1/api/health)
+# 网页版桌宠：脚本与素材都在 /webpet/ 下，首页 index.html 用 defer 引它。
+# 这两项不参与「成功/回滚」判定（宠物挂了不该把整站回滚），只做提示。
+w1=$(curl -sk -o /dev/null -w '%{http_code}' -H "Host: $D" https://127.0.0.1/webpet/src/columbina-webpet.js)
+w2=$(curl -sk -o /dev/null -w '%{http_code}' -H "Host: $D" "https://127.0.0.1/webpet/assets/anim/%E5%BE%85%E6%9C%BA%E5%91%BC%E5%90%B8.webm")
 echo "VERIFY|$c1|$c2|$c3"
+echo "WEBPET|$w1|$w2"
 '@
   $vr = Invoke-Remote -AllowFail -Script $vtpl.Replace('__HOST__', $VerifyHost)
   $vline = ($vr.Output | Where-Object { $_ -match '^VERIFY\|' } | Select-Object -First 1)
@@ -231,6 +236,17 @@ echo "VERIFY|$c1|$c2|$c3"
   for ($ci = 0; $ci -lt 3; $ci++) {
     $code = if ($codes.Count -gt $ci) { $codes[$ci] } else { '000' }
     if ($code -eq '200') { Ok "$($labels[$ci]) 200" } else { $allOk = $false; Warn "$($labels[$ci]) 未通过（HTTP $code）" }
+  }
+
+  # 网页版桌宠的提示（不影响 allOk）
+  $wline = ($vr.Output | Where-Object { $_ -match '^WEBPET\|' } | Select-Object -First 1)
+  if ($wline) {
+    $wc = (($wline -replace '^WEBPET\|', '') -split '\|')
+    $wlabels = @('桌宠脚本', '桌宠动画')
+    for ($wi = 0; $wi -lt 2; $wi++) {
+      $wcode = if ($wc.Count -gt $wi) { $wc[$wi] } else { '000' }
+      if ($wcode -eq '200') { Ok "$($wlabels[$wi]) 200" } else { Warn "$($wlabels[$wi]) 未通过（HTTP $wcode）—— 首页右下角不会出现桌宠" }
+    }
   }
 
   if ($allOk) {
