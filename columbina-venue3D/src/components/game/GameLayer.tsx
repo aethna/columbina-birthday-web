@@ -53,6 +53,10 @@ import {
     registerInteractable, updateNearest, clearNearest, startInteractKey, interactState,
 } from '../../core/game/interact';
 import { setGuide } from '../../ui/guideState';
+/* ★ 第五十六轮（用户 m01561）：大地图要显示 NPC 位置。落点表只有这一层有
+ *   （`standSpots()` / `seatSpots2()` 同时也是互动点坐标的唯一来源），
+ *   所以由这里在阶段变化时把「谁在哪」写进模块级容器，`WorldMap` 订阅着读。 */
+import { setNpcMarks } from '../../ui/npcMapState';
 /* ★ 任务5：自动寻路。这里只用「取消」和「探针」，目标解析/每帧步进都在
  *  `autowalk.ts`（被 `QuestList` 触发、被 `MmdCharacter` 的 useFrame 消费）。 */
 import { cancelNav, navActiveId, navState, navStep, toggleAutowalk } from '../../core/game/autowalk';
@@ -183,6 +187,29 @@ export function GameLayer() {
     const showStandNpc = phase === 'quest';
     /** 坐姿 NPC + 长桌 + 蛋糕：委托全交付之后。 */
     const showFeast = phase === 'feast' || phase === 'done';
+
+    /* ── 把「现在场上有谁、各自在哪」同步给大地图（第五十六轮 / 用户 m01561）──
+     * 用户原话：「显示所有NPC位置（当NPC入场以后）」—— 阶段没到之前场上没人，
+     * 所以 `letter` 阶段写空表，地图上就不画点。
+     *
+     * 依赖只看 `phase`：两张落点表都是纯函数（模块级缓存 `standSpots()` /
+     * `seatSpots2()`），阶段不变它们就不会变；`setNpcMarks` 内部还判了等，
+     * 重复调用不会惊动订阅侧。 */
+    useEffect(() => {
+        if (phase === 'quest') {
+            const t = standSpots();
+            setNpcMarks('stand', NPC_ROSTER.map((d, i) => ({
+                id: d.id, name: d.name, x: t[i] ? t[i].x : 0, z: t[i] ? t[i].z : 0,
+            })));
+        } else if (phase === 'feast' || phase === 'done') {
+            const t = seatSpots2();
+            setNpcMarks('seat', NPC_ROSTER.map((d, i) => ({
+                id: d.id, name: d.name, x: t[i] ? t[i].x : 0, z: t[i] ? t[i].z : 0,
+            })));
+        } else {
+            setNpcMarks('none', []);
+        }
+    }, [phase]);
 
     /* ── 草地避让区跟着「宴会开场」走（用户 m03988）───────────────────────
      * 「那个光秃的一条（蛋糕桌子）你等任务进行到那一步的时候，再压草高度。之前正常。」

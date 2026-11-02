@@ -100,7 +100,7 @@ import { hash01, treeColliders } from '../../core/venueRing';
 import { BANQUET_ON, seatSpots } from '../venue/Banquet';
 /* ★ task-4：NPC 撒到整张地图之后必须避开「道具肚子」和「委托点位」——
  * 前者靠 `keepOutFactor`（与草地/角色碰撞同一份真值），后者靠 `layout.POINT_SPOTS`。 */
-import { POINT_SPOTS, pointXZ } from '../../core/game/layout';
+import { CRATER_XZ, POINT_SPOTS, pointXZ } from '../../core/game/layout';
 import { keepOutFactor } from '../../core/world/keepOut';
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -179,8 +179,38 @@ const PAIMON_BOB_PERIOD = Math.max(0.4, QNUM('paimonbobperiod', 2.6)!);
  *       `treeColliders(0.6)` 剔除 ⇒ 穿树带的那些点不会插进树干。
  *   分布公式 `r = r0 + (r1−r0)·sqrt(v)` ⇒ 按**面积**均匀，
  *   人自然散到中外圈，而不是全贴着内圈站一排（保持原有公式，只改区间）。 */
-const NPC_R0 = QNUM('npcr0', 12)!;
-const NPC_R1 = QNUM('npcr1', 58)!;
+/* ★ 2026-11-02 第五十七轮（用户 m01963「委托NPC应该分散在地图中，但是不要太远接近边界。
+ *   整个地图三分之二为界限差不多了」）：
+ *   上一版 **12~58 m** 虽然写的是「撒满整张草地」，但草地只有 62 m 半径，
+ *   摊在大地图（768 m）上就是中心一小坨 —— 用户在图上读到的是「所有 NPC 都挤在会场」。
+ *   现在撒到 **70 ~ 250 m**：
+ *     · 250 m = 768/2 × 0.65，即「地图三分之二为界」，离边界（384 m）还留 134 m；
+ *     · 内界 70 m > 会场半径 62 m ⇒ 不会和会场道具/树环打架；
+ *     · 地形与草地都是**跟相机的 160 m 盘**（`WorldController.TERRAIN_AREA`），
+ *       所以站在 250 m 外照样是实地、照样有草 —— 距离只影响「要走多久」；
+ *     · 月球环形山（圆心 (0,-196)、月壤盘 r 40 + 16 羽化、坑内还有水环）整块避开，
+ *       判据 `MOON_CLEAR`。
+ *   分布公式仍是 `r = r0 + (r1−r0)·sqrt(v)`（按面积均匀），所以人自然铺满中外圈。 */
+const NPC_R0 = QNUM('npcr0', 70)!;
+const NPC_R1 = QNUM('npcr1', 250)!;
+/** 月球环形山禁入半径（圆心 `CRATER_XZ`）。坑口 46 + 月壤羽化 16 ≈ 56，再留 6 m 余量
+ *  ⇒ 不会有人站在坑里或水环上。 */
+const MOON_CLEAR = QNUM('npcmoonclear', 62)!;
+
+/** ★ 2026-11-02 第五十七轮补丁 2：**留在会场的 4 人**。
+ *
+ *  第一版把 15 个人全撒到 70~250 m，读数 `venueGroup = 0` —— 会场空城，
+ *  一进场看不到任何人。但也不能全留在会场（那就是原来那坨）。
+ *  ⇒ 分两带：名单里的人守 `NPC_NEAR_R0~R1`（会场草地内，14~58 m），
+ *  其余人散 `NPC_R0~R1`（100~250 m）。
+ *
+ *  为什么是这 4 个：空与派蒙是「主角组合」（派蒙的落点本身就是从空的位置偏移出来的，
+ *  见 `npcStandSpots`，两人必须同带），爱诺与菈乌玛的委托物（浅水坑里的鱼 / 干柴堆）
+ *  本来就留在会场 ⇒ 人跟着自己的委托物站，玩家接完委托不用跑 200 m 再回来。 */
+const NPC_NEAR_IDS: readonly string[] = ['aether', 'paimon', 'aino', 'lauma'];
+/** 会场组的半径带（< 会场草地 r 62，> 中央空地 9.5） */
+const NPC_NEAR_R0 = QNUM('npcnearr0', 14)!;
+const NPC_NEAR_R1 = QNUM('npcnearr1', 58)!;
 /** 站位最小间距（米）。**为什么从 2.8 提到 4.0**：互动判定半径是
  *  `REACH + 0.4 = 3.0`（`layout.ts:82`），两人间距小于 3 m 时两个光圈会同时亮起、
  *  按 F 却打到另一个人。4.0 留 1 m 余量，15 个人撒在半径 58 m 的盘上绰绰有余。 */
@@ -369,16 +399,23 @@ function scatterSpots(n: number, o: ScatterOpts): NpcSpot[] {
 
     for (let i = 0; i < n; i++) {
         let spot: [number, number] | null = null;
+        /* ★ 第五十七轮补丁 2：名单内的人守会场带，其余散到外圈带。
+         *   两带半径不重叠（58 < 100）⇒ 跨带的间距无需再检查。 */
+        const near = i < ROSTER.length && NPC_NEAR_IDS.indexOf(ROSTER[i].id) >= 0;
+        const br0 = near ? NPC_NEAR_R0 : o.r0;
+        const br1 = near ? NPC_NEAR_R1 : o.r1;
         for (let k = 0; k < 400; k++) {
             const u = hash01(i, k, o.seed);
             const v = hash01(i, k, o.seed + 1);
             const a = i * GOLDEN + (u - 0.5) * 0.9;
-            const r = o.r0 + (o.r1 - o.r0) * Math.sqrt(v);
+            const r = br0 + (br1 - br0) * Math.sqrt(v);
             const x = Math.sin(a) * r;
             const z = Math.cos(a) * r;
             if (Math.hypot(x - COLUMBINA_XZ[0], z - COLUMBINA_XZ[1]) < COLUMBINA_KEEPOUT) continue;
             /* 中央空地（书桌 r≈9.2 / 信箱 r≈8.3 / 桌与蛋糕台都在 10 m 内）。 */
             if (Math.hypot(x, z) < HUB_CLEAR) continue;
+            /* 月球环形山整块禁入（坑 + 月壤羽化 + 水环），见 `MOON_CLEAR`。 */
+            if (Math.hypot(x - CRATER_XZ[0], z - CRATER_XZ[1]) < MOON_CLEAR) continue;
             /* 道具肚子（月牙石桌 / 长桌 / 蛋糕台 / 信箱）—— 与草地避让同一份真值。
              * `keepOutFactor < 1` 就是落在椭圆的 1~1.45 过渡带里，站那儿会插进桌沿。 */
             if (keepOutFactor(x, z) < 1) continue;
@@ -402,7 +439,7 @@ function scatterSpots(n: number, o: ScatterOpts): NpcSpot[] {
         // 兜底：黄金角纯几何位置（几乎不会走到这里，出现了就说明 GAP 设太大）
         if (!spot) {
             const a = i * GOLDEN;
-            const r = (o.r0 + o.r1) * 0.5;
+            const r = (br0 + br1) * 0.5;
             spot = [Math.sin(a) * r, Math.cos(a) * r];
             console.warn(`[npc] #${i} 400 次都撞了，退回黄金角默认位`);
         }

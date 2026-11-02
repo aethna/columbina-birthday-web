@@ -29,6 +29,13 @@ export const MAP_RES = 320;
 export const MAP_M_PER_PX = WORLD_SIZE / MAP_RES;
 
 /**
+ * 「会场视角」的烘焙分辨率（2026-11-02 第五十六轮）。
+ * 覆盖半宽 `VENUE_HALF_M = 80` m ⇒ 每 texel **0.25 m**，是整图的 9.6 倍。
+ * 640² 实测约 0.5 s（一次性），只在第一次切到会场视角时烘。
+ */
+export const VENUE_MAP_RES = 640;
+
+/**
  * 把世界坐标折进地图的基本域并换算成像素。
  *
  * ⚠️ **不是直接 `mod W`** —— 那样会场（世界原点 0,0）会正好落在**地图左上角**，
@@ -67,14 +74,25 @@ function mix3(a: [number, number, number], b: [number, number, number], t: numbe
  * 单独一步是因为着色要用**邻居**算坡度，高度必须先全部就位。
  */
 export function bakeHeights(): Float32Array {
-    const N = MAP_RES;
-    const out = new Float32Array(N * N);
-    const step = WORLD_SIZE / N;
-    for (let j = 0; j < N; j++) {
-        const z = (j + 0.5) * step;
-        const row = j * N;
-        for (let i = 0; i < N; i++) {
-            out[row + i] = worldHeightCPU((i + 0.5) * step, z);
+    return bakeHeightsAt(MAP_RES, 0, 0, WORLD_SIZE / MAP_RES);
+}
+
+/**
+ * 烘**任意一块区域**的高度（`res²` 个米值）。
+ *
+ * ★ 2026-11-02 第五十六轮（用户 m01743「我要的不是地图中的地图」）：会场看得清
+ *   就必须放大视野，而整图只有 2.4 m/texel —— 把那张图硬拉 10 倍就是马赛克。
+ *   所以给「会场视角」单独按 0.25 m/texel 重烘一块，`x0/z0` 是 texel(0,0) 的
+ *   **左上角**世界坐标。整图那条路径是 `x0=z0=0, step=WORLD_SIZE/MAP_RES`，
+ *   与旧实现逐位一致。
+ */
+export function bakeHeightsAt(res: number, x0: number, z0: number, step: number): Float32Array {
+    const out = new Float32Array(res * res);
+    for (let j = 0; j < res; j++) {
+        const z = z0 + (j + 0.5) * step;
+        const row = j * res;
+        for (let i = 0; i < res; i++) {
+            out[row + i] = worldHeightCPU(x0 + (i + 0.5) * step, z);
         }
     }
     return out;
@@ -87,15 +105,40 @@ export function bakeHeights(): Float32Array {
  * @param y0/y1   只画 `[y0, y1)` 这些行（分帧用）
  */
 export function paintRows(heights: Float32Array, img: ImageData, y0: number, y1: number): void {
-    const N = MAP_RES;
-    const step = WORLD_SIZE / N;
+    paintRowsAt(MAP_RES, heights, img, y0, y1, 0, 0, WORLD_SIZE / MAP_RES);
+}
+
+/**
+ * `paintRows()` 的通用版：`res` = 图宽（= 高度表每行长度），`x0/z0` = texel(0,0)
+ * 左上角的世界坐标，`step` = 每 texel 多少米。
+ *
+ * ⚠️ 光照差分臂按 `MAP_M_PER_PX` 折算（`arm`）：整图 `arm=1`、`run=step`，与旧实现
+ *    逐位一致；会场视角 `step=0.25` 时 `arm=10`（run 2.5 m）⇒ 明暗对比和整图一样，
+ *    不会因为采样变细就变成一片噪点。
+ */
+export function paintRowsAt(
+    res: number,
+    heights: Float32Array,
+    img: ImageData,
+    y0: number,
+    y1: number,
+    x0: number,
+    z0: number,
+    step: number,
+): void {
+    const N = res;
     const d = img.data;
     const venue = REGION_BY_ID.venue, moon = REGION_BY_ID.moon;
+    const arm = Math.max(1, Math.round(MAP_M_PER_PX / step));
+    const run = arm * step;
+    /* 细采样（会场视角 0.25 m/texel）时绕过森林密度场的 4 m 量化缓存，
+     * 否则整片密林会画成 4 m 见方的棋盘格。见 `forest.ts` 的 `forestDensity`。 */
+    const fine = step < MAP_M_PER_PX * 0.9;
 
     for (let j = y0; j < y1; j++) {
-        const z = (j + 0.5) * step;
+        const z = z0 + (j + 0.5) * step;
         for (let i = 0; i < N; i++) {
-            const x = (i + 0.5) * step;
+            const x = x0 + (i + 0.5) * step;
             const k = j * N + i;
             const o = k * 4;
 
@@ -112,16 +155,16 @@ export function paintRows(heights: Float32Array, img: ImageData, y0: number, y1:
             }
             if (fw > 0) {
                 // 无主地带：林分密度越高的地方越深（就像从空中看树冠层）
-                const dens = forestDensity(x, z);
+                const dens = forestDensity(x, z, !fine);
                 const forestFloor = mix3(C_FOREST_OPEN, C_FOREST_DEEP, (dens - 0.7) / 0.3);
                 c = mix3(c, forestFloor, fw);
             }
 
             /* ② 光照：用左/上邻居差分当坡度，光从西北上方来 —— 山脊亮、沟里暗 */
-            const hL = heights[j * N + (i > 0 ? i - 1 : i)];
-            const hU = heights[(j > 0 ? j - 1 : j) * N + i];
-            const dx = (heights[k] - hL) / step;
-            const dz = (heights[k] - hU) / step;
+            const hL = heights[j * N + (i >= arm ? i - arm : i)];
+            const hU = heights[(j >= arm ? j - arm : j) * N + i];
+            const dx = (heights[k] - hL) / run;
+            const dz = (heights[k] - hU) / run;
             // 光照系数 0.55 ~ 1.35
             const lit = 1 + (dx * 0.34 + dz * 0.34);
             const L = lit < 0.45 ? 0.45 : lit > 1.45 ? 1.45 : lit;
@@ -134,7 +177,7 @@ export function paintRows(heights: Float32Array, img: ImageData, y0: number, y1:
             /* ④ 森林覆盖：`forestWeight` 内（场地附近）不画树点，
                    真正的「林地」用密度场抖出来的一片深色来暗示；
                    这里简单地在密林处再压暗 12%，让林窗看得出来 */
-            const dark = fw > 0.02 ? 1 - 0.12 * (forestDensity(x, z) - 0.7) / 0.3 : 1;
+            const dark = fw > 0.02 ? 1 - 0.12 * (forestDensity(x, z, !fine) - 0.7) / 0.3 : 1;
 
             let r = c[0] * L * dark, g = c[1] * L * dark, b = c[2] * L * dark;
             if (pathMix > 0) {
@@ -185,4 +228,38 @@ export function bakeWorldMapAsync(
     onProgress(1);
     onDone();
     return () => { };
+}
+
+/**
+ * 烘一块**区域**（会场视角用）—— 同步、一次性，理由同上。
+ *
+ * @param canvas 目标 canvas（会被设成 `res × res`）
+ * @param cx/cz  区域中心（世界 XZ）
+ * @param halfM  区域半宽（米）
+ * @param res    分辨率
+ */
+export function bakeMapRegion(
+    canvas: HTMLCanvasElement,
+    cx: number,
+    cz: number,
+    halfM: number,
+    res: number = VENUE_MAP_RES,
+): void {
+    const step = (halfM * 2) / res;
+    const x0 = cx - halfM;
+    const z0 = cz - halfM;
+    const t0 = performance.now();
+    const heights = bakeHeightsAt(res, x0, z0, step);
+    const t1 = performance.now();
+    canvas.width = res;
+    canvas.height = res;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const img = ctx.createImageData(res, res);
+    paintRowsAt(res, heights, img, 0, res, x0, z0, step);
+    ctx.putImageData(img, 0, 0);
+    const t2 = performance.now();
+    (window as any).__mapBakeMs = {
+        res, heights: +(t1 - t0).toFixed(1), paint: +(t2 - t1).toFixed(1), total: +(t2 - t0).toFixed(1),
+    };
 }

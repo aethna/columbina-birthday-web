@@ -3385,6 +3385,28 @@ hairFloor: SEC_HAIR_FLOOR,
                         charR: CHAR_R,
                         sample: treeColliderList().slice(0, 5),
                     }),
+
+                    /* ★ 2026-11-02 第五十七轮：某个世界坐标离**最近的森林树干表面**多远（m）。
+                     *   用途：NPC 与采集点撒到 100~250 m 之后，「有没有正好站在树干里」
+                     *   不能靠布点算法规避（`treeCollide` 的表是按相机铺的，布点时查不到远处的树）。
+                     *   验收法：把角色传送到目标附近 → 等 `Forest.refill()` 铺好表 →
+                     *   `__mmd.forestNear(x, z)` ⇒ `{n, gap}`，`gap < 0` 就是插进树干、
+                     *   `gap` 在 0~0.6 之间是「擦着站」，都不合格。
+                     *   ⚠️ 只反映**当前相机附近**的树（表是整表重建的），所以必须逐个传送去量。 */
+                    forestNear: (x: number, z: number) => {
+                        const list = treeColliderList();
+                        let best = Infinity;
+                        let nNear = 0;
+                        for (const t of list) {
+                            const d = Math.hypot(x - t.x, z - t.z) - t.r;
+                            if (t.r + Math.max(0, d) < 80) nNear++;
+                            if (d < best) best = d;
+                        }
+                        /* nNear = 80 m 内有多少棵树干 —— 用来判「表是不是已经铺到这儿了」。
+                         * 表是整表重建的，刚传送过去还没 refill 时 n>0 但全是旧位置的树，
+                         * 那时 gap 会是几百米，读数不可用。 */
+                        return { n: list.length, nNear, gap: Number.isFinite(best) ? +best.toFixed(2) : null };
+                    },
                     /* 月牙石桌的椭圆推出（用户 m02063 任务1）。用法同 shipPush：
                      *   __mmd.deskPush(-8.6,-3.2) ⇒ hit:true 且结果在椭圆外；
                      *   __mmd.deskPush(0,-11)    ⇒ hit:false 原样返回。
