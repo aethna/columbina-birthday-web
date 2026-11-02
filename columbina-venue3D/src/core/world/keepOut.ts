@@ -26,7 +26,9 @@
  * 加道具时如果槽位不够，把 `KEEP_OUT_MAX` 调大即可（shader 侧按常量展开）。
  * ================================================================== */
 
-import { BANQUET_XZ, CAKE_STAND_XZ, DESK_XZ, DESK_YAW, MAILBOX_XZ } from '../game/layout';
+import { BANQUET_XZ, CAKE_STAND_XZ, DESK_XZ, DESK_YAW, MAILBOX_XZ, pointXZ } from '../game/layout';
+import { QNUM } from '../utils/query';
+import { CRATERS, CRATER_FLOOR_ON } from '../worldRegions';
 
 /** 一个「道具占掉的地盘」：中心 + 两个半轴 + 绕 Y 的朝向（弧度）。 */
 export interface KeepOutEllipse {
@@ -97,6 +99,108 @@ export const KEEP_OUT: KeepOutEllipse[] = [
     },
 ];
 
+/* ── ★★ 2026-10-20 task-10：四处采集点的「贴地浅水台」也要压草 ──────────────
+ *
+ * 用户 2026-10-20 截图反馈（`公用区\10月20日反馈.png`，缩略 `_logs/fb1.jpg`）：
+ * 「草地上有一块扁平的浅灰多边形板，离远了看得见、走近就没了。」
+ *
+ * 实测定位（无头探针 + 出图，证据 `_logs/render/T10*.png`、`_logs/render_t10*.jsonl`）：
+ *   · `collect_water_0`  `(-15.2, 4.9)`   ⌀3.13 m、台面高 0.24 m
+ *   · `collect_spring_0` `( 36.5,-16.3)` ⌀3.53 m、含石台/芦苇总高 2.25 m
+ *   两者都是 `CollectProps.tsx` 的 `buildSpring`/`buildWater` 造的**浅水石台**：
+ *   泥底 `2c2119` + 水面 `5fa8d8`（opacity 0.66）+ 一圈灰石块 `8b8f96`
+ *   + 14 棱裙边圆柱 ⇒ 从上往下看就是一块**浅灰多边形板**，边缘有一圈可见侧壁。
+ *
+ * 为什么「远现近隐」：台面离地只有 0.24 m，而草是齐人高（≈1.6 m）。
+ * 从高处/远处越过草尖能看到台面；玩家走到跟前时视线贴着草尖，
+ * 台子整块被草吞掉（实测 16 m / 5 m 高机位已经**完全看不见**，见 `T10f_pond16.png`）。
+ *
+ * 修法：给这四处各留一块半径 `POND_KEEP_R` 的短草区（`KEEP_H_MIN = 8%` 的矮草茬，
+ * 过渡带到 `1.45 × r ≈ 2.75 m`）。半径只比台子本身大 0.5 m ⇒ 既不会像蛋糕台那样
+ * 连成一片「水泥地」，也保证台子在**任何距离**都是「草地上的一个水洼」。
+ * ⚠️ 这四块是**追加槽位**（索引 4~7），不参与 `setKeepOutProps` 的阶段开关；
+ *    加完后 `KEEP_OUT_MAX = 8` 刚好用满 —— 以后再加水台要先把这个常量调大。 */
+const POND_KEEP_R = 1.9;
+const POND_IDS = ['water', 'spring', 'fish', 'lamp'] as const;
+/** `?pondkeep=0` 关掉这四块（A/B 对照：关掉即用户反馈时的旧样子）。 */
+const POND_KEEP_ON = QNUM('pondkeep', 1)! > 0;
+if (POND_KEEP_ON) {
+    for (const id of POND_IDS) {
+        for (const [x, z] of pointXZ(id)) {
+            KEEP_OUT.push({ x, z, rx: POND_KEEP_R, rz: POND_KEEP_R, rot: 0, name: `采集点·${id}` });
+        }
+    }
+}
+
+/* ── ★★ 2026-10-20 task-17：坑里那艘飞船（机身 / 龙骨贴地段）也要压草 ────────
+ *
+ * 用户 m01992：「草叶不许和飞船模型穿模 —— 船底/船腹下不要冒草尖」，
+ * 用户 m02038 给了范式：「效果等同于邀请函的月牙桌子和草之间的避让效果」
+ * ⇒ 就是**这一张表**（草 `useGrassUniforms.ts` / 花 `FlowerClusters.tsx` 都读它），
+ *   不另写一套 mask。
+ *
+ * 形状：随船停泊朝向旋转的椭圆。船体实测 bbox = **16.51 × 3.64 × 26.00 m**
+ * （`WingShipApi.tsx:137-142`：`halfW = s1.x/2 = 8.25` 展向、`halfL = s1.z/2 = 13.00` 船长）：
+ *   · 龙骨/机身在**局部 Z** 方向压进地里 0.3 m（`API_BURY`）⇒ 长轴必须盖住整条龙骨，
+ *     否则机首/机尾下方会冒出齐腰高的草尖（那就是用户说的「穿模」）；
+ *   · 两侧发动机舱在展向 25%~33% 处低到龙骨底面 ⇒ 局部 X 方向要盖住它们；
+ *   · 机翼外侧仍留草（那里离地 0.8~2.5 m，草碰不到）。
+ *
+ * ⚠️ 半轴**不写死**：`WingShipApi.tsx` 量完真实 bbox 后调 `setShipKeepOut()`
+ *    覆盖（参数是 `halfW`/`halfL`，来自 `s1.x/2`、`s1.z/2`）。这里的初值只是
+ *    「量出来之前」的占位 —— 用当前船（`Ship01.glb`，16.51 × 26.00 m）的实测值。
+ * ⚠️ 占 1 个槽位 ⇒ `KEEP_OUT_MAX` 从 8 抬到 9（`useGrassUniforms.ts` 的
+ *    `KEEP_A/KEEP_B` 与 `grassCompute.ts` 的循环都按这个常量定长，会自动跟上）。
+ * `?craterfloor=0`（A/B 回旧观感）时这一条也一起废掉 —— 旧观感里坑底根本没草。 */
+const SHIP_KEEP_SLOT = KEEP_OUT.length;
+export const SHIP_KEEP_INDEX = SHIP_KEEP_SLOT;
+/** 椭圆半轴相对 bbox 半轴的「收紧系数」+ 余量（米）。按低机位观感可调。 */
+const SHIP_KEEP_RX_K = 0.70;
+const SHIP_KEEP_RZ_K = 0.85;
+const SHIP_KEEP_MARGIN = 0.35;
+/** 当前船的实测半轴（米）：`Ship01.glb` = 16.51 × 26.00 m。仅作「运行时覆盖之前」的初值。 */
+const SHIP_HALF_W0 = 8.25;
+const SHIP_HALF_L0 = 13.0;
+
+KEEP_OUT.push(
+    CRATER_FLOOR_ON
+        ? {
+            x: CRATERS[0].x, z: CRATERS[0].z,
+            rx: SHIP_HALF_W0 * SHIP_KEEP_RX_K + SHIP_KEEP_MARGIN,
+            rz: SHIP_HALF_L0 * SHIP_KEEP_RZ_K + SHIP_KEEP_MARGIN,
+            rot: (QNUM('wyaw', -24)! * Math.PI) / 180,
+            name: '飞船（机身/龙骨）',
+        }
+        : { x: 9999, z: 9999, rx: 1e-3, rz: 1e-3, rot: 0, name: '飞船（机身/龙骨）·关' },
+);
+
+/**
+ * 用 `WingShipApi.tsx` **运行时量到的** bbox 半轴刷新飞船那一条避让区。
+ *
+ * 为什么必须运行时给：船换素材/换 `?wlen=` 之后 `s1.x/2`、`s1.z/2` 就变了，
+ * 写死 13 / 8.25 会让草第二天从船肚子里长出来（而且只在换素材时才发现）。
+ *
+ * 调用方（`WingShipApi.tsx` 里 `halfL/halfW` 算出来之后）：
+ * ```ts
+ * if (setShipKeepOut(halfW, halfL, (API_YAW * Math.PI) / 180)) syncKeepOutUniforms();
+ * ```
+ * ⚠️ 必须跟着调 `syncKeepOutUniforms()`（`useGrassUniforms.ts`）—— GPU 侧的
+ *    `uKeepA/uKeepB` 是模块级 Vector4 数组，改完不推就还是旧值。
+ * @returns 是否真的改了（`?craterfloor=0` 时这条槽位是空的，返回 false）
+ */
+export function setShipKeepOut(halfW: number, halfL: number, rotRad: number): boolean {
+    if (!CRATER_FLOOR_ON) return false;
+    const o = KEEP_OUT[SHIP_KEEP_SLOT];
+    if (!o) return false;
+    const rx = halfW * SHIP_KEEP_RX_K + SHIP_KEEP_MARGIN;
+    const rz = halfL * SHIP_KEEP_RZ_K + SHIP_KEEP_MARGIN;
+    if (Math.abs(o.rx - rx) < 1e-4 && Math.abs(o.rz - rz) < 1e-4 && Math.abs(o.rot - rotRad) < 1e-4) return false;
+    o.rx = rx;
+    o.rz = rz;
+    o.rot = rotRad;
+    return true;
+}
+
 /* ── 阶段开关：长桌与蛋糕台只在「宴会阶段」才存在 ──────────────────────
  * 用户 m03988：「那个光秃的一条（蛋糕桌子）你等任务进行到那一步的时候，再压草高度。
  *              之前正常。」
@@ -132,8 +236,13 @@ export function setKeepOutProps(on: boolean): boolean {
 /** 当前是否已经开了（给调试/探针用）。 */
 export function keepOutPropsOn(): boolean { return propsOn; }
 
-/** GPU 侧固定槽位数。当前只用了 4 个，留 8 个够以后加。 */
-export const KEEP_OUT_MAX = 8;
+/**
+ * GPU 侧固定槽位数。
+ * 4 原有（月牙石桌 / 长桌 / 蛋糕台 / 信箱）+ 4 采集点水洼 + **1 飞船**（task-17）= 9。
+ * ⚠️ 这个常量同时决定 `useGrassUniforms.ts` 的 `KEEP_A/KEEP_B` 长度与
+ *    `grassCompute.ts:59` 的循环上界 —— 加槽位只改这里，两处会自动跟上。
+ */
+export const KEEP_OUT_MAX = 9;
 
 /** 空槽位（不影响任何东西）：半径 1e-3 + 远处坐标 ⇒ 归一化距离爆表 ⇒ 因子恒 1。 */
 export const KEEP_OUT_EMPTY: KeepOutEllipse = { x: 9999, z: 9999, rx: 1e-3, rz: 1e-3, rot: 0, name: '' };
@@ -174,6 +283,8 @@ export function keepOutFactor(x: number, z: number): number {
  * CPU 版「草还能长多高」的系数：KEEP_H_MIN（踩秃的短草茬）~ 1（满高）。
  * 用到它的地方要和 shader 里 mix(KEEP_H_MIN, 1, keep) 完全一致。
  */
+export const KEEP_H_MIN = 0.08;
+
 export function keepOutHeightFactor(x: number, z: number): number {
     return KEEP_H_MIN + (1 - KEEP_H_MIN) * keepOutFactor(x, z);
 }

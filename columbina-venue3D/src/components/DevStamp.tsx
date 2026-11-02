@@ -23,6 +23,7 @@ const DANGER: Array<[string, (v: string) => boolean, string]> = [
     ['landold', (v) => v !== '0', '关掉本轮的新收尾逻辑（回到旧行为）'],
     ['settle', (v) => Number(v) <= 0, '关掉站姿合成（松手后仍是走路姿势）'],
     ['footlock', (v) => Number(v) <= 0, '关掉接地补偿'],
+    ['secflare', (v) => Number(v) <= 0, '关掉袖子外撑（= 回到改动前的行为）'],
     ['secdrive', (v) => Number(v) <= 0, '关掉肢体驱动的向前摆'],
     ['secanti', (v) => Number(v) < 0, '关掉布料方向性约束'],
     ['secondary', (v) => Number(v) <= 0, '关掉头发/衣服弹簧骨'],
@@ -76,6 +77,51 @@ export default function DevStamp() {
                     + `　肢体驱动 ${s ? s.driveDeg + '°' : '—'}（前襟 ${s ? s.driveFrontBones : '—'} / 袖 ${s ? s.driveArmBones : '—'}）`
                     + `　本帧驱动 腿 ${s ? n1(s.driveFwd) : '—'} 臂 ${s ? n1(s.driveArm) : '—'} 推动 ${s ? s.driveN : '—'} 根`
                     + `　相位超前 ${s ? s.driveLead + ' s' : '—'}`,
+                /* ★ 袖子外撑（`?secflare=`）。**这一行只读数据 + 拼字符串**，不放判定/计算逻辑：
+                 *   判定放在 secondaryMotion 里，这里放逻辑就会变成「两个真相」。
+                 *   三个数各证明一件事：
+                 *   `袖骨 N 根` = 构建期静态分类（N>0 才可能真的撑）；
+                 *   `本帧撑 M 根` = 运行期实际执行（M=0 而 N>0 ⇒ 速度信号没上来 / 被门挡了）；
+                 *   `驱动 K 根` 必须与 `本帧驱动 推动` 同时看 —— driveN=0 且 flare 有数，
+                 *   才证明这次只开了外撑、**没有顺手把肢体驱动打开**。 */
+                `袖子外撑：参数 ${s ? s.flareDeg + '°' : '—'}（袖骨 ${s ? s.flareBones : '—'} 根`
+                    + `　本帧撑 ${s ? s.flareN : '—'} 根　平均 ${s ? n1(s.flareMeanDeg) : '—'}°）`
+                    + `　撑开量 ${s ? n1(s.flareAmt) : '—'}　速度 ${s ? n1(s.flareSpd) + ' m/s' : '—'}`
+                    + `　离体轴 ${s ? n1(s.flareOlMean) + ' / ' + n1(s.flareOlMax) + ' m' : '—'}`
+                    + `　净外移 ${s ? n1(s.flareShiftMean * 1000) + ' / ' + n1(s.flareShiftMax * 1000) + ' mm' : '—'}`
+                    + `　驱动 ${s ? s.driveN : '—'} 根`,
+                /* ★★★ 袖子**侧向**飘（`?secside=`，用户 m18305：「袖子的摆动方向向两侧，
+                 *   不随手臂前后」）。与上面「袖子外撑」是**两条独立通道**，读数必须分开：
+                 *   - `参数 X°` = `?secside=` 的设定值（构建期算出的目标角）；
+                 *   - `本帧摆 N 根 / 平均 Y°` = 运行期真的执行了多少根、生效多少度；
+                 *     两者都取 `rig.sideN / rig.sideDeg`（`sideDeg` 是**生效**角，不是设定值）；
+                 *   - `离体 向前↔两侧` = `measureSleeve()` 的 X（侧向）/ Z（前后）均值 ——
+                 *     这一对比才是验收判据：侧向应显著大于前后，`?secside=-1` 时应掉回去。
+                 *   `?secside=-1` 时 `sideBones` 应为 0（分类没跑），三者同时归 0。 */
+                (() => {
+                    const sd = s ? s.sideDeg : null;
+                    const n = s ? s.sideN : null;
+                    const bonesN = s ? s.sideBones : null;
+                    let sv: any = null;
+                    try { sv = M.sleeve ? M.sleeve() : null; } catch { sv = null; }
+                    return `袖子侧向：参数 ${sd == null ? '—' : sd + '°'}（臂饰 ${bonesN == null ? '—' : bonesN} 根`
+                        + `　本帧摆 ${n == null ? '—' : n} 根　平均 ${sd == null ? '—' : sd}°）`
+                        + `　离体 向前 ${sv ? n1((sv.z || 0) * 100) + ' cm' : '—'} ↔ 两侧 ${sv ? n1((sv.x || 0) * 100) + ' cm' : '—'}`
+                        + `　侧向优势 ${sv && sv.z > 1e-6 ? n1(sv.x / sv.z) + '×' : '—'}`;
+                })(),
+                /* ★★★ 第二十四轮：四片布（编号1袖 / 4披肩 / 6披风 / 8带）的**幅度读数**。
+                 *  用户原话：「?clothamp 参数不起作用，且游戏内无任何变化」——
+                 *  实测参数确实生效（`dev` 69°→32°），但四片布本来只有 ±9°/±5°，
+                 *  肉眼看不出差别 ⇒ 必须把数字打出来，让他能**边调边看**，不用靠眼睛比。
+                 *  `设定` = URL 决定的角（已乘 clothamp）；`本帧` = 真的转了多少 —— 两者要一起看。 */
+                (() => {
+                    const cf = s ? s.clothFlat : null;
+                    if (!cf) return '布料幅度：—';
+                    return `布料幅度 clothamp=${cf.amp}　`
+                        + `1袖 设定 ${cf.set.sleeve}°(+${cf.set.sleeveOsc} 往复) 本帧 ${cf.now.sleeve}°　`
+                        + `4披肩 设定 ${cf.set.shawl}° 本帧 ${cf.now.shawl}°　`
+                        + `6披风 设定 ${cf.set.cape}°　8带 设定 ${cf.set.ribbon}° 本帧合 ${cf.now.piece}°`;
+                })(),
                 `操作：${f ? `控制 ${f.ctrl ? '已开' : '未开'}　走 ${f.move ? '走' : '停'}` : '—'}`,
                 `URL 参数：${paramLine}`,
             ];

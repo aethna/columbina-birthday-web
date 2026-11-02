@@ -21,8 +21,10 @@ import { QS, QNUM, QVEC } from '../core/utils/query';
 import DevStamp from '../components/DevStamp';
 import { worldHeightCPU } from '../core/worldRegions';
 
-/** ★★ 开发版状态角标开关：缺省开，`?stamp=0` 关（截图取证时想干净就关掉） */
-const STAMP_ON = QNUM('stamp', 1)! > 0;
+/** ★★ 开发版状态角标开关：缺省**关**（2026-10-24 用户 12 轮任务4「左下角提示框去掉」）。
+ *  需要自查功能是否生效时用 `?stamp=1` 临时打开 —— 组件本身一行没删，
+ *  只是不再默认画在玩家画面上。 */
+const STAMP_ON = QNUM('stamp', 0)! > 0;
 
 /**
  * ★★★ 后处理链二选一（2026-10-17 修）。
@@ -51,8 +53,6 @@ useLoader.preload(AudioLoader,
         '/audio/fs_grass3.mp3',
         '/audio/fs_grass4.mp3',
         '/audio/fs_grass5.mp3']);
-
-useLoader.preload(AudioLoader, ['/audio/wave01.mp3']);
 
 /* ===== 验收机位（URL 参数，保证截图可复现） =====
  * ?dpr=1         锁定像素比 —— 同时关掉 PerformanceMonitor 自适应（它会让 dpr 每帧漂移，截图不可复现）
@@ -125,10 +125,7 @@ function Diag() {
     return null;
 }
 
-export const BeamSceneContext = createContext<THREE.Scene | null>(null);
-
 export default function App() {
-    const beamScene = useMemo(() => new THREE.Scene(), []);
     const [dpr, setDpr] = useState(FIX_DPR ?? 1);
 
     const toggleCameraMode = useGameStore((state) => state.toggleCameraMode);
@@ -177,9 +174,10 @@ export default function App() {
             四个界面（信纸 / 对话框 / 合影 / 相册）打开时占住指针，关掉即释放；
             F 键互动那一类由 `core/game/interact.ts` 自己占。同样只挂订阅、返回 null。 */}
         <PointerHold />
-        {/* ★★ 开发版状态角标：`?stamp=0` 关。把「哪份代码 / 功能开关 / URL 里带了什么参数」
+        {/* ★★ 开发版状态角标：缺省**关**，`?stamp=1` 打开。把「哪份代码 / 功能开关 / URL 里带了什么参数」
             直接画在屏幕上 —— 验收者开不了 F12，这是唯一能自查「功能到底有没有生效」的窗口。
-            见 src/components/DevStamp.tsx 顶部的长注释。 */}
+            见 src/components/DevStamp.tsx 顶部的长注释。
+            ★ 2026-10-24（12 轮任务4）：用户说「左下角提示框去掉」⇒ 缺省不再挂。 */}
         {STAMP_ON && <DevStamp />}
 
 
@@ -235,25 +233,23 @@ export default function App() {
                     />
                 )}
 
-                <BeamSceneContext.Provider value={beamScene}>
-                    <WorldController />
+                <WorldController />
 
-                    <Suspense fallback={null}>
-                        <color attach="background" args={['#000000']} />
-                        {FIX_CAM
-                            ? <StaticLook target={FIX_LOOK} />
-                            : <CameraViewControl />}
-                        <Environment
-                            files="/textures/potsdamer_platz_1k_nb.hdr"
-                            environmentIntensity={0.5}
-                        />
-                        <DirectionalLight />
-                        {/* 后处理只挂一条：缺省 PostFX（由 WorldController 内部挂载），
-                            `?pple=1` 才换回旧链 —— 理由见文件头部 LEGACY_PP 的长注释。
-                            ⚠️ 两条同时挂会让场景每帧渲两遍、且后跑的覆盖先跑的色调映射。 */}
-                        {LEGACY_PP && <Effects />}
-                    </Suspense>
-                </BeamSceneContext.Provider>
+                <Suspense fallback={null}>
+                    <color attach="background" args={['#000000']} />
+                    {FIX_CAM
+                        ? <StaticLook target={FIX_LOOK} />
+                        : <CameraViewControl />}
+                    <Environment
+                        files="/textures/potsdamer_platz_1k_nb.hdr"
+                        environmentIntensity={0.5}
+                    />
+                    <DirectionalLight />
+                    {/* 后处理只挂一条：缺省 PostFX（由 WorldController 内部挂载），
+                        `?pple=1` 才换回旧链 —— 理由见文件头部 LEGACY_PP 的长注释。
+                        ⚠️ 两条同时挂会让场景每帧渲两遍、且后跑的覆盖先跑的色调映射。 */}
+                    {LEGACY_PP && <Effects />}
+                </Suspense>
             </Canvas>
         )}
     </>

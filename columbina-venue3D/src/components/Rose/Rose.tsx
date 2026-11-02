@@ -35,14 +35,6 @@ export default function Rose({
         uniforms.compute.uCharacterWorldPos.value.copy(characterPos)
     })
 
-    useEffect(() => {
-        const onHit = ({ position, radius }: { position: THREE.Vector3, radius: number }) => {
-            spawn(position, 256, radius);
-        };
-        gameEvents.on('beam:hit', onHit);
-        return () => gameEvents.off('beam:hit', onHit);
-    }, [spawn]);
-
     if (isLoading || !lodBuffers.length || !vatData) return null
 
     return (

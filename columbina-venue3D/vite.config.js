@@ -93,6 +93,92 @@ function wasmMime() {
   };
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * `public/` 新文件在 dev 下的兜底中间件（2026-10-20 加）
+ *
+ * 症状：往 `public/` 里新拷一个模型（例如 `public/venue/props/xxx.glb`），
+ * dev server 打开就是 `GET .../xxx.glb → 200 text/html 722 B`，控制台里
+ * GLTFLoader 报 `SyntaxError: Unexpected token '<'` —— 拿到的是 index.html。
+ *
+ * 根因：`server.watch.ignored` 里把整个 public 目录排除了（为了不让 chokidar 去 watch
+ * 那几个 GB 的 pmx/glb，Windows 上 EBUSY 会把 vite 直接打崩，见下面注释）。
+ * 副作用是 vite 内部 `servePublicMiddleware` 用**启动时**扫描出来的
+ * `publicFiles` Set 过滤请求，而新文件只能靠 watcher 的 add 事件进这个 Set
+ * ⇒ 被 watch.ignored 挡住的目录里新加的文件**永远进不去**，请求掉到 SPA 回退。
+ *
+ * 这个插件做的事：请求路径带扩展名、且能在 `public/` 下找到真文件时，直接按
+ * 扩展名给 MIME 流出去（dev 与 preview 都生效）。这样「拷进去就能用」，
+ * 不用为了一个素材重启 dev server。生产构建走 vite 自己的资源流程，不受影响。
+ * ──────────────────────────────────────────────────────────────────────────── */
+function publicHot() {
+  const MIME = {
+    ".glb": "model/gltf-binary",
+    ".gltf": "model/gltf+json",
+    ".bin": "application/octet-stream",
+    ".pmx": "application/octet-stream",
+    ".pmd": "application/octet-stream",
+    ".vmd": "application/octet-stream",
+    ".vpd": "application/octet-stream",
+    ".ktx2": "image/ktx2",
+    ".hdr": "image/vnd.radiance",
+    ".exr": "image/aces",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".wav": "audio/wav",
+    ".mp4": "video/mp4",
+    ".json": "application/json",
+    ".txt": "text/plain; charset=utf-8",
+    ".csv": "text/csv; charset=utf-8",
+    ".ttf": "font/ttf",
+    ".otf": "font/otf",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".wasm": "application/wasm",
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+  };
+
+  const handler = (root) => (req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    const raw = (req.url || "").split("?")[0].split("#")[0];
+    if (!raw || raw === "/") return next();
+    let path;
+    try { path = decodeURIComponent(raw); } catch { return next(); }
+    const dot = path.lastIndexOf(".");
+    if (dot < 0 || dot < path.lastIndexOf("/")) return next(); // 无扩展名 ⇒ 交给 SPA
+    const ext = path.slice(dot).toLowerCase();
+    const type = MIME[ext];
+    if (!type) return next();
+
+    const file = join(root, "public", path);
+    if (!existsSync(file)) return next();
+
+    res.setHeader("Content-Type", type);
+    res.setHeader("Cache-Control", "no-cache");
+    res.statusCode = 200;
+    if (req.method === "HEAD") return res.end();
+    createReadStream(file).pipe(res);
+  };
+
+  return {
+    name: "dsh-public-hot",
+    configureServer(server) {
+      server.middlewares.use(handler(server.config.root));
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(handler(server.config.root));
+    },
+  };
+}
+
 export default {
   /* ★ 2026-10-17 由 `"./"` 改成 `"/"`。
    *
@@ -112,7 +198,7 @@ export default {
       '@core': resolve(__dirname, 'packages/three-core/src')
     },
   },
-  plugins: [react(), basicSsl(), wasmMime()],
+  plugins: [react(), basicSsl(), wasmMime(), publicHot()],
   server: {
     host: true,
     https: true,
@@ -131,7 +217,30 @@ export default {
     //   chokidar 去 watch 这个刚落地的大文件同样 EBUSY，vite 又崩了一次：
     //   `Error: EBUSY: resource busy or locked, watch '...\public\columbina\少女.pmx'`。
     //   public 下的东西是静态资源，本来就不需要 HMR，忽略掉没有副作用。
-    watch: { ignored: ['**/*.tmpdir/**', '**/*.tmp', '**/public/**'] },
+    // ★ 2026-10-22：`dist-verify-*/**` 也必须忽略。团队并行验证会把产物构建到
+    //   `dist-verify-water` / `dist-verify-sleeve` 等目录，它们都在 root 下 ⇒ chokidar
+    //   会去 watch 正在被写入的 `.vmd` / `.pmx`，实测把整个 dev server 打崩：
+    //   `Error: EBUSY: resource busy or locked, watch '...\dist-verify-water\columbina\g5\dash_fwd.vmd'`
+    //   崩溃后 5181 直接不通（curl 返回 000），所有取证断掉。构建产物同样不需要 HMR。
+    watch: {
+      ignored: [
+        '**/*.tmpdir/**',
+        '**/*.tmp',
+        '**/public/**',
+        '**/dist/**',
+        '**/dist-verify*/**',
+      ],
+    },
+  },
+  /* ★ 2026-10-23（第十轮 t2 取证用）：`preview` 的 host 单独可调。
+   *
+   *   上面那个 `host: true` 只作用于 `server`；`preview` 不带 host 时只绑
+   *   `localhost`（解析成 ::1），于是 `https://127.0.0.1:9442/` 直接
+   *   `ERR_CONNECTION_CLOSED`，无头 Edge 出图全是「无法访问此页面」（29279 B）。
+   *   缺省不动（留空 ⇒ vite 原行为），只有显式 `PREVIEW_HOST=127.0.0.1`
+   *   时改成绑 v4 回环 —— 冻结快照法（dist-verify-* + preview）都受益。 */
+  preview: {
+    ...(process.env.PREVIEW_HOST ? { host: process.env.PREVIEW_HOST } : {}),
   },
   build: {
     outDir: "dist",
@@ -189,3 +298,5 @@ export default {
     },
   },
 };
+
+

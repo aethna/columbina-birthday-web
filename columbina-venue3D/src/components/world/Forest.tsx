@@ -27,7 +27,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { QNUM, QSTR } from '../../core/utils/query';
 import { CHUNK, FOREST_ASSETS, DEFAULT_FOREST_SEED, collectForest } from '../../core/forest';
 import { LEAF_TINTS, LEAF_NAME_RE, makeLeafMaterial, makeCutoutMaterial, applyBarkShade, setLeafVertexShade, setLeafWind, setWindAmp, setEmisFade } from '../../core/leafTint';
-import { buildProcAsset } from '../../core/forestProc';
+import { buildProcAsset, preloadSlabTextures } from '../../core/forestProc';
+import { resetTreeColliders, addTreeCollider } from '../../core/world/treeCollide';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const FOREST_ON = QNUM('forest', 1)! > 0;
@@ -94,6 +95,45 @@ const LEAF_SPREAD_Y = QNUM('leafspready', 1.06)!;
  *  超了只是截断（不会崩），`window.__forest.capped` 会记下来。 */
 const CAP = 1600;
 
+/* ════════════════════════════════════════════════════════════════════════
+ * ★★ 2026-10-21 第四轮反馈 4a：「依然没有树」——失败必须**响** ★★
+ *
+ * 现象：用户实机刷新后依然一棵树都没有，而探针 `__forest.total = 925`、
+ * 同机位 headless 出图 `_logs/t21/f4a_at_58_186.png` 是密林。
+ * 为什么两边不一致成这样还能「无人知晓」：
+ *
+ *   ① `loader.loadAsync(def.url)` 失败原本只 `console.warn` 后 `continue`
+ *      —— 18 个 GLB 素材**全部**失败时，`slots` 是空的、`total` 恒为 0，
+ *      页面看起来只是「有点空」，控制台一条 warn 淹在 vite 的 HMR 噪声里。
+ *   ② `buildForest()` 整体 reject 原来也只 `console.warn`
+ *      ⇒ 连「建到一半」和「一个素材都没有」都分不开。
+ *
+ * ⇒ 现在两处都变成**可枚举的响**：
+ *   · 每个失败素材进 `missing[]`（key + url + 错误原文），并 `console.error`；
+ *   · `window.__forest.missing` 常驻（正常是 `[]`），
+ *     `window.__forest.ok = total > 0 && missing.length === 0`；
+ *   · 全部失败时再补一条 `console.error`，带**一步定位**判据。
+ *
+ * 一步定位（用户刷新后仍无树时，**只看控制台一行**）：
+ *   打开 DevTools → Console，找 `[forest]` 开头的 **error**：
+ *     · 有 `404 … /forest/real/xxx.glb`
+ *         ⇒ 静态宿主没把 `public/forest/real/` 带上，或 base 不是站点根
+ *           （`base` 配了子路径时 URL 必须是 `/子路径/forest/real/…`）。
+ *           验：直接在地址栏打开 `https://<host>/forest/real/p_oak.glb`，
+ *           下载到文件＝路径对；出 404 / 返回 index.html＝路径错。
+ *     · 有 `Unsupported texture type with RGBFormat` / `Texture format not supported`
+ *         ⇒ 有人重建了树皮材质（JPEG 无 alpha 被推进 RGBFormat），见
+ *           `applyBarkShade` 上方的长注释：**只能在源材质上挂 `colorNode`**。
+ *     · 一条 `[forest]` error 都没有，但 `__forest.missing.length > 0`
+ *         ⇒ 素材是「加载成功但没建出槽位」，看 `missing[].url` 逐个复现。
+ *   · 全都没有 error，而 `__forest.total === 0` 且 `missing.length === 0`
+ *     ⇒ 素材全好，是**这附近没有树**：查 `__forestCam` 与 `__forest.cell`
+ *       是不是你以为的位置（`?forest=0` 会被 `FOREST_ON` 关掉整层）。
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/** 一个加载/构建失败的素材。`url` 原样保留，`error` 留短串（供控制台与探针读）。 */
+export interface ForestMissing { key: string; url: string; error: string }
+
 interface Slot {
     /** 全局唯一（`素材|材质组序号|叶色`）。**不能只用 `素材|叶色`**：
      *  一棵树按材质会拆出「枝 / 干 / 叶」三个槽位，前两个的叶色都是 0，
@@ -112,6 +152,16 @@ interface Built {
     group: THREE.Group;
     slots: Slot[];
     byKey: Map<string, Slot[]>;
+    /** 建出槽位的素材数（GLB + proc 都算）。 */
+    loaded: number;
+    /** 失败素材清单（正常为 `[]`）。见文件上方 4a 长注释。 */
+    missing: ForestMissing[];
+}
+
+/** 错误对象 → 一行短串（探针里读得动，控制台里又不刷屏）。 */
+function errText(e: any): string {
+    const m = e && (e.message ?? e.reason ?? e.type);
+    return String(m ?? e ?? 'unknown').slice(0, 300);
 }
 
 const _m = new THREE.Matrix4();
@@ -119,6 +169,8 @@ const _p = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _s = new THREE.Vector3();
 const _e = new THREE.Euler();
+/* 零尺度占位矩阵已随第七轮修法删除：槽位不再用「count=1 + 零尺度」冒充实例，
+ * 改为「首次 refill() 拿到真实数据才进场景」。见 `add()` 里那段长注释。 */
 
 async function buildForest(): Promise<Built> {
     const loader = new GLTFLoader();
@@ -126,6 +178,14 @@ async function buildForest(): Promise<Built> {
     group.name = 'forest';
     const slots: Slot[] = [];
     const byKey = new Map<string, Slot[]>();
+    const missing: ForestMissing[] = [];
+    let loaded = 0;
+
+    /* 石板岩面贴图（用户 m00002 第2条）：必须在下面的素材循环之前完成 ——
+     * `buildProcAsset('slab')` 是在循环里**同步**调用的，会立刻读模块级的
+     * `slabDiff`；没预载完就只能退回纯程序化石纹。
+     * 失败不阻塞：`preloadSlabTextures()` 内部已 catch，这里再兜一层。 */
+    await preloadSlabTextures().catch(() => { });
 
     for (const key of Object.keys(FOREST_ASSETS)) {
         const def = FOREST_ASSETS[key];
@@ -158,7 +218,11 @@ async function buildForest(): Promise<Built> {
             try {
                 gltf = await loader.loadAsync(def.url);
             } catch (e) {
-                console.warn(`[forest] 素材加载失败 ${key} (${def.url}):`, e);
+                /* ⚠️ 4a：这里原本是 `console.warn` + `continue` —— 18 个素材全失败时
+                 * 一棵树都没有，而页面上只有几条 warn。现在登记进 `missing`
+                 * （稍后进 `window.__forest.missing`）并升级成 **error**。 */
+                missing.push({ key, url: def.url, error: errText(e) });
+                console.error(`[forest] 素材加载失败 ${key} (${def.url}) —— ${errText(e)}`);
                 continue;
             }
             gltf.scene.updateMatrixWorld(true);
@@ -249,6 +313,15 @@ async function buildForest(): Promise<Built> {
             for (const g of geos) { g.computeBoundingBox(); g.computeBoundingSphere(); }
         }
 
+        /* 「加载成功但一件几何体都没有」也是失败 —— 老代码在这里会静默跳过，
+         * 最终表现同样是「没有树」，但 `missing` 里看不出原因。 */
+        if (groupsByMat.size === 0) {
+            missing.push({ key, url: def.url || `proc:${def.proc}`, error: 'loaded but produced no geometry' });
+            console.error(`[forest] 素材无几何体 ${key} (${def.url || def.proc})`);
+            continue;
+        }
+        loaded++;
+
         let gi = 0;
         for (const { mat: src, geos } of groupsByMat.values()) {
             const gIdx = gi++;
@@ -273,9 +346,35 @@ async function buildForest(): Promise<Built> {
                 // 实例散布在 160 m 见方里，基础包围球只有模型本身那么大 ⇒
                 // 不关掉视锥剔除会被整批剔掉（一阵一阵闪）。
                 im.frustumCulled = false;
+                /* ★★ 2026-10-22 第七轮：**建出来先不进场景**，等 `refill()` 拿到真实实例
+                 * 再 `group.add()`（见 `refill()` 里 `if (!s.mesh.parent)` 那段）。
+                 *
+                 * 病灶（实证，`_logs/t5/` 全套对照）：一个 InstancedMesh 只要**在还没有
+                 *   真实实例的某一帧被渲染器扫到过**，它的 GPU 侧实例绑定就定格在那一帧，
+                 *   之后无论 `count` 提到多少、`instanceMatrix.needsUpdate` 置几次都刷不动
+                 *   ⇒ 整片森林「提交 340 万个三角形但零像素」。
+                 *   （`RenderObject.js:580` 在 `instanceCount === 0` 时直接 `return null` 不发
+                 *    draw，但 `Pipelines.getForRender` 在取 drawParams **之前**就建好了管线；
+                 *    `InstanceNode.update()` 又只在物体被真正 draw 时才跑 ⇒ 首帧那份数据永远
+                 *    停在原地。）
+                 *
+                 * 已验证无效的修法（都试过了，别再回头）：
+                 *   - `count = 1` + 零尺度矩阵占位 + `DynamicDrawUsage` → **纯回归**，
+                 *     连原本能出树的「直接出生」也一起弄瞎（`_logs/t5/fix2/`，三机位全 241 KB）
+                 *   - 只 `needsUpdate` / 换新 instanceMatrix / 克隆 geometry / `count = 1600`
+                 *     / 只改 `alphaTest` / 只置空 `map` / 强制 `group.visible = true` → 全部无效
+                 *   - 800 ms 后 `material.clone()`（V1）能出树，但会在首帧分叉出两套材质，
+                 *     `leafTint` 的 uniform / 共享状态脱钩 —— 也不再走这条路
+                 *
+                 * 现在这条路的三条依据：
+                 *   - `J3`：运行期 `new InstancedMesh(...)` 拿到数据后再进场景 → 出像素
+                 *   - `X3`：有真实数据后 `remove + add` → 出树（384 KB）
+                 *   - 静态 `?cam=` 与「直接出生」都出树 ⇒ 只要首帧就带真实数据就没事
+                 *
+                 * ⚠️ `instanceMatrix` 保持默认 `StaticDrawUsage`：`DynamicDrawUsage` 走的是
+                 *   `updateRanges` 增量上传（`setMatrixAt` 不登记范围），`needsUpdate` 不见得
+                 *   会把整块 100 KB 的矩阵数组推上去 —— 这正是上一版回归的疑点。 */
                 im.count = 0;
-                im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-                group.add(im);
                 const slot: Slot = { id: im.name, mesh: im, key, leafTint };
                 slots.push(slot);
                 let arr = byKey.get(key);
@@ -350,17 +449,38 @@ async function buildForest(): Promise<Built> {
             }
         }
     }
-    return { group, slots, byKey };
+    /* 全部失败时最响的那一条：带**一步定位**判据（见文件上方 4a 长注释）。 */
+    if (missing.length > 0 && loaded === 0) {
+        console.error(
+            `[forest] 全部 ${missing.length} 个素材都没建出来 ⇒ 整片森林是空的。`
+            + ' 定位：在地址栏直接打开 ' + (missing[0]?.url || '/forest/real/p_oak.glb')
+            + ' —— 能下载到文件＝路径对（问题在解析/材质，看上面同类 error）；'
+            + ' 404 或返回 index.html＝静态宿主没带 public/forest/real 或 base 不是站点根。'
+            + ' 清单见 window.__forest.missing。',
+        );
+    }
+    return { group, slots, byKey, loaded, missing };
 }
 
 function refill(built: Built, camX: number, camZ: number, seed: number): { total: number; capped: number; per: Record<string, number> } {
     const cursor = new Map<Slot, number>();
     let total = 0;
     let capped = 0;
+    /* ★★ 2026-10-23 第九轮：树干碰撞体跟着实例一起重建（用户反馈 3「人物直接穿过树干」）。
+     *
+     *  为什么在这里发布：`collectForest()` 的每件道具都带 `key / x / z / h / sxz`，
+     *  世界树干半径 = `frac(key) × h × sxz` —— 这是**唯一**能拿到真实实例尺寸的时机。
+     *  去读 InstancedMesh 的实例矩阵反解世界坐标要多走一层 GPU buffer，得不偿失。
+     *
+     *  ⚠️ 发布点必须在 `for (const slot of list)` **外面**：一个道具可能对应两个叶色槽
+     *     （`slot.leafTint !== null` 那条 continue），写在里面会让同一棵树重复注册两次。
+     *  ⚠️ 森林按相机铺、32 m 一次 `refill()` ⇒ 这里是整表重建，不是增量追加。 */
+    resetTreeColliders();
     collectForest(camX, camZ, seed, (p) => {
         const list = built.byKey.get(p.key);
         if (!list) return;
         total++;
+        addTreeCollider(p.key, p.x, p.z, p.h, p.sxz);
         for (const slot of list) {
             // 叶色槽只吃对上色的件；树干/树枝/石头等 `leafTint === null`，两色都要长
             if (slot.leafTint !== null && slot.leafTint !== p.tint) continue;
@@ -378,41 +498,336 @@ function refill(built: Built, camX: number, camZ: number, seed: number): { total
     const per: Record<string, number> = {};
     for (const s of built.slots) {
         const n = cursor.get(s) ?? 0;
+        /* ★★ 2026-10-22 第七轮：**先写数据，再进场景**（详见 `add()` 里那段长注释）。
+         *
+         *   旧写法的问题：`add()` 里 `group.add(im)` 发生在建槽那一刻，此时
+         *   `count = 0`；首帧渲染器扫到它、把实例绑定定格在「空」的状态，之后
+         *   `refill()` 再写矩阵也没用（`_logs/t5/fix2/` 三机位全 241 KB = 零树）。
+         *
+         *   现在：`add()` 不再 `group.add()`，第一次 `refill()` 拿到 `n > 0` 才把它挂进
+         *   场景 —— 渲染器第一次见到它时，`count` 与 `instanceMatrix` 已是最终内容。
+         *
+         *   `n === 0` 时**保持不挂**（不是 `count = 1` 占位）：没实例就不该被扫到。
+         *   离开森林区块时 `count` 归 0 但对象仍在场景里——这是**允许**的，因为
+         *   「定格」只发生在它第一次被扫到的那一帧，而那一帧一定已经是真实数据。 */
         s.mesh.count = n;
-        s.mesh.instanceMatrix.needsUpdate = true;
-        if (n) per[s.id] = n;
+        if (n > 0) {
+            s.mesh.instanceMatrix.needsUpdate = true;
+            per[s.id] = n;
+            if (!s.mesh.parent) built.group.add(s.mesh);
+        }
+        /* `n === 0`：`count` 归 0、对象留在场景里也不影响 —— 「定格」只发生在它
+         * 第一次被扫到的那一帧，而那一帧按上面的逻辑一定已经有真实数据。 */
     }
     return { total, capped, per };
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+ * ★★ 2026-10-23 第八轮：「首次进场景」的一次性成本挪到加载期付掉 ★★
+ *
+ * 用户反馈：「森林刷出来了，但**刷新慢**、刷新过程**卡顿**；月坑水体同样」。
+ * 实测（冻结构建 `dist-verify-perf-base`，preview 9435，1280×720，
+ * `_logs/round6/results-perf-base.jsonl`）：
+ *   · 会场出生处 `total = 0`（会场不在森林区）⇒ 没有任何槽位进过场景；
+ *   · 第一次走进森林、`refill()` 在一帧内挂上 50 个槽位 → **982.3 ms 单帧**
+ *     （t = 5537 ms）；这就是用户感知到的「刷新慢 / 卡顿」；
+ *   · 之后纯换格只有 13~17 ms（`collectForest` 25 个 chunk ≈ 11 ms 超额）。
+ *
+ * 这 982 ms 是什么（三次探针 `_logs/round6/pre-warmtest*.js`，都只改运行时对象）：
+ *   · warmtest1 逐帧挂 1 槽（真实非零矩阵）≈ 34 ms/槽，合计 ≈ 2.3 s；
+ *   · warmtest2 一帧挂全部 57 槽 = **1044.5 ms**；全摘掉、隔帧再挂 57 槽
+ *     = **6.6 ms** ⇒ 成本是**一次性**的（管线编译 + 纹理/几何首次上传），
+ *     不是每次挂载都要付；
+ *   · warmtest3 用**替身 InstancedMesh**（同 geometry、同 material、`count = 1`、
+ *     真实矩阵）先编译一遍 → 真实槽位首次挂载**仍然 1225 + 1450 ms**
+ *     ⇒ 成本绑在**具体的那个 InstancedMesh 对象**上，替身替不了别人。
+ *
+ * 所以修法只有一条：让每个**真实**槽位自己先把这笔成本付掉，而且趁玩家
+ * 还看不见它的时候付。做法是「真实矩阵挂一帧 → 立刻摘掉」：
+ *   · 挂的时候 `count = 1` 且矩阵是**真实非零尺度**（不是当年被证否的
+ *     `count = 1` + 零尺度占位）⇒ `InstanceNode.update()` 真的跑过一次，
+ *     实例绑定被正确建立；
+ *   · **隔帧**再 `group.remove()` —— 与第七轮取证 X3 同型（`remove` 之后
+ *     `add` 能正常出树，384 KB），而同一 tick 内的 `remove/add`（Y1）无效；
+ *   · 之后 `refill()` 的 `group.add()` 仍然发生在「数据已写完」之后，
+ *     第七轮「先写数据后进场景」的**不变式原样保留**，槽位不会被定格。
+ *
+ * 分批 + 自适应批量：每帧目标 ≤ `WARM_BUDGET_MS`（默认 45 ms），用上一批的
+ * 实测帧时做 EWMA 估每槽成本。加载期总共多花约 1 s 墙钟，但**不出现长帧**。
+ * `?fwarm=0` 可关掉做 A/B。
+ * ════════════════════════════════════════════════════════════════════════ */
+const WARM_ON = QNUM('fwarm', 1)! > 0;
+const WARM_BUDGET_MS = QNUM('fwarmbudget', 45)!;
+/** 预热用的替身位置：相机正下方 800 m。槽位 `frustumCulled = false`，
+ *  所以照样提交、管线照样编译，但一定不出现在画面里。 */
+const WARM_Y = -800;
+
+interface WarmState {
+    /** 还没付过成本的槽位 */
+    pending: Slot[];
+    /** 当前这一批：本帧挂上，下一帧摘掉 */
+    batch: Slot[];
+    batchAt: number;
+    /** 每槽边际成本 EWMA（ms） */
+    estMs: number;
+    /** 每槽最坏成本（慢衰减，ms）。
+     *  为什么不能只用 `estMs`：摘批后槽位又变回「无 parent」，`refill()` 里按
+     *  `!mesh.parent` 重算 pending 会把付过成本的槽位塞回来 ⇒ 这些「复热」批次
+     *  几乎零成本（管线已编译），把 `estMs` 拖到下限 2 ms，`k` 于是涨到 8，
+     *  下一批 8 个**真槽**同帧编译 —— 实测撞出 374~430 ms 尖峰。
+     *  定量一律用 `max(peakMs, estMs)`，让一批的峰值成本只看最坏的那一档。 */
+    peakMs: number;
+    batches: number;
+    slots: number;
+    /** 已经付过成本的槽位（按对象身份记）。
+     *  摘批后它们同样是「无 parent」，只靠 `!mesh.parent` 判不出来 ——
+     *  实测重复预热把 `done` 推到 160（真实 57 槽），warm 总耗时 10.6 s。 */
+    warmed: Set<Slot>;
+    startMs: number;
+    endMs: number;
+    /** 本帧刚摘掉一批 ⇒ `refill()` 必须顺延一帧（第七轮 Y1：同 tick remove+add 无效）。 */
+    holdRefill: boolean;
+    /** 逐批实测（诊断用）：`[相对 startMs 的时刻, 本批槽数, 该批那一帧的帧时]` */
+    log: [number, number, number][];
+}
+
+/** 一次预热最多塞几槽（`?fwarmk`）。真槽单槽成本约 50 ms，8 槽同帧必炸。 */
+const WARM_MAX_K = Math.max(1, Math.round(QNUM('fwarmk', 2)!));
+
+function makeWarm(built: Built): WarmState {
+    /* 已经在场景里的槽位（已经有真实数据）不碰 —— 它们已经付过这笔成本。 */
+    const pending = built.slots.filter((s) => !s.mesh.parent);
+    const warmed = new Set(built.slots.filter((s) => !!s.mesh.parent));
+    return {
+        pending, batch: [], batchAt: 0, estMs: 24, peakMs: 40, batches: 0, slots: 0,
+        warmed, startMs: performance.now(), endMs: 0, holdRefill: false, log: [],
+    };
+}
+
+/** 下一次该预热哪些槽：只取「从没付过成本」的，别把复热算进进度。 */
+function warmPending(built: Built, W: WarmState): Slot[] {
+    return built.slots.filter((s) => !s.mesh.parent && !W.warmed.has(s));
+}
+
+function warmPublish(W: WarmState): void {
+    (window as any).__forestWarm = {
+        mode: 'warm-remove',
+        done: W.slots,
+        total: W.slots + W.pending.length,
+        batches: W.batches,
+        estMs: +W.estMs.toFixed(1),
+        peakMs: +W.peakMs.toFixed(1),
+        hold: W.holdRefill,
+        ms: +(performance.now() - W.startMs).toFixed(0),
+        endMs: W.endMs ? +W.endMs.toFixed(0) : 0,
+        log: W.log,
+    };
+}
+
+/** 只摘不挂：把当前批次移出场景。
+ *  **必须与挂载分属两帧** —— 第七轮 Y1 取证「同一 tick 内 `remove`+`add` 无效」
+ *  （实例绑定被打回定格态），X3 取证「隔帧 `remove` 之后 `add` 正常出树」。
+ *  因此真换格撞上预热批次时，`refill()` 要顺延一帧（见 `useFrame`）。 */
+function warmDropBatch(built: Built, W: WarmState): void {
+    for (const s of W.batch) {
+        built.group.remove(s.mesh);
+        s.mesh.count = 0;
+        /* 记成「付过成本」：之后 `refill()` 重算 pending 时才不会把它塞回队列。 */
+        W.warmed.add(s);
+    }
+    W.batch = [];
+    W.batchAt = 0;
+}
+
+/** 每帧推进一步：挂一批 → 下一帧摘掉 → 再挂下一批。 */
+function warmStep(built: Built, camX: number, camZ: number, W: WarmState, frameDt: number): void {
+    const now = performance.now();
+    if (W.batch.length > 0) {
+        /* 上一批已经真的画过一帧（管线编译 + 首次上传都发生在那一帧）⇒ 摘掉。
+         * 用这一帧的实测时长更新每槽成本，下一批据此定量。 */
+        const dt = now - W.batchAt;
+        const per = Math.max(2, (dt - 7) / W.batch.length);
+        W.estMs = W.estMs * 0.5 + per * 0.5;
+        /* 峰值只升不降（缓慢回落）：一批炸了就必须记住，否则下一批又超发。 */
+        W.peakMs = per > W.peakMs ? per : W.peakMs * 0.9 + per * 0.1;
+        if (W.log.length < 240) W.log.push([+(now - W.startMs).toFixed(0), W.batch.length, +dt.toFixed(1)]);
+        warmDropBatch(built, W);
+        if (W.pending.length === 0) W.endMs = now;
+        warmPublish(W);
+        return;
+    }
+    if (W.pending.length === 0) {
+        if (!W.endMs) W.endMs = now;
+        return;
+    }
+    /* 当前的帧已经很长（资源上传 / 地形重建…）⇒ 这一帧别再往上叠编译成本。
+     * 实测：不加这道闸，预热批次会和加载期的 200~260 ms 长帧叠在同一帧。
+     * 阈值就是 `WARM_BUDGET_MS`（默认 45 ms）：60 fps 的正常帧（16 ms）永远不触发，
+     * 而刚被上一批拖长的帧会自然跳过，形成「一批 / 隔一帧」的节流。 */
+    if (frameDt > WARM_BUDGET_MS) return;
+    /* 定量看「最坏单槽成本」而不是 EWMA：复热批次会把 EWMA 压到 2 ms。 */
+    const sizing = Math.max(4, W.peakMs, W.estMs);
+    const k = Math.max(1, Math.min(WARM_MAX_K, Math.round(WARM_BUDGET_MS / sizing)));
+    const take = W.pending.splice(0, k);
+    for (const s of take) {
+        _p.set(camX, WARM_Y, camZ);
+        _q.identity();
+        _s.set(1, 1, 1);
+        _m.compose(_p, _q, _s);
+        s.mesh.setMatrixAt(0, _m);
+        s.mesh.count = 1;
+        s.mesh.instanceMatrix.needsUpdate = true;
+        built.group.add(s.mesh);
+    }
+    W.batch = take;
+    W.batchAt = performance.now();
+    W.batches++;
+    W.slots += take.length;
+    warmPublish(W);
+}
+
 export function Forest({ visible = true }: { visible?: boolean }) {
     const camera = useThree((s: any) => s.camera);
+    /* 只读诊断（2026-10-22 第五轮）：判定「R3F 真正渲染的 scene」是不是森林组所在的那棵 ——
+     * 若两者不是同一对象，实例数据再正确也不会出现在画面里。 */
+    const r3fScene = useThree((s: any) => s.scene);
+    const r3fGl = useThree((s: any) => s.gl);
     const [built, setBuilt] = useState<Built | null>(null);
     const lastCell = useRef<{ x: number; z: number } | null>(null);
+    /** 第八轮：加载期预热作业（见下方 `makeWarm` / `warmStep` 的长注释）。 */
+    const warmRef = useRef<WarmState | null>(null);
+    /* ⚠️⚠️ 管线预热：森林「画了但零像素」的根因与修法（2026-10-22 第五轮）。
+     *
+     * 病灶：`add()` 为了「首帧就带实例路径」把 `count` 设成 1 并压入零尺度矩阵，
+     *   那份管线是在**还没有真实实例**（会场出生处 `total = 0`）时编译的。之后
+     *   `refill()` 把 `count` 提到 16~24、矩阵写进 buffer、`instanceMatrix.needsUpdate`
+     *   也置了，但 WebGPU 后端**复用第一次编译的管线/instance 绑定** ⇒ 实例矩阵到不了
+     *   顶点着色器 ⇒ 整片森林零像素（`draw calls` 正常、`visible` 全 true、矩阵读数全对）。
+     *
+     * 决定性对照（同机位 1280×720，第三人称传送到 39.7,-110，全部在 `_logs/t5/captain/`）：
+     *   - 基线（首帧 `count = 1` 占位）                        → 241 KB，无树
+     *   - 传送后（已渲染多帧）`group.remove(mesh); group.add(mesh)` → **384 KB，出树** ← X3
+     *   - 传送后 `material.clone()` 全量替换                    → 531 KB，出树     ← V1
+     *   - 换全新 `MeshStandardNodeMaterial`                     → 出树             ← U2
+     *   - 把**同一个**材质对象重新挂回去                         → 241 KB，无树     ← V3
+     *   - 换新 `instanceMatrix` attribute / 克隆 geometry / `count = 1600`
+     *     / 只 `needsUpdate` / 只改 `alphaTest` / 只置空 `map`   → **全部无效**
+     *   - **在 `refill()` 同一 tick 里做 `remove/add`**          → 241 KB，无效     ← Y1
+     *   ⇒ 与矩阵内容、视锥、可见性、材质数据都无关：后端要看到「这一帧它按新的
+     *     count 画过」，再重新登记节点，instance 绑定才会重建。
+     *
+     * 修法（第七轮，已实现）：**不要预热**。槽位在 `add()` 里不再进场景，
+     *   第一次 `refill()` 拿到真实 `n > 0` 才 `group.add()` —— 渲染器第一次
+     *   见到它时数据已经是终态，不需要任何「隔帧重登记」或「换材质」的补丁。
+     *   上一版 800 ms `material.clone()` 预热已删除（V1 会分叉材质，见上）。 */
+    /* 旧的 `warmTimer`（800 ms 后逐槽 `material.clone()` 预热）已在第七轮删除 ——
+     * 见下方 `__forestWarm` 那行注释：现在是「首次拿到真实数据才进场景」，不需要预热。 */
 
     useEffect(() => {
         if (!FOREST_ON) return;
         let dead = false;
+        /* 4a：构建整体失败也要响 —— 原来这里只有 `console.warn`，
+         * 于是「buildForest 抛异常」和「这附近确实没树」在页面上长得一模一样。 */
+        const publishFail = (e: any) => {
+            const missing: ForestMissing[] = [{ key: '<build>', url: '', error: errText(e) }];
+            console.error('[forest] 构建失败（整片森林没有生成）:', e);
+            (window as any).__forestBuildError = errText(e);
+            (window as any).__forestMissing = { missing, missingCount: 1, assets: Object.keys(FOREST_ASSETS).length, loaded: 0, ok: false };
+            (window as any).__forest = {
+                total: 0, capped: 0, per: {}, cell: [0, 0], seed: SEED,
+                missing, missingCount: 1, assets: Object.keys(FOREST_ASSETS).length, loaded: 0,
+                buildFailed: true, ok: false,
+            };
+        };
         buildForest().then((b) => {
             if (dead) return;
+            /* 构建完成那一刻就把 `missing` 挂出去（不必等相机跨 chunk）——
+             * 「一个素材都没加载出来」必须在用户还没走动时就能读到。 */
+            (window as any).__forestMissing = {
+                missing: b.missing,
+                missingCount: b.missing.length,
+                assets: Object.keys(FOREST_ASSETS).length,
+                loaded: b.loaded,
+                ok: b.loaded > 0 && b.missing.length === 0,
+            };
             setBuilt(b);
-        }).catch((e) => console.warn('[forest] 构建失败:', e));
+        }).catch(publishFail);
         return () => { dead = true; };
     }, []);
 
-    useFrame(() => {
+    useFrame((_state, delta) => {
         if (!built || !camera) return;
+        /* 只读诊断句柄（2026-10-22 第五轮）：`__forestCam` 只有位置，查不出
+         * 「树到底在不在视锥里」——同一坐标 `?cam` 自由相机看得见整片林、
+         * 第三人称一棵都看不见，必须拿相机矩阵把实例逐件投影到 NDC 才能定因。
+         * 只挂引用，不改变任何渲染行为。 */
+        (window as any).__forestCamObj = camera;
+        (window as any).__forestDbg = { scene: r3fScene, gl: r3fGl, camera };
         const cx = Math.floor(camera.position.x / CHUNK);
         const cz = Math.floor(camera.position.z / CHUNK);
-        if (lastCell.current && lastCell.current.x === cx && lastCell.current.z === cz) return;
+        const moved = !lastCell.current || lastCell.current.x !== cx || lastCell.current.z !== cz;
+
+        /* ── 加载期预热（第八轮，见上方长注释）：把「首次进场景」的一次性成本
+         *    摊到换格发生之前。
+         *    ⚠️ 换格撞上预热批次时，本帧**只摘不挂**，`refill()` 顺延到下一帧：
+         *    第七轮 Y1 已证「同一 tick 里 remove+add」会把实例绑定打回定格态。 */
+        if (WARM_ON) {
+            let W = warmRef.current;
+            if (!W) { W = warmRef.current = makeWarm(built); warmPublish(W); }
+            if (W.batch.length > 0 && moved) {
+                warmDropBatch(built, W);
+                W.holdRefill = true;
+                warmPublish(W);
+                return;
+            }
+            if (!moved && (W.pending.length > 0 || W.batch.length > 0)) {
+                /* `delta` 是上一帧的真实时长（秒）⇒ ms。预热要避让已经卡住的帧。 */
+                warmStep(built, camera.position.x, camera.position.z, W, delta * 1000);
+            }
+        }
+
+        if (!moved) return;
         lastCell.current = { x: cx, z: cz };
         const st = refill(built, camera.position.x, camera.position.z, SEED);
-        (window as any).__forest = { ...st, cell: [cx, cz], seed: SEED };
+        /* refill 之后：已经挂进场景的槽位（有真实数据）已经付过一次性成本，
+         * 从预热队列里剔除；剩下的继续在后续帧预热，供下一次换格用。 */
+        if (WARM_ON && warmRef.current) {
+            const W = warmRef.current;
+            W.holdRefill = false;
+            /* 只认「从没付过成本」的槽 —— 摘批后的槽同样无 parent，用 `!mesh.parent`
+             * 会把它们重新排队（实测 done 冲到 160 / 真实 57）。 */
+            const pend = warmPending(built, W);
+            if (pend.length !== W.pending.length) {
+                W.pending = pend;
+                if (pend.length === 0 && !W.endMs) W.endMs = performance.now();
+            }
+            warmPublish(W);
+        }
+        /* `total/capped/per/cell/seed` 语义**不变**（既有取证脚本按 `total` 判空林）；
+         * 4a 新增 `missing/missingCount/assets/loaded/buildFailed/ok`。 */
+        (window as any).__forest = {
+            ...st,
+            cell: [cx, cz],
+            seed: SEED,
+            missing: built.missing,
+            missingCount: built.missing.length,
+            assets: Object.keys(FOREST_ASSETS).length,
+            loaded: built.loaded,
+            buildFailed: false,
+            ok: st.total > 0 && built.missing.length === 0,
+        };
         // 探针用：把整棵实例组挂到 window 上，CDP eval 里可以遍历查包围盒/实例矩阵
         (window as any).__forestRoot = built;
         (window as any).__forestCam = [camera.position.x, camera.position.y, camera.position.z];
+        /* `__forestWarm` 由 `warmPublish()` 发布（第八轮：加载期预热进度）。
+         * 第七轮那行 `{ done: 0, mode: 'lazy-add' }` 已删除 —— 它会在每次换格
+         * 把预热进度覆盖成常量，取证脚本就读不到真实状态了。 */
     });
 
-    if (!FOREST_ON || !built) return null;
+    if (!FOREST_ON) {
+        /* 被 `?forest=0` 关掉时也要留下痕迹 —— 否则「没有树」分不清是加载失败还是开关关了。 */
+        return null;
+    }
+    if (!built) return null;
     return <primitive object={built.group} visible={visible} />;
 }

@@ -61,6 +61,14 @@
  *   ?npcgrid=1        验收模式：一字排开（`?npcgridstep=` 间距 1.9 m、
  *                     `?npcgridz=` 行位置 -6、`?npcgridyaw=` 朝向 0 = 面对 +Z 侧镜头）
  *   ?mmdproxy=1       保留白色影子代理（只在诊断「白壳」问题时用）
+ *   ?npcadd=0         关掉「加算层 → AdditiveBlending」这一步（二分爆白用）
+ *   ?npcalpha=0       关掉「漫反射贴图自带 alpha → alphaTest」这一步
+ *   ?paimonhover=<m>  派蒙悬浮高度（米）**覆盖**缺省值；`0` = 落地
+ *   ?paimonhovercenter=<m> 派蒙身体中心要落到的高度（缺省 **0.84** = 与左右邻
+ *                     荧/空「头顶齐平」那一档，用户 2026-10-23 看实拍定版；
+ *                     `1.35` 是老缺省 = 普通 NPC 肩高，显得比邻座高出一大截）
+ *   ?paimonbob=<m>    派蒙上下浮动幅度（缺省 0.015 ⇒ 峰峰值 3 cm，`0` = 不浮动）
+ *   ?paimonbobperiod=<s> 浮动周期（缺省 2.6 s）
  *
  * ── ★ prop 覆盖（游戏流程用，用户 m02541）────────────────────────────────
  *   `pose` / `layout` / `n` 三个 prop 可以**逐实例**覆盖上面那些模块级缺省值。
@@ -90,6 +98,10 @@ import { hash01, treeColliders } from '../../core/venueRing';
 /* 座次几何的**唯一真值**在 `Banquet.tsx`（`seatSpots()`）—— 桌子改 `?bh=` /
  * `?bseg=` 时座位会跟着走，两边不会对不上。 */
 import { BANQUET_ON, seatSpots } from '../venue/Banquet';
+/* ★ task-4：NPC 撒到整张地图之后必须避开「道具肚子」和「委托点位」——
+ * 前者靠 `keepOutFactor`（与草地/角色碰撞同一份真值），后者靠 `layout.POINT_SPOTS`。 */
+import { POINT_SPOTS, pointXZ } from '../../core/game/layout';
+import { keepOutFactor } from '../../core/world/keepOut';
 
 /* ════════════════════════════════════════════════════════════════════════════
  * 1. URL 开关
@@ -135,9 +147,44 @@ const NPC_ARM_K = Math.max(2, Math.min(24, Math.round(QNUM('npcarmk', 8)!)));
 const NPC_SCALE = QNUM('npcscale', 0.078947)!;
 const NPC_IK = QNUM('npcik', 0)! > 0;
 const NPC_OUTLINE = QNUM('npcoutline', 1)! > 0;
-const NPC_R0 = QNUM('npcr0', 8)!;
-const NPC_R1 = QNUM('npcr1', 25)!;
-const NPC_GAP = QNUM('npcgap', 2.8)!;
+
+/* ── 派蒙：悬浮到「肩膀高度」＋黑白/爆白修正（用户 m00001 / Lead m00545）──────
+ * 用户原话：「派蒙模型黑白，飘到肩膀高度」。诊断结论（`?npcadd=0` 一开就恢复
+ * 彩色）指向 **④′① 加算层修正误伤**，不是贴图 404、不是球面贴图乘黑。
+ * 详见那一步的注释。下面是悬浮的三个量。 */
+const PAIMON_HOVER = QNUM('paimonhover', NaN);
+/** 身体中心要落到的世界高度（米）。
+ *  缺省 **0.84**（用户 2026-10-23 看实拍定版，原 `?paimonhovercenter=0.84` 一档直取为缺省）。
+ *  口径 = 让她的**头顶**与左右邻齐平，而不是「抬到普通 NPC 肩高」：
+ *    · `top = PAIMON_HOVER_CENTER + 1.082`（拟合恒等式，全 14 人座位圈实测；
+ *      C=1.35→top 2.432、C=0.84→1.922、C=0.90→1.982，逐位吻合）；
+ *    · 左邻荧头顶 1.862 m、右邻空头顶 1.975 m（全场 14 人头顶中位/均值都是 1.975），
+ *      反解：对齐空 C≈0.893、对齐荧 C≈0.780、取中间 C≈0.837 ⇒ **0.84**。
+ *    旧缺省 1.35 的头顶点是 2.432 m（比邻座高 0.457 m）。
+ *  副作用（已算过、可接受）：头顶降 0.457 m 后脚底约 0.610 m，比桌面 0.78 m 低 0.17 m；
+ *    但她在半径 2.82 m 的座位圈上（桌面半径 2.40 m 之外），下半身被桌沿遮住，
+ *    视觉上等同坐姿，头顶远高于桌面。
+ *  `?paimonhovercenter=` 旋钮保留可回滚（`=1.35` 回到老口径，`=0` 等价坐回椅子）。 */
+const PAIMON_HOVER_CENTER = QNUM('paimonhovercenter', 0.84)!;
+const PAIMON_BOB = QNUM('paimonbob', 0.015)!;
+const PAIMON_BOB_PERIOD = Math.max(0.4, QNUM('paimonbobperiod', 2.6)!);
+/* ★ 2026-10-20（task-4 用户原话「所有 NPC 都挤在会场，刷新出来时让他们分布在整个地图」）：
+ *   原来 8~25 m —— 15 个人全挤在半径 25 m 的圆里，从任何机位看都是一坨。
+ *   现在撒到 **12~58 m**，边界都是查出来的，不是拍的：
+ *     · 内界 12 m > `GameLayer.HUB_CLEAR = 9.5`（中央空地）且 > 书桌/信箱的 9~11 m
+ *       ⇒ 不会站到中央广场的道具里；
+ *     · 外界 58 m < 会场草地 r = 62（`core/worldRegions.ts:112` 的 venue）
+ *       ⇒ 站到草地边缘也不会踩出草地；
+ *     · 树环在 r = 29（26 棵，`core/venueRing.ts:43`），落点自带
+ *       `treeColliders(0.6)` 剔除 ⇒ 穿树带的那些点不会插进树干。
+ *   分布公式 `r = r0 + (r1−r0)·sqrt(v)` ⇒ 按**面积**均匀，
+ *   人自然散到中外圈，而不是全贴着内圈站一排（保持原有公式，只改区间）。 */
+const NPC_R0 = QNUM('npcr0', 12)!;
+const NPC_R1 = QNUM('npcr1', 58)!;
+/** 站位最小间距（米）。**为什么从 2.8 提到 4.0**：互动判定半径是
+ *  `REACH + 0.4 = 3.0`（`layout.ts:82`），两人间距小于 3 m 时两个光圈会同时亮起、
+ *  按 F 却打到另一个人。4.0 留 1 m 余量，15 个人撒在半径 58 m 的盘上绰绰有余。 */
+const NPC_GAP = QNUM('npcgap', 4.0)!;
 const NPC_SEED = Math.round(QNUM('npcseed', 7)!);
 const NPC_YAW = Math.round(QNUM('npcyaw', 2)!);
 /** 站位布局：`table`（缺省）= 围宴会桌坐；`ring` = 老的 r=8~25 环带散布。
@@ -239,10 +286,35 @@ interface ScatterOpts {
     fixed?: NpcSpot[];
 }
 
+/** 中央空地半径（与 `GameLayer.HUB_CLEAR` / `layout.ts` 头注释同一个数）。
+ *  这里再判一次是兜底：`r0 = 12` 已经大于它，但 `?npcr0=` 可以覆盖，
+ *  覆盖成 3 的时候不该把人放到书桌/长桌的肚子里。 */
+const HUB_CLEAR = 9.5;
+
+/** 委托人站位与原采集点实例的最小间距（米）。采集点是地面道具，
+ *  贴着一个 NPC 站会同时亮两个光圈（两者互动半径都是 3.0）。 */
+const NPC_POINT_CLEAR = 3.2;
+
+/** `POINT_SPOTS` 展开成扁平的世界 XZ 列表（`litter` 5 处 / `rose` 3 处…）。
+ *  只算一次：`npcStandSpots()` 会在加载期被逐人调用 15 次。 */
+let _pointFlat: Array<[number, number]> | null = null;
+function pointFlat(): Array<[number, number]> {
+    if (!_pointFlat) {
+        _pointFlat = [];
+        for (const id of Object.keys(POINT_SPOTS)) {
+            for (const xz of pointXZ(id)) _pointFlat.push(xz);
+        }
+    }
+    return _pointFlat;
+}
+
 function scatterSpots(n: number, o: ScatterOpts): NpcSpot[] {
     const GOLDEN = 2.399963229728653;
     const trees = treeColliders(0.6); // 树干半径 + 0.6 m 缓冲
     const out: NpcSpot[] = [];
+    /* ★ task-4：地毯式散布必须避开的两类东西（只在环带分支用得上，
+     * 宴会座次由 `seatSpots()` 给定、不会走到这里）。 */
+    const points = o.fixed && o.fixed.length ? [] : pointFlat();
 
     /* ★ 外部给定整张表：直接落位，本文件不再算任何坐标。
      * 见 `ScatterOpts.fixed` 的注释 —— 这是让互动点与模型落点永不脱钩的唯一手段。 */
@@ -305,6 +377,11 @@ function scatterSpots(n: number, o: ScatterOpts): NpcSpot[] {
             const x = Math.sin(a) * r;
             const z = Math.cos(a) * r;
             if (Math.hypot(x - COLUMBINA_XZ[0], z - COLUMBINA_XZ[1]) < COLUMBINA_KEEPOUT) continue;
+            /* 中央空地（书桌 r≈9.2 / 信箱 r≈8.3 / 桌与蛋糕台都在 10 m 内）。 */
+            if (Math.hypot(x, z) < HUB_CLEAR) continue;
+            /* 道具肚子（月牙石桌 / 长桌 / 蛋糕台 / 信箱）—— 与草地避让同一份真值。
+             * `keepOutFactor < 1` 就是落在椭圆的 1~1.45 过渡带里，站那儿会插进桌沿。 */
+            if (keepOutFactor(x, z) < 1) continue;
             let ok = true;
             for (const p of out) {
                 if (Math.hypot(x - p.x, z - p.z) < o.gap) { ok = false; break; }
@@ -312,6 +389,12 @@ function scatterSpots(n: number, o: ScatterOpts): NpcSpot[] {
             if (ok) {
                 for (const t of trees) {
                     if (Math.hypot(x - t.x, z - t.z) < t.r + 0.6) { ok = false; break; }
+                }
+            }
+            /* 委托点位旁边不留人（见 `NPC_POINT_CLEAR`）。 */
+            if (ok) {
+                for (const p of points) {
+                    if (Math.hypot(x - p[0], z - p[1]) < NPC_POINT_CLEAR) { ok = false; break; }
                 }
             }
             if (ok) { spot = [x, z]; break; }
@@ -568,6 +651,116 @@ function applyIdle(rig: IdleRig, w: number): void {
     rig.skel?.update();
 }
 
+/* ── 配件骨链「自然垂落」（用户 m01497：爱诺后腰那条类似尾巴的装饰） ────────
+ *
+ * 症状：`Bone_Tail01_L` → `Bone_Tail06_L` 共 6 节、总长 ~0.44 m，绑定姿势
+ * 从腰后水平伸出（实测骨端世界坐标 y 只从 0.614 涨到 0.634，几乎完全
+ * 平行地面），看起来像一根横插在腰后的杆子。
+ *
+ * 原因**不是模型坏了**：这条链本该由 MMD 刚体物理拽下来，而本项目把物理
+ * 关掉了（`physics false`，见 §5.6 与 `?phys=` 那条），于是它停在绑定姿势。
+ *
+ * 做法：烘焙完基准姿势之后（§5.5 ⑤ 之后、微动 rig 之前），把这 6 节按
+ * 权重逐节绕**同一条世界轴**旋向「向下、略向后」。权重递减 ⇒ 缓弧而不是
+ * 折角；结果直接写回骨的四元数，等于把基准姿势改了，之后微动 rig 不碰
+ * 这些骨 ⇒ **逐帧零成本**。世界空间算法，与模型自身朝向无关。
+ *
+ * `?npctail=0` 关掉，用于 A/B 对照。 */
+const NPC_TAIL = QSTR('npctail', '1') !== '0';
+/** 只认爱诺这套命名（15 个模型里唯一命中：`__npc.bones(i, 'Tail')` 普查结果） */
+const TAIL_CHAIN = /^Bone_Tail0[1-6]_L$/;
+/** 逐节分到的转角比例（和为 1）：根节转得多、越往尖越少 */
+const TAIL_DROOP_W = [0.46, 0.22, 0.13, 0.09, 0.06, 0.04];
+/** 目标方向 = 向下 + 这个比例的「原来的水平朝向」（保留一点向后伸的姿态） */
+const TAIL_BACK_K = 0.22;
+
+/* 逐帧/初始化用的临时对象，模块级复用 */
+const DR_A = new THREE.Vector3();
+const DR_T = new THREE.Vector3();
+const DR_AXIS = new THREE.Vector3();
+const DR_DQ = new THREE.Quaternion();
+const DR_PQ = new THREE.Quaternion();
+const DR_PQI = new THREE.Quaternion();
+const DR_DOWN = new THREE.Vector3(0, -1, 0);
+
+/** 调试读数：`__npc.droop()` 直接看「链方向 / 目标 / 轴 / 角」到底算成了什么。
+ *  排查「尾巴没垂下去」时最省时间的一步 —— 别靠看图猜。 */
+const DR_DBG: Record<string, unknown> = {};
+
+/** 一条要垂落的配件骨链（目前只有爱诺的 `Bone_Tail01..06_L`）。 */
+interface TailRig {
+    bones: THREE.Bone[];
+    skel?: THREE.Skeleton;
+}
+
+/** 从整副骨架里挑出 `re` 命中的骨，按父子层级从根到梢排好。 */
+function chainOf(bones: THREE.Bone[], re: RegExp): THREE.Bone[] {
+    const depthOf = (b: THREE.Object3D): number => {
+        let d = 0;
+        let p: THREE.Object3D | null = b.parent;
+        while (p && p.type !== 'Scene') { d++; p = p.parent; }
+        return d;
+    };
+    return bones.filter((b) => re.test(rawName(b))).sort((a, b) => depthOf(a) - depthOf(b));
+}
+
+/** 把一条骨链（按层级顺序）逐节旋向「向下」，返回实际处理的节数。
+ *
+ *  为什么用世界坐标：MMD 的骨局部轴是模型静止时的轴（§5.3 ②），不同作者
+ *  的骨骼朝向约定不一，靠猜局部轴符号一定要试错；而「链头→链尾」的世界
+ *  方向是可直接测的，旋到世界 -Y 只需要一条轴 + 一个角。
+ *
+ *  刷新顺序与烘焙同源：写 `quaternion` 后必须逐根 `updateMatrix()`，
+ *  再 `updateMatrixWorld(true)` 把子树推下去，最后 `skeleton.update()`。 */
+function droopChain(
+    chain: THREE.Bone[], weights: number[], skel: THREE.Skeleton | undefined,
+    backK = 0.0,
+): number {
+    if (chain.length < 2) return 0;
+    DR_DBG.head = new THREE.Vector3().setFromMatrixPosition(chain[0].matrixWorld)
+        .toArray().map((v) => +v.toFixed(3));
+    DR_DBG.tip0 = new THREE.Vector3().setFromMatrixPosition(chain[chain.length - 1].matrixWorld)
+        .toArray().map((v) => +v.toFixed(3));
+
+    DR_A.setFromMatrixPosition(chain[0].matrixWorld);
+    DR_T.setFromMatrixPosition(chain[chain.length - 1].matrixWorld);
+    DR_T.sub(DR_A);                                  // 当前链方向（世界）
+    if (DR_T.lengthSq() < 1e-10) return 0;
+    DR_T.normalize();
+    DR_AXIS.set(DR_T.x, 0, DR_T.z);                  // 水平分量 = 「向后」的方向
+    if (DR_AXIS.lengthSq() < 1e-6) DR_AXIS.set(0, 0, 1);
+    DR_AXIS.normalize();
+    DR_A.copy(DR_T);                                 // 记下原方向
+    DR_T.copy(DR_AXIS).multiplyScalar(backK).add(DR_DOWN).normalize(); // 目标方向
+    const total = DR_A.angleTo(DR_T);
+    if (total < 0.02) return 0;
+    DR_AXIS.crossVectors(DR_A, DR_T).normalize();    // 旋转轴（世界）
+    DR_DBG.a = DR_A.toArray().map((v) => +v.toFixed(3));
+    DR_DBG.t = DR_T.toArray().map((v) => +v.toFixed(3));
+    DR_DBG.axis = DR_AXIS.toArray().map((v) => +v.toFixed(3));
+    DR_DBG.total = +(total * 180 / Math.PI).toFixed(1);
+    DR_DBG.n = chain.length;
+
+    for (let i = 0; i < chain.length; i++) {
+        const b = chain[i];
+        if (!b.parent) continue;
+        const ang = weights[Math.min(i, weights.length - 1)] * total;
+        if (ang === 0) continue;
+        b.parent.getWorldQuaternion(DR_PQ);
+        DR_PQI.copy(DR_PQ).invert();
+        DR_DQ.setFromAxisAngle(DR_AXIS, ang);
+        // q_local' = parentQ⁻¹ · Δq_world · parentQ · q_local
+        b.quaternion.copy(DR_PQI.multiply(DR_DQ).multiply(DR_PQ).multiply(b.quaternion));
+        b.updateMatrix();
+        b.updateMatrixWorld(true);
+    }
+    skel?.update();
+    const tipP = new THREE.Vector3().setFromMatrixPosition(chain[chain.length - 1].matrixWorld);
+    DR_DBG.tip = tipP.toArray().map((v) => +v.toFixed(3));
+    DR_DBG.angles = chain.map((_, i) => +(weights[Math.min(i, weights.length - 1)] * total * 180 / Math.PI).toFixed(1));
+    return chain.length;
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
  * 5. 组件
  * ════════════════════════════════════════════════════════════════════════════ */
@@ -585,6 +778,10 @@ interface LiveNpc {
     alphaFix: number;
     /** 站立待机微动的装置，一人一份（`?npcidle=0` 时恒为空数组） */
     idle: IdleRig[];
+    /** 配件骨链（爱诺后腰那条尾巴）：加载期只登记，`useFrame` 里逐帧投影下垂 */
+    tail: TailRig[];
+    /** 派蒙的悬浮装置：`baseY` 已含悬浮量，`useFrame` 只在其上叠一个小正弦 */
+    hover: { holder: THREE.Group; baseY: number; amp: number }[];
 }
 
 export function NpcCrowd({
@@ -614,6 +811,14 @@ export function NpcCrowd({
      * 见文件头「★ prop 覆盖」。这四个 + `scatterOpts` 是 `pose`/`layout`/`n`
      * 唯一影响到的量，其余（缩放 / 描边 / 材质修正）两套群像完全一致。 */
     const sit = (pose ?? NPC_POSE) === 'sit';
+    /* 坐姿根链下沉量（`座る.vmd` f55 `センター` y = −4.05 单位 ≈ −0.32 m，
+     * 见 ⑤ 烘焙段注释）。只给派蒙悬空算抬升量用：坐姿髋比站姿低这么多，
+     * 悬空量要把这截补回去才能落到真正的肩高。`?paimonsitsink=` 可调。 */
+    const PAIMON_SIT_SINK = QNUM('paimonsitsink', 0.32)!;
+    /* 「脚底 → 髋」的坐姿高（`fitChairsToNpc` 量出来 15 席中位数 ≈ 0.42 m，
+     * 椅子坐面取 0.45 m）。只给 `__npc.rel()` 读数用：坐姿烘焙不含裙摆、
+     * 脚踝骨世界 y 会比裙摆高一点，用髋高口径算「脚底」跟椅子口径一致。 */
+    const PAIMON_HIP_Y = QNUM('paimonhipy', NaN);
     const lay = (layout ?? NPC_LAYOUT).toLowerCase();
     const limit = Math.max(1, Math.round(n ?? NPC_LIMIT));
     const motionUrl = NPC_MOTION_URL ?? (sit ? NPC_SIT_MOTION : NPC_STAND_MOTION);
@@ -633,7 +838,7 @@ export function NpcCrowd({
     const scene = useThree((s) => s.scene);
     const live = useRef<LiveNpc>({
         pipeline: null, loader: null, clip: null, loop: 0,
-        ready: false, placed: [], errors: [], addFix: 0, alphaFix: 0, idle: [],
+        ready: false, placed: [], errors: [], addFix: 0, alphaFix: 0, idle: [], tail: [], hover: [],
     });
 
     useEffect(() => {
@@ -739,10 +944,57 @@ export function NpcCrowd({
                     /* ② 独立容器：站位只设一次，不动 model.root 的 x/z */
                     const holder = new THREE.Group();
                     const y = worldHeightCPU(spot.x, spot.z);
-                    holder.position.set(spot.x, y, spot.z);
+                    /* ②′ 派蒙悬浮（用户 m00001「飘到肩膀高度」）。
+                     *   她的模型实测只有 rawH×NPC_SCALE ≈ 0.814 m 高，所以「身体中心
+                     *   到肩高」= 1.35 − 身高/2 ≈ 0.94 m 的离地量。这个高度**按实测
+                     *   身高现算**（不写死 1.30/1.35 这类数），换模型/换 `?npcscale=`
+                     *   都会自动跟着走。（1.35 是 2026-10-23 之前的老缺省；现在缺省
+                     *   改成**头顶对齐邻座**的 0.84，见 `PAIMON_HOVER_CENTER` 定义处。）
+                     *   ★ 坐姿（宴会流程）**也抬**（2026-10-23 第十轮 t2）：用户反馈
+                     *   「虽然有个椅子但是她应该是飘在空中的，她如果坐椅子，模型就会
+                     *   完全在桌子下面」。0.814 m 高的人坐到 0.45 m 高的椅面上，
+                     *   头顶才 1.26 m —— 而桌面就有 0.78 m 高，桌沿又挡了视线，
+                     *   整只模型都被桌子吃掉。
+                     *   椅子**照旧摆在她自己的座位上**（`seatSpots()` 一字未改），
+                     *   她只是不坐上去了：水平位置仍是那张椅子的座位点（不拎到桌心），
+                     *   只把身体中心抬到肩高。站姿那条线一直就是这么抬的，这里是
+                     *   把同一个分支套到坐姿上，不是新写一套。
+                     *   ⚠️ 公式里的「身高」必须用**载入时的绑定姿势包围盒** `rawH`
+                     *   （= 贴地的那个 box），不能用 `rel()` 的实时 Box3：实时盒量的是
+                     *   坐姿骨骼 + 待机微动后的范围，比绑定姿势高 ~0.25 m（实测
+                     *   0.814 → 1.07 m），身高一虚高，体心就会多算 0.125 m。
+                     *   实测（2026-10-23 第十轮 t2，1280×720）：离地 1.263 m（= 1.608 世界高 − 地面 0.345）、
+                     *   体心 **地面之上 1.680 m**、脚底 1.12 m、头顶 2.43 m > 桌面 0.78 m。
+                     *   ↑ 那一组是缺省还是 1.35 时的读数。定版 0.84 之后（同一机位、同口径）：
+                     *   体心 **地面之上 1.170 m**、离地 0.825 m、脚底 0.685 m、
+                     *   头顶 **1.922 m**（= 0.84 + 1.082）—— 正好落在左邻荧 1.862 m
+                     *   与右邻空 1.975 m 之间，仍远高于桌面 0.78 m。
+                     *   回滚：`?paimonhover=0` 落地；`?paimonhovercenter=` 调悬空档
+                     *   （`=1.35` 回老口径＝肩高，缺省 `=0.84`＝头顶齐邻座）；
+                     *   `?paimonhovercenter=0` 等价于「坐回椅子」。 */
+                    let hoverY = 0;
+                    if (def.id === 'paimon') {
+                        hoverY = Number.isFinite(PAIMON_HOVER)
+                            ? PAIMON_HOVER
+                            : sit
+                                /* 坐姿若还用 `座る.vmd`，根链带 ~0.32 m 的下沉量（见 ⑤
+                                 * 烘焙段 `SIT_ROOT_BONES`），悬空高度要把它加回去，
+                                 * 否则 `?paimonhovercenter=1.35` 实际只有 1.03 m 肩高
+                                 * （定版缺省 0.84 同理：不补这一项就是 0.52 m）。
+                                 * 站姿的烘焙把根位移一律丢掉，所以站姿不加。 */
+                                ? Math.max(0, PAIMON_HOVER_CENTER - (rawH * s) / 2 + PAIMON_SIT_SINK)
+                                : Math.max(0, PAIMON_HOVER_CENTER - (rawH * s) / 2);
+                    }
+                    holder.position.set(spot.x, y + hoverY, spot.z);
                     holder.rotation.y = spot.yaw;
                     holder.add(model.root);
                     host.add(holder);
+                    if (hoverY > 0 && PAIMON_BOB > 0) {
+                        L.hover.push({ holder, baseY: y + hoverY, amp: PAIMON_BOB });
+                        console.log(`[npc]   ${def.id} 悬浮：离地 ${hoverY.toFixed(3)} m`
+                            + `（身体中心 ≈ ${(hoverY + (rawH * s) / 2).toFixed(2)} m，`
+                            + `身高 ${(rawH * s).toFixed(3)} m；浮动 ±${PAIMON_BOB.toFixed(3)} m）`);
+                    }
 
                     /* ③ 挂到共享管线（会 dispose 原材质 + 建白色影子代理） */
                     pipeline.attach(model, { light: mmdLight });
@@ -769,7 +1021,49 @@ export function NpcCrowd({
                     const mm: any = (model.mesh as any).material;
                     const ms: any[] = Array.isArray(mm) ? mm : [mm];
 
-                    /* ④′① 球面「加算」层必须真的加算 */
+                    /* ④′⓪ 主贴图均值（32×32 缩略）——下面 ④′① ④′② 共用。
+                     * ⚠️ 必须放在两步**之前**：④′① 现在要靠它判断「这一层到底是
+                     *    加算层（主贴图几乎全透明）还是真材质（主贴图不透明）」。 */
+                    const cv = document.createElement('canvas');
+                    cv.width = cv.height = 32;
+                    const c2 = cv.getContext('2d', { willReadFrequently: true });
+                    const alphaCache: Record<string, number | null> = {};
+                    const alphaOf = (t: any): number | null => {
+                        const img = t?.image;
+                        if (!img || !c2 || !img.width) return null;
+                        const k = String(t.uuid ?? '');
+                        if (k && k in alphaCache) return alphaCache[k];
+                        let v: number | null = null;
+                        try {
+                            c2.clearRect(0, 0, 32, 32);
+                            c2.drawImage(img, 0, 0, 32, 32);
+                            const d = c2.getImageData(0, 0, 32, 32).data;
+                            let s = 0;
+                            for (let i = 3; i < d.length; i += 4) s += d[i];
+                            v = s / (d.length / 4);
+                        } catch { v = null; }
+                        if (k) alphaCache[k] = v;
+                        return v;
+                    };
+
+                    /* ④′① 球面「加算」层必须真的加算 —— **但只对「加算层」生效**。
+                     *
+                     * ★★ 2026-10-20 修（用户 m00001「派蒙整个人黑白」/ Lead m00545）：
+                     *   这一步原来只看 `sphereMode === 'add'`，于是把派蒙的**主材质**
+                     *   （衣服 / 头发 / 披风，全部 `ADD + Texture\mc3.png`）整片改成了
+                     *   `AdditiveBlending`。她的主贴图是 JPEG（无 alpha，meanA=255）而且
+                     *   本身很亮（头发 meanRGB=(216,218,213)、衣服 (188,171,170)），
+                     *   加算完直接爆成纯白 + 泛光 ⇒ 看上去就是「黑白剪影」。
+                     *   实测二分：`?npcadd=0` 一开她立刻恢复彩色（见
+                     *   `_logs/asset/v_paimon_ab.jpg` 左右对照），所以根因在这一步，
+                     *   不是贴图 404、不是球面贴图乘黑、也不是 TSL 丢 `map`。
+                     *
+                     * 判据（`_logs/asset/addlayer_scan.py` 扫了全 15 个模型 23 条球面材质）：
+                     *   真·加算层的主贴图是**近乎全透明**的 `sp.png` / `spa_h.png`
+                     *   （meanA 0.1 ~ 16.2）；而被误伤的「主材质」meanA 全是 255。
+                     *   所以按主贴图的 mean alpha 分流，两边都稳（判别裕度 >200）。
+                     *   顺带被这一步修正的还有：芙宁娜「神之眼」、菲林斯「灯2」、
+                     *   奈芙尔「头饰」、桑多涅「目」「饰」—— 它们的主贴图也是 255。 */
                     if (NPC_ADD) {
                         let nAdd = 0;
                         ms.forEach((m, mi) => {
@@ -778,6 +1072,15 @@ export function NpcCrowd({
                             // 只动「加载器当成不透明」的那份：`transparencyMode==='alphaBlend'`
                             // 的本来就按透明画，改成加算会把它变成一层发光。
                             if (meta.transparencyMode && meta.transparencyMode !== 'opaque') return;
+                            const t = m?.map ?? m?.userData?.mmdTslTextureReferences?.diffuseMap;
+                            const a = alphaOf(t);
+                            if (a !== null && a >= 200) {
+                                if (DEBUG) {
+                                    console.log(`[npc]   ${def.id} 跳过加算 #${mi}「${meta.name || '?'}」`
+                                        + `：主贴图 meanA=${a.toFixed(1)}（是不透明真材质，加算会爆白）`);
+                                }
+                                return;
+                            }
                             m.transparent = true;
                             m.blending = THREE.AdditiveBlending;
                             m.depthWrite = false;
@@ -785,7 +1088,8 @@ export function NpcCrowd({
                             nAdd++;
                             if (DEBUG) {
                                 console.log(`[npc]   ${def.id} 加算层 #${mi}「${meta.name || '?'}」→ Additive`
-                                    + `（球面 ${String(meta.sphereTexturePath || '').split(/[\\/]/).pop()}）`);
+                                    + `（球面 ${String(meta.sphereTexturePath || '').split(/[\\/]/).pop() || '-'}`
+                                    + `，主贴图 meanA=${a === null ? '?' : a.toFixed(1)}）`);
                             }
                         });
                         L.addFix += nAdd;
@@ -796,29 +1100,11 @@ export function NpcCrowd({
                      * 不透明队列，**没有排序问题**（transparent 会把整只模型拖进透明队列，
                      * 三千多根发丝会互相穿插错乱）。 */
                     if (NPC_ALPHA) {
-                        const cv = document.createElement('canvas');
-                        cv.width = cv.height = 32;
-                        const c2 = cv.getContext('2d', { willReadFrequently: true });
-                        const alphaOf = (t: any): number | null => {
-                            const img = t?.image;
-                            if (!img || !c2 || !img.width) return null;
-                            try {
-                                c2.clearRect(0, 0, 32, 32);
-                                c2.drawImage(img, 0, 0, 32, 32);
-                                const d = c2.getImageData(0, 0, 32, 32).data;
-                                let s = 0;
-                                for (let i = 3; i < d.length; i += 4) s += d[i];
-                                return s / (d.length / 4);
-                            } catch { return null; }
-                        };
-                        const seen: Record<string, number | null> = {};
                         ms.forEach((m) => {
                             if (m?.blending === THREE.AdditiveBlending) return;
                             const t = m?.map ?? m?.userData?.mmdTslTextureReferences?.diffuseMap;
                             if (!t) return;
-                            const k = String(t.uuid);
-                            if (!(k in seen)) seen[k] = alphaOf(t);
-                            const a = seen[k];
+                            const a = alphaOf(t);
                             if (a !== null && a < 200) {
                                 m.alphaTest = 0.5;
                                 m.needsUpdate = true;
@@ -907,6 +1193,21 @@ export function NpcCrowd({
                         // 向下推 `matrixWorld`。
                         model.root.updateMatrixWorld(true);
                         skel?.update();
+
+                        /* ⑥ 配件骨链垂落（用户 m01497）—— 爱诺后腰那条尾巴。
+                         *
+                         * **这里只登记，不转骨。** 加载期 holder 的 position/rotation
+                         * 还没落定，此刻 `matrixWorld` 还在「模型在原点、朝向 0」的暂存
+                         * 帧里；按世界轴转一次，等 holder 旋到真实朝向，那条「下」就
+                         * 跟着歪掉（实测尾巴反而上翘 3 cm）。真正的垂落放到 `useFrame`
+                         * 里逐帧投影，见那个循环的注释。 */
+                        if (NPC_TAIL) {
+                            const tchain = chainOf(bones, TAIL_CHAIN);
+                            if (tchain.length >= 2) {
+                                L.tail.push({ bones: tchain, skel });
+                                console.log(`[npc]   ${def.id} 骨链垂落 ${tchain.length} 节`);
+                            }
+                        }
 
                         /* ⑥ 挂上站立待机微动（用户 m01170 第一项）
                          *
@@ -1007,6 +1308,8 @@ export function NpcCrowd({
             L2.clip = null;
             L2.placed.length = 0;
             L2.idle.length = 0;
+            L2.tail.length = 0;
+            L2.hover.length = 0;
             L2.ready = false;
         };
         /* `sit` / `lay` / `limit` / `scatterOpts` 都是加载期一次性的：改了必须换 `key`。 */
@@ -1039,6 +1342,25 @@ export function NpcCrowd({
             const w = (uTime.value as number) * NPC_IDLE_SPEED * (Math.PI * 2 / IDLE_PERIOD);
             for (const rig of L.idle) applyIdle(rig, w);
         }
+        /* 配件骨链垂落：等烘焙姿势 + 待机微动都写完之后再投影，否则会被微动
+         * 里对 `上半身` 的那一步带着一起转走。爱诺后腰那条「尾巴」本该自然垂着，
+         * 但本项目 MMD 刚体物理是关的（`physics false`），它就一直停在绑定姿势
+         * 里水平伸出（用户 m01497）。
+         *
+         * 为什么逐帧、而不是加载期转一次：加载期 `matrixWorld` 还停在「模型在
+         * 原点、holder 朝向未旋」的暂存帧，按世界 -Y 算出来的「下」跟着歪，实测
+         * 尾巴反而上翘；而且投影是**收敛**的 —— 转过一次后 `angle≈0`，之后每帧
+         * 只做 1° 量级的微修正（躯干微动会带着链轻微偏航），不会越转越偏。
+         * 六根骨、最多一个人命中，代价可忽略。`?npctail=0` ⇒ `L.tail` 为空，跳过。 */
+        for (const rg of L.tail) droopChain(rg.bones, TAIL_DROOP_W, rg.skel, TAIL_BACK_K);
+        /* 派蒙悬浮的上下浮动：峰峰值 = 2×amp ≤ 3 cm（缺省 amp 0.015）。
+         * 时间源同样走共享的 `uTime` ⇒ `?tfreeze=` 一钉，浮动也定住，截图可复现；
+         * 相位里不用随机数，A/B 两张图能逐像素对上。 */
+        if (L.hover.length) {
+            const t = uTime.value as number;
+            const w = t * (Math.PI * 2 / PAIMON_BOB_PERIOD);
+            for (const hv of L.hover) hv.holder.position.y = hv.baseY + Math.sin(w) * hv.amp;
+        }
         if (L.pipeline) L.pipeline.prepareRender(scene);
     }, 0);
 
@@ -1059,9 +1381,16 @@ export function NpcCrowd({
             list: () => live.current.placed,
             errors: () => live.current.errors,
             loop: () => live.current.loop,
+            /* 骨链垂落的内部读数（只给排查用） */
+            droop: () => DR_DBG,
             /* 材质修正的证据：`?npcadd=0` / `?npcalpha=0` 时这两个数会掉下来，
              * 可以直接用来二分「头发不对」到底是加算层还是 alphaTest。 */
             matfix: () => ({ add: live.current.addFix, alpha: live.current.alphaFix }),
+            /* 派蒙悬浮的数值证据（`?paimonhover=0` 时长度为 0）：
+             * `baseY` 已含悬浮量，`y` 是**当前帧**的实际高度（含正弦浮动）。 */
+            hover: () => live.current.hover.map((h) => ({
+                baseY: +h.baseY.toFixed(4), y: +h.holder.position.y.toFixed(4), amp: h.amp,
+            })),
             /* 逐模型的材质快照 —— 判断某个角色头发为什么不对时不用再猜 */
             mats: (idx = 0) => {
                 const host = groupRef.current;
@@ -1173,6 +1502,96 @@ export function NpcCrowd({
                 }
                 return { id: live.current.placed[idx]?.id ?? '?', w: +uTime.value.toFixed(4), pos: out };
             },
+            /* 任意骨名正则的世界坐标快照 —— 查「某个配件/装饰骨到底指向哪儿」用
+             * （例如爱诺后腰那条尾巴装饰：`__npc.boneWorld(10, 'Tail')`）。
+             * 读 `matrixWorld`，所以能直接判断骨链是横的、竖的、还是斜的。 */
+            boneWorld: (idx = 0, re = '') => {
+                const host = groupRef.current;
+                if (!host || !host.children.length) return null;
+                const holder = host.children[Math.max(0, Math.min(host.children.length - 1, idx))] as THREE.Group;
+                let skel: THREE.Skeleton | undefined;
+                holder.traverse((o: any) => { if (!skel && o.isSkinnedMesh) skel = o.skeleton; });
+                const bones: THREE.Bone[] = (skel?.bones ?? []) as THREE.Bone[];
+                const rx = re ? new RegExp(re) : null;
+                const out: { name: string; p: number[]; parent: string }[] = [];
+                for (const b of bones) {
+                    const n = rawName(b);
+                    if (rx && !rx.test(n)) continue;
+                    const p = new THREE.Vector3().setFromMatrixPosition(b.matrixWorld);
+                    out.push({
+                        name: n,
+                        p: [+p.x.toFixed(3), +p.y.toFixed(3), +p.z.toFixed(3)],
+                        parent: b.parent ? rawName(b.parent as THREE.Bone) : '',
+                    });
+                }
+                return out;
+            },
+            /* 本群像此刻的**真值快照**：座位环位 + 派蒙与椅子的关系（第十轮 t2）。
+             *
+             * 为什么不满足于 `idleProbe(5)`：它的 idx 是 `group.children` 的下标，
+             * 加载是异步串行的，谁先就位谁下标小 —— 想点名「派蒙」必须按 id 查。
+             *
+             * 读数口径（y 一律世界坐标，米 —— 她座位处地面是 0.345 m，不是 0）：
+             *   feet   脚底 = センター − 坐姿髋高（与 `fitChairsToNpc` 同一口径）
+             *   center 体心 = 骨骼包围盒中心；top 头顶 = 包围盒 max.y
+             *   hover  `L.hover` 里登记着的悬浮量；**注意它是 holder.position.y 的绝对值**
+             *          （含地形），不是离地量 —— 离地量要 `hover − groundY`
+             * 判据（写进注释，复核照抄即可；机器判据在 `_tools/probe-paimon.mjs`）：
+             *   `?paimonhover=0` ⇒ hover=0、feet≈0（坐回椅子，整只沉到桌下）；
+             *   缺省           ⇒ 离地量 > 0.4 m、feet > 0.30 m（0.84 档实测 0.685）、
+             *                    top > 桌面 0.78 m（0.84 档实测 1.922）、
+             *                    **地面之上的体心 `center − groundY` = 1.17 ± 0.10**。
+             *   为什么是「地面之上 1.17」：悬空量只抬「地面之上」那一段，
+             *   公式 = PAIMON_HOVER_CENTER 0.84 − 身高/2 + PAIMON_SIT_SINK 0.32，
+             *   体心 = 公式 + 身高/2 + bob ⇒ 0.84 + 0.32 + 0.015 = 1.175。
+             *   （老缺省 1.35 时同一式子给 1.685，读数实测 1.680。）
+             *   ⚠️ 拿**绝对高度** `center`（0.84 档实测 1.515）去比 1.17 会差 0.355 m，
+             *   这 0.355 = 地形 0.345 + bob 0.010，是单位错，不是悬空量偏了
+             *   （t8 复核就踩在这里，t13 已把探针改成相对量）。
+             *   ⚠️ feet 的下限别照抄 0.78（那是老 1.35 档的读数，也是桌面高）：
+             *   0.84 档脚底 0.685 本来就比桌面低 0.095 m —— 这是用户定版接受的副作用
+             *   （下半身被桌沿挡住，视觉等同坐姿），所以下限取 0.30、另判 top > 0.78。
+             */
+            rel: (id = 'paimon') => {
+                const host = groupRef.current;
+                if (!host) return null;
+                const idx = live.current.placed.findIndex((p) => p.id === id);
+                if (idx < 0) return { id, err: '未就位', placed: live.current.placed.map((p) => p.id) };
+                const holder = host.children[idx] as THREE.Group;
+                let skel: THREE.Skeleton | undefined;
+                holder.traverse((o: any) => { if (!skel && o.isSkinnedMesh) skel = o.skeleton; });
+                const bones: THREE.Bone[] = (skel?.bones ?? []) as THREE.Bone[];
+                const find = (n: string) => bones.find((b) => b.name === n || rawName(b) === n);
+                const c = find('センター') ?? find('下半身');
+                const cw = c ? new THREE.Vector3().setFromMatrixPosition(c.matrixWorld) : null;
+                const box = new THREE.Box3().setFromObject(holder);
+                const hipY = Number.isFinite(PAIMON_HIP_Y) ? PAIMON_HIP_Y : 0.45;
+                const hv = live.current.hover.find((h) => h.holder === holder);
+                const groundY = worldHeightCPU(holder.position.x, holder.position.z);
+                const seated = live.current.placed[idx];
+                return {
+                    id,
+                    idx,
+                    seatIndex: seatIndex(id),
+                    seatX: +seated.x.toFixed(3),
+                    seatZ: +seated.z.toFixed(3),
+                    x: +holder.position.x.toFixed(3),
+                    z: +holder.position.z.toFixed(3),
+                    yaw: +holder.rotation.y.toFixed(3),
+                    groundY: +groundY.toFixed(3),
+                    hipY: +hipY.toFixed(3),
+                    feet: cw ? +(cw.y - hipY).toFixed(3) : null,
+                    center: +(box.getCenter(new THREE.Vector3()).y).toFixed(3),
+                    top: +box.max.y.toFixed(3),
+                    holderY: +holder.position.y.toFixed(3),
+                    hover: hv ? +hv.baseY.toFixed(3) : 0,
+                    bob: hv ? hv.amp : 0,
+                    sit,
+                    children: host.children.length,
+                };
+            },
+            /* 全部 15 席的「脚底离地」一览 —— 一眼看出只有派蒙没坐在椅面上 */
+            relAll: () => live.current.placed.map((p) => (window as any).__npc.rel(p.id)),
         };
     }, []);
 

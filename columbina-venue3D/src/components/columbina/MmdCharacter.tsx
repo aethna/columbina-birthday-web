@@ -65,6 +65,7 @@ import { solveCam } from '../character/utils/solveCam';
 import { input } from '../../core/input/controls';
 // ★ 树环的位置公式（与 `VenuePropsReal.tsx` 共用同一份）—— 用户 m11046 任务3
 import { treeColliders } from '../../core/venueRing';
+import { treeColliderList } from '../../core/world/treeCollide';
 // ★★ 用户 m01242 任务2：**脚下地面高度**。她原来被钉死在 `CHAR_POS[1]` 这个常数上，
 //    走进月坑底部悬空、走上坑壁穿模、站在浅海里踩在水面上 —— 全是这一个根因。
 //    `worldHeightCPU` 与 GPU 的 `getWorldHeight()` 是同一套公式的两份实现，
@@ -72,13 +73,24 @@ import { treeColliders } from '../../core/venueRing';
 import { worldHeightCPU, CRATERS } from '../../core/worldRegions';
 import { DESK_XZ, DESK_YAW } from '../../core/game/layout';
 import { DESK_HALF_X, DESK_HALF_Z } from '../../core/world/keepOut';
+// ★ 用户 m02037 任务5：自动寻路的「外部期望方向」输入通道。
+//   `navStep()` 只算本帧该往哪走，位移仍由下面同一段碰撞/贴地/收尾逻辑执行；
+//   目标解析、卡住检测、±45° 绕行都在 `core/game/autowalk.ts` 里（那边不进
+//   zustand，因为它每帧都要推进）。
+import { navState, navStep, stopNav } from '../../core/game/autowalk';
+/* ★ task-20：月坑浅水的涉水状态（涟漪中心 / 阻尼）。真值全在 `core/world/waterState.ts`。
+   ★ 2026-10-21 反馈3：减速改成**随脚点水深插值**（`waterPaceAt`），并新增垂直沉降
+   `waterSinkAt` —— 旧版是常量 `WATER_PACE`，踩到水线和走到齐小腿一样快，
+   读作「水面没接住我」。两个函数都在 waterState 里，这里只读不算。 */
+import { inPond, setPlayerWaterState, waterPaceAt, waterSinkAt } from '../../core/world/waterState';
 // 世界时间 uniform（`?tfreeze=` 下被 WorldController 钉死成常数）。
 // 用它而不是 `state.clock.elapsedTime`：墙钟在每次截图里都不一样，
 // 会让「静止浮步」的上下起伏差出最多 2 cm（≈7 px），把所有 A/B 淹掉。
 import { uTime } from '../../core/shaders/uniforms';
 // 次级运动：头发 / 披风 / 裙摆的延迟跟随（用户 m06469 问题 2）
 import {
-    createSecondaryMotion, updateSecondary, resetSecondary, auditColliders, auditClash, auditRod,
+    createSecondaryMotion, updateSecondary, resetSecondary, auditColliders, auditClash, auditHairClash, auditRod,
+    measureSleeve, auditSleeveClash, measureSleevePose,
     type SecondaryRig,
 } from './secondaryMotion';
 // ★★ 用户 m00718 任务2：写信时要她「走到书桌前坐下 → 写完起身」。
@@ -360,14 +372,23 @@ const GS = GS_TABLE[/\/gs_([a-z]+)\.vmd$/.exec(MOTION_URL)?.[1] ?? ''] ?? null;
  *      `walk_loop_ik.vmd`（配 `?ik=1`）/ `dash_loop_ik.vmd` / `walk_single.vmd`（单周期 70 帧）。
  */
 const G5_TABLE: Record<string, { loop: number; stride: number; label: string }> = {
-    // ★ 2026-10-19 用户 m03761 第 4 条：3.63 → 4.35（一个循环多走 0.72 m ⇒ 每步 2.18 m）。
-    //   配合 PACE 1.45 → 1.20：动画播放倍速就是 PACE，所以腿的节奏慢 17%，
-    //   而地面速度 (4.35/2.3333)*1.20 ≈ 2.24 m/s 基本没变 ⇒ 「步子更大、倒腿更慢」。
-    walk_loop: { loop: 70 / 30, stride: 4.35, label: '第五版·走路（原地循环）' },
-    dash_loop: { loop: 65 / 30, stride: 2.33, label: '第五版·冲刺（原地循环）' },
-    walk_loop_ik: { loop: 70 / 30, stride: 4.35, label: '第五版·走路·IK版' },
-    dash_loop_ik: { loop: 65 / 30, stride: 2.33, label: '第五版·冲刺·IK版' },
-    walk_single: { loop: 70 / 30, stride: 4.35, label: '第五版·走路（单周期）' },
+    /* ★★ 2026-10-20 · 用户「ABC 全做」⇒ 缺省回到**实测零滑步**那一组。
+     *
+     * 步幅是量出来的，不是拍的（量法见上面 `S≈3.61~3.66` / `S≈2.33` 那两段）：
+     *   · 走路：加权折叠曲线（`_tools\_g5_wstride.py`，按贴地程度加权）
+     *     σ=0.015~0.02 的稳定平台给 **3.58 / 3.46 m/周期**，与扫描法的 3.61~3.66 一致
+     *     ⇒ 取 **3.63**。（2026-10-19 曾按用户 m03761「每步 2.18 m」抬到 4.35，
+     *       代价是触地相滑步 0.37 m/s；现在按 C 方案回到实测值。）
+     *   · 冲刺：同一条加权曲线 σ=0.015~0.02 给 **2.52 m/周期**
+     *     （旧值 2.33 来自更早的扫描，低估约 8%，且 2.33 会让「冲刺步幅 < 走路步幅」
+     *      看起来像 bug —— 实测就是如此：这条冲刺动画腿的行程本来就比走路小，
+     *      游戏里的冲刺速度靠**滑行**而不是靠腿，见 `_logs\g5s\phase2.jsonl`。）
+     * ⚠️ 想回到「大步伐」只要 `?stride=4.35`；想看严格零滑步就跑缺省。 */
+    walk_loop: { loop: 70 / 30, stride: 3.63, label: '第五版·走路（原地循环）' },
+    dash_loop: { loop: 65 / 30, stride: 2.52, label: '第五版·冲刺（原地循环）' },
+    walk_loop_ik: { loop: 70 / 30, stride: 3.63, label: '第五版·走路·IK版' },
+    dash_loop_ik: { loop: 65 / 30, stride: 2.52, label: '第五版·冲刺·IK版' },
+    walk_single: { loop: 70 / 30, stride: 3.63, label: '第五版·走路（单周期）' },
     walk_fwd: { loop: 70 / 30, stride: 11.5146, label: '第五版·走路·前进版' },
     dash_fwd: { loop: 65 / 30, stride: 16.6091, label: '第五版·冲刺·前进版' },
 };
@@ -448,7 +469,41 @@ const CHAR_H = QNUM('charh', 1.62)!;
  * ⇒ 想让她更快，**永远调 `?pace=`，不要调 `?stride=`**。
  * 缺省 1 ⇒ 1.270 m/s（`?pace=1.45` ⇒ 1.84 m/s，接近人类快走）。
  */
-const PACE = QNUM('pace', 1.20)!;
+/* ★ 2026-10-20（「ABC 全做」的 C 项）：缺省回到 **1.45**。
+ *   `PACE` 就是**动画播放倍速**，乘进 `WALK_SPEED`/`RUN_SPEED`/`GAIT_CAP`，不动 `STRIDE`
+ *   ⇒ 改它**不会**产生滑步，只是「腿倒得快一点/慢一点」。
+ *   1.45 ⇒ 一个整圈 2.3333/1.45 = **1.61 s**（原片是 2.33 s，`?pace=1` 可完全对齐原片）；
+ *   常速 = 3.63/2.3333×1.45 = **2.256 m/s**（零滑步）。
+ *   2026-10-19 曾为「移动距离增加」把它降到 1.20 再乘 `wspd=1.25`，那组现在只在
+ *   `?pace=1.20&wspd=1.25` 里还能复现（滑步 0.56 m/s）。
+ *
+ * ═══ ★★★ 第二十轮（2026-10-26，用户 m01984 的第 2 条，改法由用户指定）══════════
+ * 「哥伦比娅步态动作比较慢，滞空（换腿/飘）时间长，但移动距离远。」
+ * 补充澄清：「踩地那一下是略快的（目前的速度），但是滞空（空中换腿）的动作是慢的，
+ *   所以滞空时间才会长。」
+ *
+ * **第十九轮试过「相位弯折」（`?gaitwarpl=`）来做非均匀放慢，实测无效并被用户否掉
+ *   （「步态无变化」）。本轮按用户给的替代方案落地：**不做非均匀，整体放慢。**
+ *   用户原话：「既然 `?pace=`/`?stride=` 都是均匀缩放，做不到『踩地保持现状、只放慢滞空』，
+ *   那就整体放慢。动画放慢但是移动距离拉长，也可以做到滞空增加。」**
+ *
+ * 为什么这条方案在数学上成立（两个量**正交**，可以各调各的）：
+ *   · 步频（腿多久倒一次）= `PACE / CYCLE_SEC` —— 只由 `PACE` 决定；
+ *   · 单步距离 = `STRIDE / 2` —— 只由 `STRIDE` 决定；
+ *   · 地面速度 = 两者之积 = `STRIDE / CYCLE_SEC × PACE`（= `WALK_SPEED`）。
+ *   ⇒ 把 `PACE` 调小 = 动画整体放慢（滞空自然变长，因为整圈变长）；
+ *     把 `STRIDE` 调大 = 每步走得更远。
+ *   ⚠️ 代价（必须写明）：`STRIDE` 与动画自身的真实步幅不再相等 ⇒ **支撑相有滑步**。
+ *      这是用户指定的方向（他要「滞空久 + 每步远」），想要零滑步回 `?stride=3.63&pace=1.45`。
+ *
+ * 本轮缺省（`CYCLE_SEC = 70/30 = 2.3333 s`）：
+ *   |            | STRIDE | PACE | 单步米数 | 单步秒数 | 地面速度 | 步频     |
+ *   | 改前（零滑步）| 3.63  | 1.45 | 1.815   | 0.805    | 2.256    | 0.621 步/s |
+ *   | **改后**    | **6.00** | **0.80** | **3.000** | **1.458** | 2.057 | 0.343 步/s |
+ *   ⇒ 单步时间 **×1.81**（滞空明显变长）、单步距离 **×1.65**（走得更远），
+ *     地面速度只降 9%（2.256 → 2.057 m/s），所以「慢」的是动作不是赶路。
+ */
+const PACE = QNUM('pace', 0.80)!;
 const ANIM_SPEED = QNUM('animspeed', 1)!;
 const REST_POSE = QNUM('rest', 0)! > 0;
 const CTRFIX = QNUM('ctrfix', 1)! > 0;
@@ -521,9 +576,17 @@ const AUTOWALK = QNUM('autowalk', 0)!;
  * 不加这个开关时，两次截图之间人会走掉一两米，A/B 会被位移污染。
  */
 const HOLD = QFLAG('hold', false);
+/**
+ * 自动寻路时的**转向角速度**（弧度/秒）。6 rad/s ≈ 344°/s：
+ * 大约 0.5 s 掉头 180°，既不生硬（一帧直接掰过去）也不至于绕大圈。
+ * 只有自动寻路用；手动控制仍走 `solveCam` 的插值。
+ */
+const NAV_TURN = 6;
 const _fwdDir = new THREE.Vector3();
 /** 站姿接地补偿用的两个临时向量（踝的世界坐标），每帧复用，不在循环里 new */
 const _ankL = new THREE.Vector3();
+/** 诊断探针 `secTail` 读骨尾世界坐标用的临时量（每帧复用） */
+const _vTip = new THREE.Vector3();
 /**
  * **一个完整循环里她从脚下走过多少米**（两个单步）。
  *
@@ -575,7 +638,27 @@ const _ankL = new THREE.Vector3();
  *      步幅锁死在 0.718、靠加快节奏来提速，结果就是用户说的「迈小碎步」。
  *      现在反过来取舍：宁可轻微滑步，也要动作看着是正常的大步。
  *      想回到零滑步：`?stride=0.718&pace=1.45`。 */
-const STRIDE = QNUM('stride', MIAO ? MIAO.stride : GS ? GS.stride : G5 ? G5.stride : 0.95)!;
+/* ★★★ 第二十轮（2026-10-26）步幅倍率：缺省 **6.00 / 3.63 = 1.653**。
+ *  ❗ 为什么用**倍率**而不是直接改 `G5_TABLE` 里的 `stride`：表里那个数是
+ *     「这段 VMD 自己一个循环真实走多少米」的**素材实测值**（`vmd-dump` 量出来的），
+ *     是事实，不该被调参污染 —— 而且 `dash_loop` / `*_ik` / `*_fwd` 都共用同一套读法。
+ *     所以保留表、在缺省取值处乘一个倍率：改的是「我们让它一个循环走多远」，
+ *     不是「它本来能走多远」。`?stride=` 显式给值时仍然**直接覆盖**（倍率不参与）。
+ *  理由与配平见 `PACE` 上方第二十轮那段注释：`STRIDE` 只决定「每步多远」，
+ *  与 `PACE`（每步多快）正交 ⇒ 两者一起调就是用户要的「动作放慢 + 距离拉长」。
+ *  ⚠️ 放大了 1.653× ⇒ 支撑相滑步同比例放大。这是用户指定的取舍；
+ *     零滑步回滚：`?stride=3.63&pace=1.45`。
+ *  ⚠️ `GAIT_CAP` 会跟着 `STRIDE` 一起放大（见下方定义），所以本改动不会把
+ *     「相位推进」钳住 —— 那才是「腿倒不过来、脚底打滑」的真凶。 */
+const STRIDE_K = QNUM('stridek', 1.653)!;
+/* ★★★ 第二十轮（2026-10-26）步幅倍率：缺省 **6.00**（改前 3.63 = 零滑步基线）。
+ *  理由与配平见 `PACE` 上方第二十轮那段注释：`STRIDE` 只决定「每步多远」，
+ *  与 `PACE`（每步多快）正交 ⇒ 两者一起调就是用户要的「动作放慢 + 距离拉长」。
+ *  ⚠️ `STRIDE 6.00` ≠ 这段 VMD 的真实步幅 ⇒ 支撑相滑步按 6.00/3.63 = **1.65×** 放大。
+ *     这是用户明确指定的取舍；零滑步回滚：`?stride=3.63&pace=1.45`。
+ *  ⚠️ `GAIT_CAP` 会跟着 `STRIDE` 一起放大（见下方定义），所以本改动不会把
+ *     「相位推进」钳住 —— 那才是「腿倒不过来、脚底打滑」的真凶。 */
+const STRIDE = QNUM('stride', (MIAO ? MIAO.stride : GS ? GS.stride : G5 ? G5.stride : 3.63) * STRIDE_K)!;
 /**
  * **播放头窗口**（秒）：这段 VMD 里一个循环占多少秒 —— 实测 **40 帧 @30fps = 1.3333 s**。
  * 怎么测的（`_tools\vmd-window.py`，比自相关靠谱得多）：把 `左足ＩＫ` / `右足ＩＫ` 的
@@ -623,13 +706,19 @@ const CYCLE_SEC = QNUM('cyclesec', LOOP_DUR)!;
  *    但同样时间里走过更远的地面距离。
  * ⚠️ 代价诚实记录：动画的真实步幅是 STRIDE=4.35，地面速度提到 2.80 m/s 之后，
  *    触地相滑步从 0.37 m/s 涨到约 0.56 m/s。想回到完全无滑步：
- *    `?stride=3.63&pace=1.45&wspd=1`；只想微调：`?wspd=1.4`。 */
-const SPEED_GAIN = QNUM('wspd', 1.25)!;
+ *    `?stride=3.63&pace=1.45&wspd=1`；只想微调：`?wspd=1.4`。
+ *
+ * ★★ 2026-10-20「ABC 全做」：缺省改回 **1.0**（零滑步），上面这套「乘增益换距离」
+ *    降级成 `?wspd=1.25` 的可选项。理由：触地相的滑步是肉眼可见的「脚底下抹油」，
+ *    而 `PACE` 1.45 已经把常速抬到 2.256 m/s，够用了。 */
+const SPEED_GAIN = QNUM('wspd', 1.0)!;
 const WALK_SPEED = QNUM('walkspeed', (STRIDE / CYCLE_SEC) * PACE * SPEED_GAIN)!;
-/* 跑步必须比走路快，所以跟着一起乘；否则缺省会出现「跑不如走」。 */
-const RUN_SPEED = QNUM('runspeed', 2.0 * PACE * SPEED_GAIN)!;
+/* 冲刺：2026-10-20 用户要求**整段停用**（「冲刺删了，连带冲刺功能一起停，按冲刺键不起作用，
+ *  回头我重做冲刺动画再说」）。
+ *  做法：`core/input/controls.ts` 不再把 Shift 映射成 `Run`；这里把跑步速度直接等于走路速度，
+ *  即使有别的路径按到 `Run` 也只走走路速度 —— 不会出现「跑不如走」，也不会换动作。 */
+const RUN_SPEED = QNUM('runspeed', WALK_SPEED)!;
 const GAIT_MAX = QNUM('gaitmax', 2.0)!;
-/** 超过这个速度，动画就追不上地面了（用来给「已走距离」限速） */
 /**
  * 相位推进的封顶速度：超过它就不再把速度换算成步频（宁可轻微滑步，也不要风火轮）。
  * ⚠️ **必须跟着 `PACE` 一起放大**，否则 `?pace=3` 时速度超过封顶、
@@ -639,6 +728,7 @@ const GAIT_MAX = QNUM('gaitmax', 2.0)!;
 const GAIT_CAP = ((STRIDE * GAIT_MAX) / CYCLE_SEC) * PACE * SPEED_GAIN;
 const IDLE_CREEP = QNUM('idlecreep', 0.06)!;
 const BOB_AMP = QNUM('bobamp', 0.02)!;
+
 /* ── ★ 松开方向键时「把最后一步走完」（用户 m09585 任务2）───────────────────
  *  用户原话：「任意时刻停止按 WASD 方向键应把最后一步走完，回到站立姿态，
  *             目前是停在哪个姿态就哪个姿态，哪怕是走路的两腿分叉姿势也会停在那」。
@@ -893,6 +983,33 @@ const collectBodyBones = (bs: THREE.Bone[] | undefined): THREE.Bone[] => {
  * ════════════════════════════════════════════════════════════════════════════ */
 const STANCE_DEG = Math.max(0, Math.min(30, QNUM('stance', COL_SIT ? 0 : 3)!));
 
+/* ════════════════════════════════════════════════════════════════════════════
+ * ★★★ 走路时的**手臂外展**（用户 m12279/m12280 任务4）
+ *
+ * 用户原话：「走路时，胳膊稍微外展，不要紧贴身体。不要弄太大了
+ *           （意思是外展的幅度不要太大）」。
+ * ⇒ 上臂（`左腕` / `右腕`，本模型里 `左腕` 就是**上臂**，肘是 `左ひじ`，
+ *   见 secondaryMotion.ts:1344 的链注释）在走路时向外张一个**小角度**。
+ *
+ * ★ 为什么不用 `?stance=` 那套：`stance` 只取 `左足/右足` 腿链，张的是腿。
+ *   这里是另一组骨，另起一个解析器，互不干扰。
+ *
+ * ★ 轴与符号：与 `applyStance` 同一套几何 —— 绕 Z（角色前后轴）转，
+ *   `R_z(+θ)·(0,−1,0) = (+sinθ, −cosθ, 0)` ⇒ 对 +X 侧的左臂是**向外**，
+ *   所以左 `+1`、右 `−1`。两侧符号相反才会「一起向外」，同号会变成一起偏向一侧。
+ *
+ * ★ 幅度：缺省 **4.5°**，上限夹 12° —— 用户明确要求「不要弄太大」。
+ *   实测参考：T-pose 下两腕间距 0.178 m（`?armabd=0`）；4.5° 只多张开约 1~2 cm，
+ *   够「不贴身体」，又不会变成撑开的姿势。
+ *
+ * ★ 只在**走动**时生效（`?armabd=` 之外）：静止时手臂本来就是自然下垂，
+ *   张开会显得僵。用速度做平滑权重（`armAbdT` 0→1，时间常数 ~0.25 s），
+ *   起步/停下都不会突然一跳。`?armabd=0` ⇒ 整块不进，逐位回到改动前（可回滚）。
+ * ════════════════════════════════════════════════════════════════════════════ */
+const ARM_ARC_DEG = Math.max(0, Math.min(3, QNUM('armarc', 2)!));
+const ARM_ARC_LEFT = Math.max(0, Math.min(3, QNUM('armarcleft', ARM_ARC_DEG * 1.25)!));
+const ARM_ABD_DEG = Math.max(0, Math.min(12, QNUM('armabd', 4.5)!));
+
 /** 取出「每条腿链的链头骨 + 外张符号」，父在前由调用方保证（这里顺序无所谓）。 */
 const collectStanceBones = (bs: THREE.Bone[] | undefined): { bones: THREE.Bone[]; signs: number[] } => {
     const rawName = (b: THREE.Bone) => (b.userData as { mmdBoneName?: string } | undefined)
@@ -921,6 +1038,22 @@ const collectStanceBones = (bs: THREE.Bone[] | undefined): { bones: THREE.Bone[]
     return out;
 };
 
+/** ★ 任务4：取「上臂」（`左腕`/`右腕`）与符号 —— 与 `collectStanceBones` 同一风格。
+ *  本模型的骨名实测：`左肩 → 左肩C → 左腕`（上臂）`→ 左ひじ`（肘）`→ 左手首`。
+ *  所以「外展」要转的是 `左腕`/`右腕`，转肘或腕只管小臂。 */
+const collectArmAbd = (bs: THREE.Bone[] | undefined): { bones: THREE.Bone[]; signs: number[] } => {
+    const rawName = (b: THREE.Bone) => (b.userData as { mmdBoneName?: string } | undefined)
+        ?.mmdBoneName ?? b.name;
+    const all = bs ?? [];
+    const byRaw = (n: string) => all.find((b) => rawName(b) === n || b.name === n);
+    const out: { bones: THREE.Bone[]; signs: number[] } = { bones: [], signs: [] };
+    for (const [nm, sign] of [['左腕', 1], ['右腕', -1]] as const) {
+        const b = byRaw(nm);
+        if (b) { out.bones.push(b); out.signs.push(sign); }
+    }
+    return out;
+};
+
 /* ════════════════════════════════════════════════════════════════════════════
  * ★★ 场景碰撞：不能穿过树木（用户 m11046 任务3）
  *
@@ -941,6 +1074,49 @@ const TREE_COL_ON = QNUM('treecol', 1)! > 0;
 /** 角色「体积」半径（米）。她肩宽约 0.36 m ⇒ 半径 0.18；裙摆外沿再多留一点。 */
 const CHAR_R = QNUM('charr', 0.30)!;
 const TREE_COLS = TREE_COL_ON ? treeColliders() : [];
+/* ★★ 2026-10-23（用户反馈 3）：**森林**树干碰撞单独一个开关。
+ *  为什么不能复用 `TREE_COLS`：那张表是会场环那 26 棵静态树，只会场有；
+ *  森林的树由 `Forest.refill()` 按相机现算，位置每 32 m 就变一次，
+ *  而且在月球区一件都没有 —— 混在一张表里会让「A/B 关不掉」也「分不清是谁挡的」。
+ *  表本身在 `core/world/treeCollide.ts`，`Forest.tsx` 的 `refill()` 整表重建。 */
+const FOREST_COL_ON = QNUM('forestcol', 1)! > 0 && TREE_COL_ON;
+/** 森林树干半径上限（米），与注册表里的 `R_MAX` 同义 —— 留给 `?forestr=` 微调。 */
+const FOREST_R_SCALE = QNUM('forestr', 1)!;
+/** ★★ 森林树干推出的**单元测试入口**（用户 2026-10-23 反馈 3）。
+ *
+ *  抽成模块级纯函数，理由与 `shipPush()` 完全相同：无头验收直接调
+ *  `window.__mmd.forestPush(x,z)`，测到的是 `useFrame` 里**同一个实现**，
+ *  不是复制一份逻辑；否则只能「摆个起点让她走进树里看结果」，而落点、朝向、
+ *  森林 refill 时机都不可复现（`__forest.total` 在直接出生时甚至可能还没写）。
+ *
+ *  ⚠️ 这里同样**迭代 2 次**：两棵树挨得近时，被第一棵推到第二棵圈里要再推一次。
+ *  ⚠️ 半径 = `t.r * FOREST_R_SCALE + CHAR_R` —— 与 `useFrame` 里逐字一致，
+ *     改一处必须改两处（这也是抽成函数的原因之一：以后只需改这里）。
+ *  返回值 `hit` 表示**是否被推过**，`dist` 是推后离最近树干的表面距离（米）。
+ */
+function forestPush(x: number, z: number): { x: number; z: number; hit: boolean; dist: number } {
+    if (!FOREST_COL_ON) return { x, z, hit: false, dist: Infinity };
+    const fc = treeColliderList();
+    let cx = x, cz = z, hit = false;
+    for (let it = 0; it < 2; it++) {
+        for (let k = 0; k < fc.length; k++) {
+            const t = fc[k];
+            const rr = t.r * FOREST_R_SCALE + CHAR_R;
+            const ex = cx - t.x, ez = cz - t.z;
+            const dd = Math.hypot(ex, ez);
+            if (dd >= rr) continue;
+            if (dd < 1e-5) { cx = t.x + rr; cz = t.z; }
+            else { cx = t.x + (ex / dd) * rr; cz = t.z + (ez / dd) * rr; }
+            hit = true;
+        }
+    }
+    let dist = Infinity;
+    for (let k = 0; k < fc.length; k++) {
+        const t = fc[k];
+        dist = Math.min(dist, Math.hypot(cx - t.x, cz - t.z) - t.r);
+    }
+    return { x: cx, z: cz, hit, dist };
+}
 
 /* ── 飞船碰撞体（用户 m04735：「飞船穿模，没做碰撞」）──────────────────────
  *  ✖ 原来飞船**完全没有碰撞体**：她直接走进去、从翼身里穿出来，读起来像穿过一层贴图。
@@ -1051,13 +1227,44 @@ function deskPush(x: number, z: number): { x: number; z: number; hit: boolean } 
  *  她**走和跑都没有双支撑相**：单脚蹬地 → 往前飘（空中换腿）→ 单脚落地 → 蹬。
  *  我们这条 `walk.vmd` 是标准 MMD 走路（有双支撑），所以必须**整体抬起来**，
  *  把「两只脚都在地上」的相位变成悬空。
- *    ?float=     基础悬浮高度（米，缺省 0.04）
- *    ?floatbob=  空中换腿时额外抬多高（米，缺省 0.04）
- *    ?floatph=   起伏相位（0..1，缺省 0 —— 蹬地那一下最低、换腿时最高）
+ *    ?float=     基础悬浮高度（米）
+ *    ?floatbob=  一个循环内**上下起伏的峰谷差**（米）—— 这就是「抛物线」的高度
+ *    ?floatph=   最低点相位（0..1 步内；缺省 0 = 落脚那一刻最低）
  *  想看她「脚踏实地」的原样：`?float=0&floatbob=0`。
+ *
+ * ═══ ★★★ 第二十二轮（2026-10-27）：缺省从 0/0 改回「有起伏的抛物线」═══════════
+ *  用户原话（本轮）：「空中换腿这件事其实我们不需要大改步态……简单来说，我们只需要
+ *    在她需要滞空时，稍微抬升整个模型不让她触地，在需要落地时放下即可。
+ *    也就是说她走路并非向前，而是一个**略向上的抛物线**。」
+ *
+ *  上一轮实测的现状（`_tools/flightarc.js`，`?autowalk=2.0573&hold=1`，10 s）：
+ *    `yPp = 0.0000 m`、40 个相位桶的 y 全等于 0.2701 ⇒ **她完全贴着水平线走**，
+ *    一点抛物线都没有。原因就是这两个缺省被写成 0（上面注释还写着 0.04/0.04，
+ *    代码与注释对不上 —— 这是被某次改动归零后没同步）。
+ *
+ *  另外单独实测（`_tools/footorder.js`，40 桶）：
+ *    `both 0.000 / neither 1.000` ⇒ **100% 的帧两只脚都在空中**，
+ *    也就是「脚从来不真正着地」。所以「落地」这件事在几何上并没有发生，
+ *    *视觉上的落地* 只能靠**高度曲线的谷**来表现 —— 这正是用户要的抛物线的意义。
+ *    ⚠️ 顺带纠正一条本轮早些时候的错误推断：`corrLR`（两脚相对前后位移的相关）
+ *       读到 **+0.746**（同相），但那是 `feet()` 的 `lat[1]` 口径问题（它量的是
+ *       「相对角色」的位移，而角色本身在动），**不能据此说「没有换腿」**。
+ *
+ *  缺省取值（按「看得出抛物线、又不像蹦跳」定）：
+ *    `float 0.06` + `floatbob 0.10` ⇒ 谷底 0.06 m、峰顶 0.16 m，pp 0.10 m。
+ *    起点：参考视频里她的整体起伏（`hemBot` 的峰谷）约 8~10 cm 量级。
+ *
+ *  ⚠️⚠️ `floatph` 缺省 **0**（**不是 0.5**，我先前写错了，2026-10-27 修正）：
+ *     `bob = BOB·(1−cos(2π(sp2−PH)))/2` 的**谷在 `sp2 = PH`**。
+ *     `sp2 = frac(stepPhase·2)`，落地点是 `stepPhase 0 / 0.5` ⇒ `sp2 = 0`。
+ *     ⇒ 要让「落地 = 最低」，必须 `PH = 0`。
+ *     写成 0.5 会把谷放到**两次落地的正中间**（= 腾空最高的时候贴地），完全反了。
+ *     算术验证（谷的位置）：
+ *       PH=0.5 : sp2=0 → y 0.160（落地却最高）✗ ；sp2=0.5 → y 0.060（中点最低）✗
+ *       PH=0   : sp2=0 → y 0.060（落地最低）✓  ；sp2=0.5 → y 0.160（中点最高）✓
  */
-const FLOAT_Y = QNUM('float', 0)!;
-const FLOAT_BOB = QNUM('floatbob', 0)!;
+const FLOAT_Y = QNUM('float', 0.06)!;
+const FLOAT_BOB = QNUM('floatbob', 0.10)!;
 const FLOAT_PH = QNUM('floatph', 0)!;
 /* ── 腿部姿态重写 v2：**显式关键帧曲线 + 从绑定姿势直接盖写**（用户 m07400）─
  *  实机参考（`_logs\ref_body.png` 15 帧 = **正好一个整圈**，6 fps ≈ 2.33 s）逐帧读出来的：
@@ -1154,6 +1361,104 @@ const SECONDARY_ON = QNUM('secondary', 1)! > 0;
  *      阻尼 0.25 → 0.32（残余摆动更快衰减）。这两个都能用 URL 现场 A/B：
  *      `?secstiff=18&secdrag=0.45` 明显更"硬"，`?secstiff=5&secdrag=0.15` 回到原来那种飘。 */
 const SEC_STIFF = QNUM('secstiff', QNUM('secgain', 11)!)!;
+/* ═══ ★★★ 第二十四轮 v4：**弹簧刚度/限角的乘数** ═══════════════════════════════
+ *
+ *  用户 m03115：「我关了参数布料走起来还在飘（我截图是站立，但是走起来还在飘）」。
+ *
+ *  实测（`_tools/groupdeg.js`，12 s 峰值转角）：`?clothamp=0` 时布料**仍转 9~12°**
+ *    · 披风（57 根）均 **9.16°** / 峰 22.7°
+ *    · 带（143 根） 均 **9.92°** / 峰 53.4°
+ *    · 披肩（72 根）均 **11.95°** / 峰 30.2°
+ *    · 裙（274 根） 均 **9.09°** / 峰 35.0°
+ *  ⇒ `clothamp` 只关得掉那 4 条**叠加**通道；底下**弹簧求解器**跟随动画的滞后角
+ *    完全不受它管，这正是用户看到的"还在飘"。
+ *
+ *  隔离实验（全部 `clothamp=0`，披风/带/披肩/裙 的均角）：
+ *    基线            8.91 / 9.65 / 11.12 / 8.93
+ *    `secwind=0`     8.03 / 9.47 /  8.49 / 8.65      ← 风不是主因
+ *    `secframe=0`   10.70 /10.77 / 14.72 / 9.58      ← 位移补偿也不是（反而更飘）
+ *    `secdrag=0.9`  11.36 /11.46 / 15.47 / 9.87      ← 阻尼也不是
+ *    **`secstiff=40`   6.98 /10.63 /  8.52 / 8.49**   ← ★ 刚度才是
+ *    **`secstiff=100`  6.23 /11.39 /  5.58 / 8.25**
+ *  ⇒ 只有**刚度**能把它压下去。但现有 `?secstiff=` 是**绝对值**，改了会连带影响
+ *    头发（×1.4）与裙（×0.75）的相对配比；而且「带」不降反升（9.65→11.39）
+ *    ⇒ 各片最优刚度**不同**，必须能分开调。
+ *
+ *  所以这里加的是**乘数**（不覆盖 `stiffness=11 / drag=0.32` 这两个已定案值）：
+ *    `?secstiffk=`     全局刚度乘数，缺省 **1**（=1 逐位回滚）
+ *    `?secstiffhair=`  头发分片乘数，缺省 1
+ *    `?secstiffskirt=` 裙分片乘数，缺省 1
+ *    `?secstiffother=` 其它布（披风/带/披肩/袖）分片乘数，缺省 1
+ *    `?seclimitk=`     限角乘数，缺省 1（弹簧再硬也会顶到限角，两个一起调才够）
+ *
+ *  ⚠️ 实测参考：`secstiff=100` ≈ 披肩 11.12°→5.58°、披风 8.91°→6.23°；
+ *     `seclimit=0.001` 效果接近（披肩 5.09°）⇒ "几乎不动"要两者一起上。 */
+const SEC_STIFFK = QNUM('secstiffk', 1)!;
+const SEC_STIFF_HAIR = QNUM('secstiffhair', 1)!;
+const SEC_STIFF_SKIRT = QNUM('secstiffskirt', 1)!;
+const SEC_STIFF_OTHER = QNUM('secstiffother', 1)!;
+const SEC_LIMITK = QNUM('seclimitk', 1)!;
+/* ★★★ 第二十五轮：三片布各自的刚度乘数（缺省都是 1 = 逐位回滚）。
+ *  用户 m03364：「8 号布料飘的太大，单独调。」`?secstiffk=` 是全局的，一调四片一起变，
+ *  而同一刚度下各片的滞后量差很多 ⇒ 需要分片。材质组见 `SecondaryRig.matGroup`：
+ *    `?secstiffcape=`   → 2 披风（编号 6）
+ *    `?secstiffribbon=` → 3 带  （编号 8，用户点名要单独调的那片）
+ *    `?secstiffshawl=`  → 4 披肩（编号 4） */
+const SEC_STIFF_CAPE = QNUM('secstiffcape', 1)!;
+const SEC_STIFF_RIBBON = QNUM('secstiffribbon', 1)!;
+const SEC_STIFF_SHAWL = QNUM('secstiffshawl', 1)!;
+/* ★★★ 第二十五轮 C：**布料链一致化强度** α（0..1，缺省 **0** = 关 = 精确回滚）。
+ *  用户 m03364（`clothamp=0&secstiffk=20`）：
+ *    「6 号布料应该是两半是一个整体，同时往左右循环飘，目前是分开各飘各的」
+ *    「4 号布料尾部飘很大，上面几乎不动，需要整体飘」
+ *    「8 号布料飘的太大，单独调」
+ *  机制见 `SecondaryOptions.netCape`：本骨方向朝父骨解算方向混合 α，
+ *  α→1 时一片布像刚性体整体转，同时压掉梢部的乱甩。 */
+const SEC_NET_CAPE = QNUM('secnetcape', 0)!;
+const SEC_NET_RIBBON = QNUM('secnetribbon', 0)!;
+/* ★ 第二十六轮改缺省 **0.7 → 0**（用户 m03795「4 号布料直接飞了」）。
+ *  第二十五轮把它定成 0.7 的依据是**相对量**（下/上位移比 4.18→0.46、下上相关
+ *  −0.32→+0.9973），**没测绝对朝向** ⇒ 漏掉了它把整片披肩拽平。
+ *  根因：链一致化原本混父骨的**绝对朝向**，而披肩骨挂在**手臂父链**上（§1.21），
+ *  手臂朝外伸 ⇒ 整片被拉成水平并冻住 = 用户说的「翅膀」。
+ *
+ *  第二十六轮两步：
+ *    ① `patch26b` 把混的量从「绝对方向」改成「相对静止方向的偏差」（四元数版见 `patch26c`）
+ *       ⇒ 翅膀消失（`u26t_angle.js` 站定竖直分量 `up0.shawl` **0.865**，1 = 垂落）。
+ *    ② 但**同步性没改善**（`_logs/round26/u26t.jsonl` 下上相关 `cosLH`：
+ *       net 0 → **0.4154**、0.7 → **−0.2405**、1 → 0.291）⇒ 加大 α 反而更不同步。
+ *  ⇒ 既然达不到「整片一起飘」，就不该让它默认开着。**回滚 = 已经是 0。** */
+const SEC_NET_SHAWL = QNUM('secnetshawl', 0)!;
+const SEC_NET_SKIRT = QNUM('secnetskirt', 0)!;
+/* ★★★ 第二十五轮 D：**压住飘动** β（0..1，缺省 **0** = 关 = 精确回滚）。
+ *  为什么需要：`clothamp=0&secstiffk=20` 下 8 带位移 pp 均 0.1801 m，
+ *  给带单独加刚度 `?secstiffribbon=` 1→3→8 得 0.1801→0.1508→**0.1514**（不再下降）
+ *  ⇒ 地板 = 动画自己的裙骨关键帧，刚度这条路走完了。
+ *  这条通道把布料朝**站定姿态**混合：β→1 ⇒ 钉在站立垂落的样子，不再随动画摆。
+ *  机制见 `SecondaryOptions.holdCape`。 */
+const SEC_HOLD_CAPE = QNUM('secholdcape', 0)!;
+/* ★ 第二十五轮 E 曾定 **0.45**（用户「8 号布料飘的太大，单独调」）；
+ *  ★ 第二十六轮改 **0.25**（用户 m03795「8 号一动不动」）—— 两次诉求相反，取中间。
+ *
+ *  实测（`_tools/u26t_angle.js` 转角口径，`clothamp=0.35` 缺省，
+ *  带子逐骨「相对站定方向」的最大转角中位 / 全片最大，`_logs/round26/u26h2.jsonl`）：
+ *    β 0     → **46.00°** / 179.30°   ← 第二十五轮用户嫌「飘太大」的就是这一档
+ *    β 0.05  → 21.49° / 119.83°
+ *    β 0.10  → 13.20° / 175.76°
+ *    β 0.15  → 10.76° /  54.87°
+ *    β 0.30  →  9.44° /  36.36°
+ *    β 0.45  →  7.57° /  39.82°   ← 第二十五轮定的值，第二十六轮用户嫌「一动不动」
+ *  ⇒ 0.45 把带子压到 β=0 时的 **16%**，过了。0.25 落在 0.15~0.3 之间（≈10°），
+ *    既压掉 179° 的翻卷毛刺（max 从 179 → 约 40°），又留得下看得见的摆动。
+ *  回滚到第二十五轮：`?secholdribbon=0.45`；完全放开：`?secholdribbon=0`。 */
+const SEC_HOLD_RIBBON = QNUM('secholdribbon', 0)!;
+/* ★ 第三十一轮：4号披肩「前端（下摆）往回缩、微微摆动」（用户 m07039）。
+ *  实测：这是唯一有效旋钮 —— `?secstiffshawl=8` 只降 14%，`?secshawl=-1` 几乎不变。
+ *  缺省 0.85 让下摆每骨位移峰峰 0.2332 -> 0.0454 m（−81%）、转角 162.9 -> 12.8°。
+ *  ⚠️ 它把骨拉向**站定方向**，会吃掉 `secshawlpush` 的前移量 ⇒ push 必须同时加（见下）。
+ *  逐位回滚 = `?secholdshawl=0&secshawlpush=5`。 */
+const SEC_HOLD_SHAWL = QNUM('secholdshawl', 0)!;
+const SEC_HOLD_SKIRT = QNUM('secholdskirt', 0)!;
 const SEC_LIMIT = QNUM('seclimit', 22)!;
 const SEC_GRAV = QNUM('secgrav', 9.8)!;
 const SEC_DRAG = QNUM('secdrag', 0.32)!;
@@ -1411,6 +1716,418 @@ const SEC_DRIVE = QNUM('secdrive', -1)!;   // ← 已回滚（V2 无肢体驱动
  */
 const SEC_DRIVE_LEAD = Math.max(0, QNUM('secdrivelead', 0)!);   // ← 已回滚（驱动关了即无效）
 /**
+ * ★★★ **袖子走路时向外撑开的角度**（度，`?secflare=`，缺省 **16**；`-1` 或 `0` = 关）。
+ *
+ * 用户 2026-10-21 反馈1 原话：「袖子在走路时，和衣服穿模，解决方案，袖子走路时位置向外延申，
+ * 避开衣服」。
+ *
+ * 为什么单开这一条（而不是把 `?secdrive=` 打开）：
+ *   `?secdrive=` 管的是**前后**摆（袖子跟着胳膊往前），但穿模发生在**侧向** ——
+ *   胳膊往前摆时袖子仍然贴着前襟，两片布在 2 cm 以内就只能互相插过去
+ *   （`secondaryMotion.ts` 的 `auditClash` 实测每相位 94~165 对）。
+ *   布-布斥力（`?secrepel=`）能解，但要建邻接表、每 8 帧重建，代价大且在 V2 里被回滚了。
+ *   ⇒ 按用户给的方案直接做**侧向偏置**：离身体中线越远越安全，零额外开销。
+ *
+ * 量由**角色水平速度**归一（`?secflarespd=`，缺省 0.9 m/s ⇒ 走路 1.446 m/s 已是满值），
+ * 站定自动归 0，不需要额外的「正在走路」状态机。
+ * 只作用于 `driveSel === 1`（父链经过 `左/右腕|ひじ|手首` 的袖子/臂饰那一组）。
+ */
+const SEC_FLARE = QNUM('secflare', 16)!;
+/** 撑开量达到满值所需的水平速度（m/s） */
+const SEC_FLARE_SPEED = QNUM('secflarespd', 0.9)!;
+/**
+ * ★★★ **袖子向两侧摆动**的幅度（度，`?secside=`，缺省 **8**；`<= 0` 或 `-1` 关）。
+ *
+ * 用户 m18305（第七项修复）：「现在的袖子是随着手臂摆动**前后**运动……实际上，袖子的
+ * 摆动方向是**向两侧**，人物走起来以后，袖子是向两侧飘而不是前后。这也改善了袖子和
+ * 衣服穿模的问题。因为袖子向两侧飘就不会碰到衣服。」
+ *
+ * 与上面 `?secflare=` 的分工：那条是**静态外偏**（把静止目标朝身体外偏一个固定角，
+ * 与手肘摆动无关）；这条是**摆动**（跟手肘相对肩膀的侧向摆把袖子朝外甩），
+ * 并且按 `?secsidekill=` 压掉袖子目标方向里的前后分量 —— 主运动轴因此从 Z 换到 X。
+ * `-1` 时运行期整段不跑，逐位回到改前行为（`?secdrive=` / `?secflare=` 同理各自回滚）。
+ *
+ * ★★★ 缺省 **8**（2026-10-25，用户 m11019：「先定 8°，我需要进游戏实机验收再定」）。
+ *  历代：26 → 52（十轮）→ 60（十二轮）→ **8**（本轮）。
+ *
+ *  ⚠️ 60 那个值为什么必须降：第十二轮「让通道生效」时，侧摆量其实被弹簧完全抵消
+ *  （写回旋转 `R = _vRest → _vDir ≈ I`），画面上一点都不动。第十四轮修掉真根因
+ *  （写回阶段左乘 `_qSide` 增量，见 `secondaryMotion.ts:2244-2254`）之后，60° 才
+ *  第一次真正作用到网格上 —— 幅度**远大于**当初按「几乎无效」调出来的手感，
+ *  用户 m10834 反馈「向两侧飘起的程度太大了」。所以回到小量级。
+ *
+ *  逐档实测（冻结姿态 `?tfreeze=1&animt=8.5&seclock=1.6&secvelx=1.446&charyaw=180`，
+ *  读数 `window.__mmd.sleevePose()`；`applied` = 真正叠进写回四元数的骨数，
+ *  `sideMax` = 单骨最大侧张，`sideOver10` = 侧张 ≥10° 的骨数）：
+ *    8°   applied 160，sideMax 17.73°，sideOver10 112，sideMed 13.58°
+ *    12°  applied 160，sideMax 21.44°，sideOver10  99，sideMed 11.44°
+ *    16°  applied 160，sideMax 25.41°，sideOver10  86，sideMed  9.70°
+ *    60°  applied 160，sideMax 62.04°，sideOver10  34
+ *  正面机位出图（`_tools/frontcam.js`）：`_tmp_preview/r15_front08_only.jpg`
+ *  / `r15_front12_only.jpg` / `r15_front16_only.jpg`、拼图 `r15_pick3.jpg`。
+ *
+ *  保留 `60` 仅作 `?secside=` 的**机制上限**（`secondaryMotion.ts` 里
+ *  `Math.min(60, sideDegRaw)` 封顶），缺省已不是它。
+ */
+/* ★ 第二十九轮回滚步态V3 时这里被置 0（V3 的 secondaryMotion.ts 里
+ *  `sideDeg/sideAmp/sideOsc` 全为 0 —— 袖只有纯弹簧，没有侧张通道）。
+ *
+ *  ★ 第三十五轮（用户 m08642「1号布料走路时位置外移一些，指向身体两侧」）恢复并定档 20°：
+ *  实测（`_tools/u35sleeve3.js`，相对站定页 176 根袖骨 `tipS` 中位，单位 m）：
+ *    `?secside=0`  +0.008 ／ 10°  +0.041 ／ 15°  +0.053 ／ **20°  +0.065** ／ 30°  +0.087
+ *  按骨高分带看是**下段外移、肩部不动**（20° 档 `hU 0.90` 带 +0.215 m → `hU 1.25` 带 +0.006 m），
+ *  正是「袖片往两侧张开」而不是整条手臂平移。
+ *  穿模同步改善（`auditSleeveClash` 的 `under5` 帧数）：0° 729 → 10° 179 → 15° 95 → **20° 61** → 30° 36。
+ *  取 20° 而不是 30°：30° 只把中位再抬 22 mm，却让最外侧骨到 0.33 m，视觉上开始「撑开」。
+ *  站定不受影响 —— 侧向闸门是 `_hasSide = sideAmp > 0 && sideAmt > 0`（`sideAmt` 是水平速度），
+ *  站定实测 `?secside=60` 的净外移仍是 0.0000 m。
+ *  逐位回滚 = `?secside=0`。 */
+const SEC_SIDE = QNUM('secside', 20)!;
+/** 侧摆量达到满值所需的水平速度（m/s） */
+const SEC_SIDE_SPEED = QNUM('secsidespd', 0.9)!;
+/** 侧摆时压掉前后摆的比例（0..1，`?secsidekill=`，缺省 0.35） */
+const SEC_SIDE_KILL = QNUM('secsidekill', 0.35)!;
+/**
+ * ★ t16：侧摆的**静态份额**（0..1，`?secsidestand=`，缺省 0.55）。
+ *
+ * 只乘速度量会让「站定 / 慢走 / 定格取证」时袖摆幅度归零 —— 但用户要的是
+ * 「走起来袖子向两侧飘」，而旧的 `?secflare=` 外撑在定格口径下本来就是死通道
+ * （`flareAmt` 由水平速度 smoothstep 得到）。留 55% 的常量外张保证：
+ *   ① 定格取证能拍到、能量到（不再依赖速度信号）；
+ *   ② 站定时袖子也不贴回衣身（正好是用户说的穿模来源）。
+ * 走起来时 `w = 0.55 + 0.45 × 速度调制`，满幅仍是 `?secside=` 的设定角度。
+ * `?secside=-1` 时整条通道不建（`sideBones=0`），这个数不起作用。
+ */
+const SEC_SIDE_STAND = QNUM('secsidestand', 0.55)!;
+/**
+ * ★★★ t20 近裙摆减推量（`?secsideh=` / `?secsidehlo=` / `?secsidehhi=`）。
+ *
+ * 来源：t16 实测 X 走向的袖-裙最差净距只有 0.00888 m，最差对是
+ * `Bone_ArmLets01_R錘 × Skirt_*` —— 那两根袖骨贴着裙摆上沿。旧做法是全局满推
+ * `sin(?secside=26°)`，袖片被侧推过去正好擦到裙摆。
+ *
+ * 改法：**按袖骨节点高度加权**，越靠近裙摆推量越小，袖片主体（小臂以上）仍满推。
+ *
+ * ★★ t20 实测结论：**缺省关（0）**。扫过 k = 0 / 0.2 / 0.35 / 0.55 四档（`?seclock=1.6`，
+ *   X/Z 两走向各 3 帧，`_logs/sleeve/t20g.jsonl` + `t20h.jsonl`）：
+ *     k=0    X: x=0.25473 minDist=0.02068 u1=0 ／ Z: x=0.25978 minDist=0.04104 u1=0
+ *     k=0.2  X: x=0.24719 minDist=0.02170 u1=0 ／ Z: x=0.24855 minDist=0.04898 u1=0
+ *     k=0.35 X: x=0.25220 minDist=0.02231 u1=0 ／ Z: x=0.22644 minDist=0.05128 u1=0
+ *     k=0.55 X: x=0.22998 minDist=0.01879 u1=0 ／ Z: x=0.22273 minDist=0.05985 u1=0
+ *   净距改善在噪声量级（0.021 → 0.022 m），侧向外移却掉 5~13%。
+ *   原因：排除 `*錘` 端点骨后，参与判据的袖骨只有 `Bone_ArmLets01_*`/`02_*` 四根，
+ *   它们**全都**贴着裙摆上沿 —— 按高度加权等于整体削推，没有「只削最低那根」的空间。
+ *   机制保留（`?secsideh=0.2` 可开、`?secsidehlo/hi` 可标定），缺省关以保住侧向优势。
+ *
+ * ★ 为什么不直接降 `?secside=`：那是侧向优势的唯一来源（第十二轮把缺省从 52 抬到 60，只准升不准降）。
+ * ★ 三项语义见 `SecondaryRig.sideHiK` 的长注释。
+ */
+const SEC_SIDE_HI = QNUM('secsideh', 0)!;
+const SEC_SIDE_HI_LO = QNUM('secsidehlo', 1.50)!;
+const SEC_SIDE_HI_HI = QNUM('secsidehhi', 1.58)!;
+/**
+ * ★★★ 裙摆**最下摆**的两条通道（用户 m11430 任务3）：
+ *  「图三我圈出来的衣料，最下摆那部分走路时不要往后飘，自然垂落略微向前摆就行。」
+ *
+ *  `?sechemwind=<0..1>`：下摆吃风的份额，缺省 **0.10**（= 削掉九成风）。
+ *  `?sechemfwd=<度>`：下摆走路时的前倾角，缺省 **4°**（`<= 0` 关）。
+ *  `?sechemhi=<0..1>`：下摆高度窗口，缺省 0.45（裙摆竖直跨度里最低的 45%）。
+ *  全部置 0 即回到改动前行为（`_logs/round16/hem*.jsonl` 是改动前的基线读数）。
+ *  ⚠️ 只作用 `Skirt_*` 里**不属于袖布**的那 237 根（袖布 176 根由 `?secside=` 管）。
+ */
+const SEC_HEM_WIND = QNUM('sechemwind', 0.10)!;
+const SEC_HEM_FWD = QNUM('sechemfwd', 4)!;
+const SEC_HEM_HI = QNUM('sechemhi', 0.45)!;
+/* ═══ ★★★ 落脚脉冲（用户 m07388：「每一步的脚落地，衣摆和头发都会整体向上
+ * 和向四周飘一下，抬腿后落下，下一只脚落地又向上/四周飘，循环往复」）═══════════
+ *
+ * 参考视频实测（`_tools\hem_pulse_probe2.py` + `_tools\fold_pulse.py`，
+ * `_logs\hemref\p2_side.jsonl`，侧视 60fps / 541 帧，分析窗 3.0–12.0 s）：
+ *   · **落脚周期 1.163 s/单步**（地面蓝色涟漪峰值 t=3.23/4.40/5.57/6.73/7.88/9.05，
+ *     interval 1.163±0.007）；整循环（两步）**2.327 s**，步频 0.86 步/s。
+ *   · 相位折叠（phase 0 = 涟漪出现）：
+ *       `h = ymax−ymin` pp **36.3 px**，**min @0.19**（下摆相对上身抬得最高）；
+ *       `dH`（下摆离地）pp **46.5 px**；`dHair`（发梢离地）pp **73.3 px**（= 1.58 × 下摆）；
+ *       `hemW`（下摆横向跨度）pp **84.8 px**（均值 125.4，**+67.6%**），**max @0.65**。
+ *     ⇒ 抬升峰距落脚 0.19 步（≈0.22 s）、外扩峰距落脚 0.65 步（≈0.76 s），
+ *       **两者不同相** —— 这也是为什么下面要两条独立包络，不能合成一条。
+ *   · 像素→米：白裙包围盒高 239 px ≈ 角色 1.62 m ⇒ **6.8 mm/px**
+ *     ⇒ 下摆垂直 pp ≈ 0.32 m、头发 ≈ 0.50 m、横向跨度 ≈ 0.58 m。
+ *
+ * ★ 结构性根因（为什么以前完全没有这个动作）：改前所有次级运动通道
+ *   （`SEC_FLARE` / `SEC_SIDE` / `SEC_HEM_*` / `SEC_SIDE_OSC`）都只由**角色水平速度**
+ *   驱动，与「脚落地的时刻」没有任何锁相关系 ⇒ 匀速走路时它们全是常数，
+ *   所以每步落地时不会有一次性脉冲。本组参数新增一条**由步态相位驱动**的通道。
+ *
+ * 回滚：`?secland=-1`（或 0）⇒ 幅度全 0 ⇒ 逐骨那段整块跳过、`landN` 恒 0，
+ *       与改动前逐位一致。
+ *
+ * ★★ 定案参数（2026-10-26 实走标定，`?autowalk=1.446&hold=1` + `_tools\landprobe6.js`，
+ *    每档 7 s 采样 / 24 相位桶 / 61 根下摆骨；目标来自参考视频 0.32 m / 0.58 m）：
+ *    | secland | lowY pp（抬升） | 跨度 pp（外扩） |
+ *    |   -1（OFF） | 0.0613 | 0.104 |
+ *    |   14        | 0.2671 | 0.508 |
+ *    | **16**      | **0.3218** | **0.527** |   ← 缺省
+ *    |   18        | 0.3526 | 0.538 |
+ *    ⇒ **16° 落点 0.322 m ≈ 目标 0.32 m**，跨度 0.527 m 略小于 0.58（外扩留给 `seclandspread`
+ *      现场加，缺省 16×0.75 = 12°，调到 20 时跨度 0.488 / 调到 34 时 0.712）。
+ *    ⚠️ `secstiff` 不要跟着调：裙摆的 `stiff = stiffness * 0.75`（`secondaryMotion.ts:1114`），
+ *      `secstiff 11→22` 会让 lowY pp 从 0.352 跳到 0.581（同一 `secland=18`）—— 刚度比角度更猛。
+ *
+ * ═══ ★★★ 第二十轮（2026-10-26）：上面那套 16°/12° 的定标**已不适用**，缺省改为
+ *      抬升 8° / 外扩 2°。原因不是参考视频变了，而是**那条通道的选骨范围变了**：
+ *      第十九轮 `collectPieceSel()` 用「骨名 → 所有同名骨」反查材质归属，
+ *      把整片布通道的骨数从真实的 200 根污染到 479 根；本轮改成按 **skeleton 对象
+ *      同一性** 一对一映射后，落脚脉冲分摊的骨从「一堆假披风骨」回落到真裙骨，
+ *      同样的角度写出了**2.6 倍**的位移量。
+ *
+ *      本轮实测（`_tools/lowyscan.js`，`?autowalk=1.446&hold=1`，10 s，
+ *      `lowY pp` = 全圈下摆骨尾最低高度的峰谷差；参考视频目标 **0.32 m**）：
+ *        | 参数                      | lowMin | lowMax | pp    |
+ *        | 三条通道全关（基线）       | 0.0655 | 0.2027 | 0.137 |
+ *        | 抬升 16 / 外扩 12（旧缺省）| 0.1975 | 1.0282 | 0.831 |  ← 掀到腰高
+ *        | 外扩 0（只留抬升 16）      | 0.1786 | 0.5274 | 0.349 |
+ *        | 抬升 0（只留外扩 12）      | 0.1990 | 1.0264 | 0.827 |  ← **抬升几乎不起作用**
+ *        | 外扩 2 / 4 / 6 / 8 / 12    | —      | 0.572/0.625/0.691/0.805/1.026 | pp 0.414/0.445/0.485/0.596/0.843 |
+ *      ⇒ 两个结论（都是读数，不是推理）：
+ *        ① **抬高裙摆的是「外扩」不是「抬升」**——外扩关掉 pp 掉到 0.349，抬升关掉 pp 仍 0.827。
+ *           这正是 §1.16.3 那条几何原理的另一面：下垂链绕开 θ，竖直分量 ∝ cosθ 变小（=抬高），
+ *           所以外扩本身就是抬高；两者不该给同一个权重。
+ *        ② 取 **外扩 2° + 抬升 8°** ⇒ `lowMin 0.1885 / lowMax 0.5691 / pp 0.381`，
+ *           最接近参考目标 0.32，且 `lowMax` 从 1.03 降到 0.57（下摆不再被掀到腰）。
+ *
+ * ★ 第二轮定标（同日，把第十九轮通道整体删干净之后）：上面那组 8°/2° 是在
+ *   「piece/thigh 通道还在」的构建上量的。通道删掉后，落脚脉冲不再与它们抢同一批骨，
+ *   **同样的角度小了**：`pp` 从 0.456 掉到 0.176。重新扫外扩（抬升保持 8°）：
+ *     | `?seclandspread=` | 4 | **6** | 8 | 10 |
+ *     | `lowMin / lowMax` | 0.155/0.367 | **0.198/0.497** | 0.220/0.634 | 0.234/0.738 |
+ *     | `pp`             | 0.212 | **0.299** | 0.414 | 0.504 |
+ *   ⇒ 定案 **外扩 6°**（`pp 0.299` vs 参考 0.32，`lowMax 0.497` 仍在腰以下）。
+ *   ⚠️ 教训：**定标必须在最终构建上做**。通道增删会改变同一批骨的分摊，
+ *      在中间态量出来的缺省值换到成品上就是错的（这一轮踩了两次）。
+ */
+const SEC_LAND = QNUM('secland', 8)!;
+const SEC_LAND_LIFT = QNUM('seclandlift', SEC_LAND)!;
+/* ★ 外扩缺省**不再**跟 `secland` 成比例（旧式 `SEC_LAND * 0.75`）。
+ *  两者量纲相同但作用完全不同（见上面 ① 的读数），绑在一起调必然一个过头一个不够。 */
+const SEC_LAND_SPREAD = QNUM('seclandspread', 6)!;
+const SEC_LAND_HI = QNUM('landhi', 0.45)!;
+const SEC_LAND_LIFT_PH = QNUM('landlandph', 0.0)!;
+const SEC_LAND_SPREAD_PH = QNUM('landspreadph', 0.62)!;
+const SEC_LAND_LIFT_W = QNUM('landliftw', 0.05)!;
+const SEC_LAND_LIFT_D = QNUM('landliftd', 0.12)!;
+const SEC_LAND_SPREAD_W = QNUM('landspreadw', 0.30)!;
+/** 头发相对裙摆的额外增益（参考视频 `dHair` pp 是 `dH` 的 1.58×） */
+const SEC_LAND_HAIRK = QNUM('landhairk', 1.35)!;
+const SEC_HAIR_SOLVE = QNUM('hairsolve', 0)!; /* ★ 第四十四轮：0 = 头发纯动画（第五版姿态），1 = 恢复解算 */
+const SEC_HAIR_FLOOR = QNUM('hairfloor', 1.52)!;
+/**
+ * **诊断专用：把落脚相位钉死在指定值**（0..1，缺省 `null` = 不钉，走真实 `dist`）。
+ *
+ * 为什么必须有：落脚脉冲是**相位驱动**的，但真机是连续走的 —— 想「看相位 0.0 那一帧」
+ * 只能靠碰运气截到。有了它就能 `?tfreeze=1&seclandph=0.0` 与 `?seclandph=0.65`
+ * 各出一张图，做**逐像素 A/B**，也能和参考视频的相位折叠读数直接对照。
+ *
+ * ⚠️ 只在诊断时给：缺省 `null` ⇒ 行为与没有这个旋钮逐位一致。
+ * ⚠️ 钉住相位时 `landPulse` 是常数 ⇒ 布料会收敛到「该相位的稳态姿态」，这正是出图要的。
+ */
+const SEC_LAND_PH: number | null = QSTR('seclandph') !== null ? (QNUM('seclandph', 0) ?? 0) : null;
+/**
+ * ★★★ 侧展角随摆臂**往复**（用户 m12388）。
+ *
+ * 原话：「袖子侧展其实我们已经做了 8°，不过没有随着摆臂而向外摆动，我是这个意思，
+ * 就是说，可以随着行走时摆臂动作，加入一定角度的往复运动，比如 8° 到 10° 再到 8° 这样」。
+ *
+ * ⇒ 语义不是「加大 8°」，而是在已验收的 8° 基准上叠一个**跟着摆臂相位**的往复量。
+ *   `?secsideosc=<度>`  往复振幅，缺省 **2**（⇒ 8° ↔ 10°）；`<= 0` 关（逐位回到十六轮的常量侧展）。
+ *   `?secsideoscref=`   相位归一的参考幅值，缺省 **0.35**（走路时前臂前后投影的典型峰值）。
+ *
+ * 相位源用「该侧前臂方向在前后轴上的投影」，不用 `sideRollNorm`
+ * —— 后者量的是手臂**侧向角速度**，MMD 走路动画里恒为 0（这正是「有 8° 但不往复」的根因）。
+ * 左右两侧自然反相（走路一前一后），所以两片袖子不会互相抵消。
+ */
+const SEC_SIDE_OSC = QNUM('secsideosc', 0)!;
+const SEC_SIDE_OSC_REF = QNUM('secsideoscref', 0.35)!;
+
+/* ═══ ★★★ 第二十一轮：披风/带「整片同向飘」 + 裙子被大腿顶起（用户 m01984）═══
+ *
+ * 这两项在第十九轮做过一次，但被用户否掉（「衣摆整体坏了，走路到处乱飘，停下拧成一团」）。
+ * 根因不是通道本身，而是三处**实现细节**（第二十轮已逐一取证，见 `继续任务.MD` §1.18.1）：
+ *   ① `pieceBaseDir`/`thighBaseDir` **只写不清零** ⇒ 增量跨帧累积（乱飘 + 拧成一团）；
+ *   ② `collectPieceSel()` 按骨名扩散 ⇒ 选骨从 200 根膨胀到 479 根（整圈裙都被转）；
+ *   ③ 落脚脉冲的「抬高」其实是外扩在抬（与本轮两项无关，但同批骨会互相抢）。
+ * 本轮在**已修好 ①② 的基线**上重做，所以那三处都不再成立。
+ *
+ * ── 判定「整片同向」的量（`_tools/piecescan.js`）────────────────────────────
+ *   `capeCorr` / `ribCorr` = 披风 / 带「左片平均侧向位移」与「右片」的相关系数。
+ *     **同向应 > 0**；OFF（`?secpiece=-1`）时实测 **−0.95 / −0.98**（各走各的）。
+ *   ⚠️ 只用这个判据会把「同向」优化成「同向地乱飞」——
+ *     第十九轮就是这样定到 25° 的：corr 0.97 好看，但下摆被掀到 1.12 m（腰高）。
+ *     所以必须配第二个判据 `lowMax` = 整圈下摆骨尾最低高度跨帧最大值
+ *     （裙子被整体抬到多高；贴腿下垂时 0.5 m 量级）。
+ *
+ * ── 定案读数（本轮实测，不是抄的）──────────────────────────────────────────
+ *
+ * ① 整片布（`?secpiece=`，扫描时 `secthigh=-1` 只开这一条）
+ *    判据 A = `capeCorr`/`ribCorr`（左右两片侧向位移相关，**同向应 > 0**）；
+ *    判据 B = `devMean`（布料偏离静止方向的平均角，太大就是「同向地乱飞」）。
+ *    | secpiece | capeCorr | ribCorr | devMean | 说明 |
+ *    |   -1（OFF）| **−0.297** | **−0.888** | 8.75 | 各走各的（基线） |
+ *    |    4      | 0.489 | 0.402 | 12.59 | 太弱 |
+ *    |    8      | 0.848 | 0.840 | 15.92 | 已同向 |
+ *    | **12**    | **0.937** | **0.907** | 20.25 | ← 缺省 |
+ *    |   16      | 0.943 | 0.909 | 21.23 | 与 12 同级，但偏离更大 |
+ *    |   20      | 0.940 | 0.829 | 22.90 | 带开始过头 |
+ *    |   25      | 0.904 | 0.845 | 23.50 | 相关性反而回落 |
+ *    ⇒ 取 **12°**：两条判据都过 0.90，且 `devMean` 还没起飞。
+ *    ⚠️ 第十九轮定 25° 是因为**只看 corr**（0.97 好看），结果下摆被掀到 1.12 m。
+ *       本轮 `lowMax` 对这条通道**不敏感**（0.618→0.619），因为材质按对象同一性修好后，
+ *       这条通道只转披风 57 + 带 143，**不碰整圈裙摆** —— 这本身就是「乱飘」已消除的证据。
+ *
+ * ② 裙子被大腿顶起（`?secthigh=`，扫描时 `secpiece=-1` 只开这一条）
+ *    口径 = **定相位 ON/OFF 差量**（`_tools/thighdelta.js`）。
+ *    ⚠️ 不能用 `corr(tipF, thighAmt)` 时间序列：走路动画本身就让裙骨前后摆，
+ *       幅度远大于注入量 ⇒ 相关系数被稀释到 0 附近（实测 0.03~0.10，**测不出不等于没做**）。
+ *    | secthigh | dF_pp（前后） | corr(dF, amt) | dU_pp（上下） |
+ *    |   -1（OFF）| — | — | — |
+ *    |    28     | 0.1132 m | **+0.748** | 0.0471 m |
+ *    | **44**    | **0.1281 m** | **+0.730** | 0.0963 m | ← 缺省 |
+ *    |    52     | 0.1262 m | 0.722 | 0.1124 m |
+ *    |    60     | 0.1414 m | 0.708 | 0.1355 m |
+ *    ⇒ 取 **44°**：前后位移已接近饱和（再加大只涨「上下」），相关仍 0.73。
+ *    ⚠️ **符号必须实测**：`?secthsign=-1` ⇒ corr **−0.879**（腿往前、裙往后 = 会加重穿模）；
+ *       `+1` ⇒ **+0.730**。缺省 **+1**。
+ *    ⚠️ 相位 0.75~0.875 区间 `amt=0` 时 `dF≈0` —— 站定/低驱动时**确实不顶**（对）。
+ */
+const SEC_PIECE = QNUM('secpiece', 12)!;
+/* ★ 第二十九轮（用户 m06677「8号布料回滚步态V3的备份」）：
+ *  带吃 piece 通道的系数。V3 的 secondaryMotion.ts 里 `pieceSel` 命中 0 处 ⇒
+ *  V3 根本没有这条通道；「回滚 8号」= 系数 0。第二十五轮口径是 0.65。 */
+const SEC_PIECE_WRIB = QNUM('secpiecewrib', 0)!;
+/* ★★★ 第二十二轮：`piecePh` = **0**（配 `cos(2π·stepPhase)`，见 `secondaryMotion.ts` 的推导）。
+ *
+ *  用户要求：「每一次落地，布料都会运动到左或右的最高点」（左右交替）。
+ *
+ *  **双视角实测**（背视 `走路——背.mp4` + 正面 `走路——正.mp4`，同一套掩膜口径）：
+ *    · 落脚间隔 **1.15~1.17 s**（背视涟漪 1.150 / 正面涟漪 1.150~1.183）
+ *    · **一个落脚区间内布料只走半个往复**（偏左 → 中立 → 偏右）
+ *    · ⇒ 布料完整往复 = **2 个落脚区间 = 一个整圈 = 2.33 s**
+ *    · 布料横向宽度 `hemW` 的峰与落脚**几乎同帧**（差 −0.05~+0.02 s）= 落地时上扬
+ *
+ *  实现：`pieceOsc = cos(2π·(stepPhase + ph))`，`ph = 0`：
+ *    `stepPhase = 0`   ⇒ osc = **+1**（左极限，落地）
+ *    `stepPhase = 0.5` ⇒ osc = **−1**（右极限，落地）
+ *  ⇒ 每次落地都在极限、左右交替、**整圈连续无断点**。
+ *
+ *  ⚠️ 参考视频实测布料极限比落脚晚 +0.05~0.1 s。想要这个滞后：
+ *     `?secpieceph=0.04`（相位单位 = 一步的分数；0.04 步 ≈ 0.06 s @ pace 0.80）。
+ *     缺省取 0（落地即极限）是因为用户明确说「落地时到最高点」。
+ *  ⚠️ 这个相位**与 `?pace=` 无关**（纯相位量，不涉及秒数）⇒ 调 pace 不用重算。 */
+const SEC_PIECE_PH = QNUM('secpieceph', 0)!;
+const SEC_THIGH = QNUM('secthigh', 44)!;
+/** thigh 高度带（占裙摆自身竖直跨度的比例）—— 实测裙摆跨 y∈[0.40,1.80]，
+ *  0.30~0.65 ⇒ y∈[0.82,1.31]，正好覆盖「裙最下部在大腿位置」那一段。 */
+const SEC_THIGH_LO = QNUM('secthighlo', 0.30)!;
+const SEC_THIGH_HI = QNUM('secthighhi', 0.65)!;
+/** 前顶角的符号（`?secthsign=`，缺省 **+1**）。实测：`+1` corr +0.730 / `−1` **−0.879**。 */
+const SEC_THIGH_SIGN = QNUM('secthsign', 1)!;
+
+/* ═══ ★★★ 第二十二轮：披肩（cloth_map_view.jpg 编号4）整片摆动 ═══════════════
+ *  用户原话：「编号4 你确实是向前摆动了，但是**只有最下部分摆动**。这布料是一个整体，
+ *  不是上面不动下面往前动。而且**摆动幅度有点大**。」
+ *
+ *  为什么原来只有下部分动：披肩的骨挂在手臂父链上 ⇒ 被算进「袖骨」组，
+ *  吃袖子的**高度减推** `hw = 1 − sideHiK·(1 − hn)`（`sideHiK` 缺省 0.55）。
+ *  这是为「袖子别撞裙摆」设计的，对整片布不成立。
+ *
+ *  ⇒ 独立一片（材质 `披肩`，实测 **37 根**），**整片同权**（无任何高度权重），
+ *    绕前后轴与披风/带**共用相位**（一起朝同一侧，视觉上是一整块），
+ *    但**幅度单列且更小**：缺省 **5°**（披风/带是 12°）。
+ *
+ *  ⚠️ 与 `?secpiece=`（披风/带）是两个独立旋钮，互不影响：
+ *     `?secshawl=5` 调披肩、`?secpiece=12` 调披风/带。
+ *  ⚠️ 关掉披肩整片：`?secshawl=-1` ⇒ 披肩回到袖骨组按老样子动（只有下部分动）。 */
+const SEC_SHAWL = QNUM('secshawl', 0)!;
+const SEC_SHAWL_PH = QNUM('secshawlph', 0)!;
+/* ★ 第二十八轮：披肩刚性整片（编号4「整片一起飘」）。
+ *  `?secshawlrigid=0` 退回逐骨解算（旧行为）；`?secshawlrigidamp=` 摆幅（度，缺省 10）。
+ *  摆幅**不乘 clothAmp** —— 用户常在 `?clothamp=0` 下工作。 */
+/* ★ 第二十九轮：缺省改 0 —— 用户实测三个地址无可见变化，这条通道对观感无效，
+ *  保留代码仅供以后排查。回滚到「开着」= `?secshawlrigid=1`。 */
+const SEC_SHAWL_RIGID = QNUM('secshawlrigid', 0)!;
+const SEC_SHAWL_RIGID_AMP = QNUM('secshawlrigidamp', 10)!;
+/* ★ 第二十九轮：披肩**整片前移**（编号4）。
+ *  `?secshawlpush=` 度数（缺省 0 = 关；量程 [0,75]）；
+ *  `?secshawlpushsign=` ±1 定方向（几何约定要实测）；
+ *  `?secshawlpushosc=` 走路时叠加的小幅摆动（度，缺省 2，量程 [0,30]）。 */
+/* ★ 第二十九轮定缺省：5°。依据 = 三维最近距离扫描（_tools/u29_clip.js）：
+ *  0° 走动时披肩与左足>左ひざ 最近仅 **0.9 mm**（穿大腿）；
+ *  2° 17 mm / 3° 51 mm / **5° 75 mm** / 10° 127 mm / 14° 157 mm。
+ *  用户要「幅度尽量小」⇒ 取 5°（消除穿模且留 75 mm 余量）。
+ *  ⚠️ 开启后仍乘 `gaitW`：站定为 0、起步 0.35 s 渐入，不会一直撑着。
+ *  逐位回滚 = `?secshawlpush=0`。 */
+/* ★ 第三十一轮：随 `secholdshawl` 一起从 5 抬到 15。
+ *  push 负责「整块甩到大腿前面之外」，hold 负责「别乱飘」；hold 抵消前移，push 补回来。
+ *  实测间隙：push5+hold0.85 只剩 21 mm，push15+hold0.85 回到 111 mm（静立）/ 130 mm（走动）。 */
+const SEC_SHAWL_PUSH = QNUM('secshawlpush', 30)!;
+/* 第三十四轮定档 30°：实测走 600 帧，4 号披肩整体前移量（相对站定 tipF 中位 0.1357 m）
+ *   push= 0 → 0.0640（−72 mm，甩在身后）   push=20 → 0.1389（+3 mm）
+ *   push=30 → 0.1613（+26 mm，在身前）      push=40 → 0.1859（+50 mm）
+ *   同时大腿间隙 gapMin：0 → 1.3 mm / 20 → 18.6 mm / **30 → 33.7 mm** / 40 → 74.8 mm。
+ *   30 是「前移看得见 + 间隙已过 20 mm 安全线」的交点；40 起前移过头会像围裙。 */
+/* 为什么是 10 而不是 35：`push` 只负责「整片往前推」避开大腿，实测 push>=10 后间隙已到地板，
+ *  再加大反而把摆幅从 26mm 抬到 63mm（push=35 实测 oscMax 0.0632），得不偿失。 */
+
+const SEC_SHAWL_PUSH_SIGN = QNUM('secshawlpushsign', 1)!;
+const SEC_SHAWL_PUSH_OSC = QNUM('secshawlpushosc', 2)!;
+/* ═══ ★★★ 第二十四轮：四片布的总幅度乘数（`?clothamp=`，缺省 1）═══════════════
+ *
+ *  用户原话：「有些布料的运动幅度太大了，cloth_map_view.jpg 中的编号 1、4、6、8。
+ *  这几个布料缩小运动（摆动）幅度。**准备一个参数，缩不同的程度我实机对比再定**。」
+ *
+ *  一处管四片（编号对照 `_tmp_preview/r16/cloth_map_view.jpg`）：
+ *    1 袖   → `?secside=`（侧张角，缺省 60°）＋ `?secsideosc=`（摆臂往复，缺省 2°）
+ *    4 披肩 → `?secshawl=`（缺省 5°）
+ *    6 披风 ┐
+ *    8 带   ┘ → `?secpiece=`（缺省 12°；带在逐骨那段另乘 0.65，比例不变）
+ *
+ *  ⇒ 最终幅度 = 各自的单通道值 × clothAmp。**乘数不是绝对值**：
+ *     `?clothamp=0.5` 就四片全减半、`?clothamp=1` 回到第二十三轮原状、`?clothamp=0` 全关。
+ *
+ *  ⚠️ 缺省取 **0.35**（用户要「缩小」，所以缺省就得是缩过的；0.5 实测肉眼看不出，
+ *     见 `_logs/round24/REPORT2.md` 的像素差与 `dev` 读数）。量程夹在 **[0, 3]**：
+ *     `=1` 回滚到第二十三轮原状、`>1` 可放大做对照、`=0` 全关。
+ *     而不是把 12°/5°/60° 这些实测定案值直接改小 —— 那些数是前几轮**逐档实测**出来的
+ *     （披风 12° 是「左右同向 corr≥0.7 且 lowMax 不涨」双判据扫出来的，
+ *      袖 60° 是第十二轮才从 52 抬上去的），改它们等于推翻已验收值且不可回滚。
+ *     乘数模型的好处：任何时候 `?clothamp=1` 都能逐位复现第二十三轮。
+ *  ⚠️ 五个实测档（`_tools/clothamp.js`，见 §1.22.2）：1 / 0.75 / 0.5 / 0.35 / 0.2
+ *     —— **严格线性**（误差 ≤0.01°），实机挑一档回来把这里定死即可。 */
+const SEC_CLOTH_AMP = Math.max(0, Math.min(3, QNUM('clothamp', 0.35)!));
+/* ★★★ 第二十四轮 v3：**头发径向让位的目标间隙**（米，`?hairsep=`，缺省 0.02；0 关）。
+ *
+ *  用户 m02740：「你看图的时候没发现头发穿模衣服了吗？」—— 确实穿了，而且我漏看了。
+ *
+ *  实测（`_tools/hairclash.js` + `_tools/hairradial.js`，5181）：
+ *    · `hairClash` 最近距离 **0.3 mm**（`Bone_Hair12_R × Skirt_3_12`），已互穿；
+ *    · 按高度分桶的径向半径：**1.0 m 处 头发 0.230 m / 裙 0.227 m** —— 同一空间。
+ *    · 已有的 `?secrepel=` 扫了 4 档（0.010/0.025/0.050/0.080）**无效**，
+ *      minDist 反而从 0.7 mm 掉到 0.2 mm：它按骨棒最短距离推，方向可能是竖直的。
+ *
+ *  ⇒ 换成**径向分层**：头发把自己推到「同高度带内布骨最大半径 + hairsep」之外。
+ *    只动头发，布料一根都不动（否则会把裙吹起来，用另一个 bug 掩盖这个）。
+ *  ⚠️ **缺省 0 = 关**（本通道尚未验证有效）。第一版实测 `?hairsep=` 0/0.02/0.04/0.08
+ *     四档的 `hairClash.minDist` 是 0.9 → 0.3 → 1.1 → 0.7 mm，**不单调**，不能当已修好。
+ *     现在已升级成「写回阶段增量四元数」（同 shawl/land 那套），待重测出单调改善再打开。
+ *  回滚：`?hairsep=0`。 */
+const SEC_HAIRSEP = QNUM('hairsep', 0)!;
+/** ★ 第二十二轮：布料通道「起步渐入」的时长（秒，`?gaitfade=`，缺省 0.35）。
+ *  起步后布料在这么长时间内从 0 线性升到满幅，避免「啪一下出现」的抽动。
+ *  `?gaitfade=0` ⇒ 回到旧硬开关（逐位复现改前）。 */
+const GAIT_FADE_SEC = QNUM('gaitfade', 0.35)!;
+
+const SEC_ROWS = QNUM('secrows', 0)! > 0;
+/**
  * 定格取证时的**布料暖机时长**（秒，缺省 10）。
  *
  * `?tfreeze=1&animt=<t>` 把动画钉死 ⇒ 弹簧骨的父骨一动不动 ⇒ `dir` 会以
@@ -1420,6 +2137,10 @@ const SEC_DRIVE_LEAD = Math.max(0, QNUM('secdrivelead', 0)!);   // ← 已回滚
  * ⇒ 同一组 `?tfreeze=&animt=` 每次得到完全一样的布料状态，可做逐像素 A/B。
  */
 const SEC_PREROLL = QNUM('secpre', 10)!;
+/** ★★★ `?seclock=<秒>`：把动画姿态钉死、但布料**每帧照常积分**（见 `:3246` 的长注释）。
+ *  与 `?tfreeze=`/`?animt=` 的区别只有一条：**不置 `secFrozen`** ⇒ 逐帧 `updateSecondary`
+ *  不会被跳过。做「袖子侧摆」这类依赖速度信号 + 每帧积分的 A/B 时必须用这个。 */
+const SEC_CLOCK = QNUM('seclock')!;
 
 /* ── MMD Bullet 物理解算（用户 m08676 任务3(2)：「走路时衣服穿模。加入物理解算」）─
  *
@@ -1644,6 +2365,13 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
     const frameRef = useRef(-1);
     /** 走路时的前倾角（度），一阶滞后平滑；见 `LEAN_DEG` */
     const leanRef = useRef(0);
+/** ★ 第二十二轮：布料通道的「起步渐入」权重（0 = 站定完全不跑，1 = 满幅）。
+ *  见 `stepPhase` 写入处那段注释：硬开关会让起步那一帧布料突然抽一下。 */
+const gaitWRef = useRef(0);
+    /** ★ 2026-10-21 反馈3：涉水的**垂直沉降**（米，负值）。平滑后的当前值，
+     *  每帧朝 `waterSinkAt()` 的目标 lerp，再并进 `groundY`（见贴地段）。
+     *  为什么不直接写 `g.position.y`：贴地段会整段覆写 y，写在前面等于没写。 */
+    const _sinkY = useRef(0);
     /** 腿部姿态重写用的六根骨 + 它们的绑定姿势（懒查找，见 `LEG_KEYS`） */
     const legRef = useRef<{
         thighL: THREE.Bone | null; thighR: THREE.Bone | null;
@@ -1742,6 +2470,49 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
             b.updateMatrix();
         }
         S.bones[0].updateWorldMatrix(true, false);
+        for (const b of S.bones) b.updateWorldMatrix(false, true);
+    };
+
+    /** ★★★ 任务4（用户 m12279）：走路时把上臂轻微向外张。
+     *  与 `applyStance` 同一调用点（`UPD()` 内部，动画求值之后），同一预乘手法。
+     *  `armAbdT` 是 0→1 的平滑权重：站定 0、走动 1，时间常数 ~0.25 s。
+     *  `ARM_ABD_DEG <= 0` ⇒ 整块不进（可回滚，逐位回到改动前）。 */
+    const armAbdRef = useRef<{ bones: THREE.Bone[]; signs: number[] }>({ bones: [], signs: [] });
+    const armAbdQ = useRef(new THREE.Quaternion());
+    const armAbdAxis = useRef(new THREE.Vector3(0, 0, 1));
+    const armAbdT = useRef(0);
+    const applyArmAbd = (dtSec: number, movingNow: number) => {
+        const S = armAbdRef.current;
+        if (ARM_ABD_DEG <= 0 || S.bones.length === 0) return;
+        const target = movingNow > 0.05 ? 1 : 0;
+        const k = Math.min(1, Math.max(0, dtSec) / 0.25);
+        armAbdT.current += (target - armAbdT.current) * k;
+        const w = armAbdT.current;
+        if (w < 1e-3) return;
+        const th = (ARM_ABD_DEG * Math.PI) / 180 * w;
+        const q = armAbdQ.current;
+        const ax = armAbdAxis.current;
+        for (let i = 0; i < S.bones.length; i++) {
+            const b = S.bones[i];
+            // A shallow outward bow at mid-swing, fading at both forward/back ends.
+            let arcWeight = 0;
+            const gg = groupRef.current;
+            const armArcDegrees = S.signs[i] > 0 ? ARM_ARC_LEFT : ARM_ARC_DEG;
+            if (gg && armArcDegrees > 0) {
+                const wrist = bodyTargetRef.current.bones.find(wb => (wb.userData.mmdBoneName ?? wb.name) === (S.signs[i] > 0 ? '左手首' : '右手首'));
+                if (wrist) {
+                    wrist.updateWorldMatrix(true, false);
+                    const wp = wrist.getWorldPosition(new THREE.Vector3());
+                    const forward = (wp.x - gg.position.x) * Math.sin(gg.rotation.y) + (wp.z - gg.position.z) * Math.cos(gg.rotation.y);
+                    arcWeight = Math.max(0, 1 - Math.pow((forward + 0.027) / 0.20, 2));
+                    // Left forward sweep keeps its outward bow instead of returning inward.
+                    if (S.signs[i] > 0 && forward >= -0.027 && QNUM('leftforwardhold', 1)! > 0) arcWeight = 1;
+                }
+            }
+            q.setFromAxisAngle(ax, (th + armArcDegrees * arcWeight * Math.PI / 180 * w) * S.signs[i]);
+            b.quaternion.premultiply(q);
+            b.updateMatrix();
+        }
         for (const b of S.bones) b.updateWorldMatrix(false, true);
     };
 
@@ -2063,6 +2834,9 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
 
                 // ⑤ attach：换 TSL 材质 + 建轮廓 + 建影子 caster + 开稀疏 morph。
                 //    注意它会 **dispose 原材质**，所以不要在这之前缓存 material 引用。
+                if (new URLSearchParams(location.search).has('hairaudit')) {
+                    model.mesh.userData.hairAuditPosition = model.mesh.geometry.attributes.position.clone();
+                }
                 const ok = pipeline.attach(model, { light: mmdLight });
                 log('attach=' + ok);
 
@@ -2079,10 +2853,64 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                         const rig = createSecondaryMotion(sk, animBones.current, {
                             stiffness: SEC_STIFF,
                             limitDeg: SEC_LIMIT,
+                            /* ★ 第二十四轮 v4：弹簧刚度/限角**乘数**（见上方长注释） */
+                            stiffK: SEC_STIFFK,
+                            limitK: SEC_LIMITK,
+                            stiffHair: SEC_STIFF_HAIR,
+                            stiffSkirt: SEC_STIFF_SKIRT,
+                            stiffOther: SEC_STIFF_OTHER,
                             gravity: SEC_GRAV,
                             drag: SEC_DRAG,
                             wind: SEC_WIND,
                             windFront: SEC_WIND_FRONT,
+                            windHem: SEC_HEM_WIND,
+                            hemHi: SEC_HEM_HI,
+                            hemFwdDeg: SEC_HEM_FWD,
+                            /* ★★★ 落脚脉冲（用户 m07388）—— 见上方 `SEC_LAND` 的长注释。
+                             *  全部由 `?secland*=` 旋钮控制，`?secland=-1` 整条通道关闭。 */
+                            landDeg: SEC_LAND,
+                            landLiftDeg: SEC_LAND_LIFT,
+                            landSpreadDeg: SEC_LAND_SPREAD,
+                            landHi: SEC_LAND_HI,
+                            landLiftPh: SEC_LAND_LIFT_PH,
+                            landSpreadPh: SEC_LAND_SPREAD_PH,
+                            landLiftW: SEC_LAND_LIFT_W,
+                            landLiftD: SEC_LAND_LIFT_D,
+                            landSpreadW: SEC_LAND_SPREAD_W,
+                            landHairK: SEC_LAND_HAIRK,
+                            hairSolve: SEC_HAIR_SOLVE === 1,
+hairFloor: SEC_HAIR_FLOOR,
+                            /* ★ 第二十一轮：两条布料通道（各自的 URL 旋钮可单独关）。 */
+                            pieceDeg: SEC_PIECE,
+        pieceWRib: SEC_PIECE_WRIB,
+                            piecePh: SEC_PIECE_PH,
+                            /* ★ 第二十四轮 v3：头发径向让位（修「头发穿进裙/披风」） */
+                            hairSep: SEC_HAIRSEP,
+                            /* ★ 第二十二轮：披肩（编号4）整片通道（独立幅度） */
+                            shawlDeg: SEC_SHAWL,
+                            shawlPh: SEC_SHAWL_PH,
+        shawlRigid: SEC_SHAWL_RIGID,
+        shawlRigidAmp: SEC_SHAWL_RIGID_AMP,
+        shawlPush: SEC_SHAWL_PUSH,
+        shawlPushSign: SEC_SHAWL_PUSH_SIGN,
+        shawlPushOsc: SEC_SHAWL_PUSH_OSC,
+                            /* ★ 第二十四轮：四片布总幅度乘数（1袖/4披肩/6披风/8带共用） */
+                            clothAmp: SEC_CLOTH_AMP,
+                            stiffCape: SEC_STIFF_CAPE,
+                            stiffRibbon: SEC_STIFF_RIBBON,
+                            stiffShawl: SEC_STIFF_SHAWL,
+                            netCape: SEC_NET_CAPE,
+                            netRibbon: SEC_NET_RIBBON,
+                            netShawl: SEC_NET_SHAWL,
+                            netSkirt: SEC_NET_SKIRT,
+                            holdCape: SEC_HOLD_CAPE,
+                            holdRibbon: SEC_HOLD_RIBBON,
+                            holdShawl: SEC_HOLD_SHAWL,
+                            holdSkirt: SEC_HOLD_SKIRT,
+                            thighDeg: SEC_THIGH,
+                            thighLo: SEC_THIGH_LO,
+                            thighHi: SEC_THIGH_HI,
+                            thighSign: SEC_THIGH_SIGN,
                             carry: SEC_FRAME,
                             collide: SEC_COL,
                             colScale: SEC_COLS,
@@ -2097,6 +2925,18 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                             antiDeg: SEC_ANTI,
                             driveDeg: SEC_DRIVE,
                             driveLead: SEC_DRIVE_LEAD,
+                            flareDeg: SEC_FLARE,
+                            flareSpeed: SEC_FLARE_SPEED,
+                            sideDeg: SEC_SIDE,
+                            sideSpeed: SEC_SIDE_SPEED,
+                            sideFrontKill: SEC_SIDE_KILL,
+                            sideStandK: SEC_SIDE_STAND,
+                            sideHiK: SEC_SIDE_HI,
+                            sideHiLo: SEC_SIDE_HI_LO,
+                            sideHiHi: SEC_SIDE_HI_HI,
+                            sideOscDeg: SEC_SIDE_OSC,
+                            sideOscRef: SEC_SIDE_OSC_REF,
+                sideRows: SEC_ROWS ? [] : undefined,
                             maxBones: SEC_MAX,
                         });
                         secRef.current = rig;
@@ -2112,9 +2952,11 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                             + ` / 布-布斥力 ${SEC_REPEL > 0 ? `${(SEC_REPEL * 1000).toFixed(0)} mm（表 ${rig.repelCount} 对 / ${rig.repelEvery} 帧重建，入表距离 ≤${(SEC_REPEL_CUT * 100).toFixed(0)} cm${SEC_REPEL_W !== 1 ? ` ×${SEC_REPEL_W}` : ''}）` : '关'}`
                             + ` / 方向性约束 ${SEC_ANTI >= 0 ? `${SEC_ANTI}°（受约束 ${rig.axisSel.reduce((c, v) => c + (v !== 2 ? 1 : 0), 0)} 根）` : '关'}`
                             + ` / 肢体驱动 ${SEC_DRIVE > 0 ? `${SEC_DRIVE}°（前襟 ${rig.driveSel.reduce((c, v) => c + (v === 2 ? 1 : 0), 0)} 根 / 袖子 ${rig.driveSel.reduce((c, v) => c + (v === 1 ? 1 : 0), 0)} 根，袖子豁免方向性约束）${SEC_DRIVE_LEAD > 0 ? ` + 相位超前 ${SEC_DRIVE_LEAD.toFixed(2)} s` : '（无超前，纯跟随）'}` : '关'}`
-                            + `（?secstiff= ?seclimit= ?secgrav= ?secdrag= ?secwind= ?secwindfront= ?secframe= ?seccol= ?seccols= ?seccolsleg= ?seciter= ?secslackmax= ?secrod= ?secrepel= ?secrepelcut= ?secrepelw= ?secanti= ?secdrive= ?secdrivelead= 可调、?secondary=0 关）`);
+                            + ` / 袖子外撑 ${SEC_FLARE > 0 ? `${SEC_FLARE}°（${rig.driveSel.reduce((c, v) => c + (v === 1 ? 1 : 0), 0)} 根袖骨；走路时向外让开衣服，速比 ${SEC_FLARE_SPEED} m/s 满幅）` : '关'}`
+                            + `（?secstiff= ?seclimit= ?secgrav= ?secdrag= ?secwind= ?secwindfront= ?secframe= ?seccol= ?seccols= ?seccolsleg= ?seciter= ?secslackmax= ?secrod= ?secrepel= ?secrepelcut= ?secrepelw= ?secanti= ?secdrive= ?secdrivelead= ?secflare= ?secflarespd= 可调、?secondary=0 关）`);
                     } catch (e) {
                         log('布料弹簧骨建立失败（跳过）：' + e);
+                        (window as any).__secErr = String((e as Error)?.stack || e);
                     }
                 } else if (SECONDARY_ON && PHYS_ACTIVE) {
                     log(`布料弹簧骨让位给加载器物理后端（${PHYS_MODE}）（?physmode=none 可换回自带弹簧骨）`);
@@ -2208,6 +3050,18 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                     } catch (e) { log('站距外张：解析链头失败：' + e); }
                 }
 
+                // ★ 任务4：胳膊外展的骨（`左腕`/`右腕` = 上臂），同样只在这里解析一次。
+                if (ARM_ABD_DEG > 0) {
+                    try {
+                        const bs4 = (model.mesh as any)?.skeleton?.bones as THREE.Bone[] | undefined;
+                        const ab = collectArmAbd(bs4);
+                        armAbdRef.current = ab;
+                        log(ab.bones.length
+                            ? `胳膊外展：${ab.bones.length} 根上臂（?armabd=${ARM_ABD_DEG}°）`
+                            : '胳膊外展：没找到 左腕/右腕（?armabd 失效）');
+                    } catch (e) { log('胳膊外展：解析失败：' + e); }
+                }
+
                 // ⑤′ ★★ 纯白剪影的根因就在这里 ★★
                 //    `pipeline.attach` 内部一定会调 `createMmdTslShadowCaster(model.mesh)`，
                 //    它 `new` 一个**共享同一套几何属性**的代理 SkinnedMesh
@@ -2296,7 +3150,11 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                         ms.slice(0, 12).map((m) => {
                             const meta = ud(m).mmdMaterial ?? {};
                             const sp = spOf(m);
-                            const src = String(sp?.image?.src || sp?.name || '').split('/').pop().slice(-14);
+                            /* ⚠️ 第二十六轮 T1-I4 修：`split('/').pop()` 类型上是
+                             *  `string | undefined`，`.slice()` 报 `TS2532 Object is possibly 'undefined'`。
+                             *  运行期 `split` 至少给 1 个元素、不会 undefined，只是类型不干净。
+                             *  补 `?? ''`，行为逐位不变。 */
+                            const src = (String(sp?.image?.src || sp?.name || '').split('/').pop() ?? '').slice(-14);
                             return `${meta.sphereMode ?? '?'}${sp ? '(' + src + ')' : ''}`;
                         }).join(' '));
                     const meta0 = ud(ms[0]).mmdMaterial ?? {};
@@ -2320,6 +3178,12 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                 try {
                     const mm: any = (model.mesh as any).material;
                     const ms: any[] = Array.isArray(mm) ? mm : [mm];
+                    /* ⚠️ 第二十六轮 T1-I4 修：`ud` 只在**上面两个** try 块里各声明过一次
+                     *  （`:3019` 材质体检、`:3064` 球面体检），第三个 try 里根本没有
+                     *  ⇒ 下面 `ud(m)` 抛 `ReferenceError`，被 `catch` 吞掉，
+                     *  所以 `?sphfactor=` 这个诊断开关**从来没有生效过**。
+                     *  `tsc` 报的就是 `TS2304 Cannot find name 'ud'`。 */
+                    const ud = (m: any) => m?.userData ?? {};
                     if (SPH_FACTOR !== null) {
                         let n = 0;
                         for (const m of ms) {
@@ -2491,6 +3355,15 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                     info: () => gl.info?.render ?? null,
                     // 走路的无头验证用：`--pre` 里 dispatch keydown 后读这几个数
                     pos: () => groupRef.current?.position.toArray() ?? null,
+                    /** ★ task-20：把玩家瞬移到某点（**只给无头验收用**，不改任何玩法逻辑）。
+                     *  y 不传就沿用当前高度，下一帧 `useFrame` 会用 `worldHeightCPU` 归位。
+                     *  用法：`__mmd.setPos(-18,-193)` 站进月坑浅水（r 15~21.5 环带）。 */
+                    setPos: (x: number, z: number, y?: number) => {
+                        const g = groupRef.current;
+                        if (!g) return null;
+                        g.position.set(x, y ?? g.position.y, z);
+                        return g.position.toArray();
+                    },
                     /** ★★ 飞船碰撞体的**单元测试入口**（用户 m04735：「飞船穿模，没做碰撞」）。
                      *  直接调 `useFrame` 里用的那个 `shipPush()` —— 不是复制一份逻辑，
                      *  是同一个函数引用，所以测到的就是真正跑的那条路径。
@@ -2500,6 +3373,18 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                      *  为什么不「让她走进去看」：实测 `?charyaw=180` 时她朝西南
                      *  (-0.81,-0.58) 走而不是 -Z，两次 A/B 都只是从船旁边 20.8 m 掠过。 */
                     shipPush: (x: number, z: number) => shipPush(x, z),
+                    /* 森林树干推出（用户 2026-10-23 反馈 3「人物直接穿过树干」）。
+                     *   `__mmd.forestPush(树心x, 树心z)` ⇒ 应 `hit:true` 且 `dist ≥ 0`；
+                     *   `?forestcol=0` 时同一坐标必须 `hit:false`（证明推的不是别的东西）。
+                     *   树心坐标从 `__forestRoot.slots` 里读，见 `pre-forest-probe.js`。 */
+                    forestPush: (x: number, z: number) => forestPush(x, z),
+                    forestCol: () => ({
+                        on: FOREST_COL_ON,
+                        rScale: FOREST_R_SCALE,
+                        count: treeColliderList().length,
+                        charR: CHAR_R,
+                        sample: treeColliderList().slice(0, 5),
+                    }),
                     /* 月牙石桌的椭圆推出（用户 m02063 任务1）。用法同 shipPush：
                      *   __mmd.deskPush(-8.6,-3.2) ⇒ hit:true 且结果在椭圆外；
                      *   __mmd.deskPush(0,-11)    ⇒ hit:false 原样返回。
@@ -2674,12 +3559,22 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                             // 绕 Y 反向转 yaw ⇒ 得到「相对角色朝向」的坐标（x = 左右）
                             return [+((dx * cy - dz * sy)).toFixed(4), +((dx * sy + dz * cy)).toFixed(4)];
                         };
+                        /* ★ 踝骨的**世界高度**（相对角色基点，米）。
+                         *  用来验「落脚脉冲的相位是否真与脚触地对齐」——
+                         *  没有这个数，`stepPhase=0` 到底是不是「脚刚落地」全靠注释猜测。 */
+                        const hgt = (b?: THREE.Bone) => {
+                            if (!b) return null;
+                            b.updateWorldMatrix(true, false);
+                            return +(b.matrixWorld.elements[13] - gg.position.y).toFixed(4);
+                        };
                         return {
                             yaw: +yaw.toFixed(4),
                             lat: loc(find('左足首D') ?? find('左足首')),
                             rat: loc(find('右足首D') ?? find('右足首')),
                             ltoe: loc(find('左足先EX') ?? find('左つま先D')),
                             rtoe: loc(find('右足先EX') ?? find('右つま先D')),
+                            lh: hgt(find('左足首D') ?? find('左足首')),
+                            rh: hgt(find('右足首D') ?? find('右足首')),
                         };
                     },
                     /** `?stance=` 的实况（解析到哪几根链头、每根符号） */
@@ -2708,17 +3603,29 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                      *  列出 34 个碰撞体各自的**宿主骨名 / 半径 / 半长**，用来判断
                      *  「腿到底有没有碰撞体」——若 7 个 `D` 全是髋骨，大腿/小腿就根本没人管，
                      *  长袖与裙片当然会从腿里穿过去（这时该补的是碰撞体，不是推出力度）。 */
-                    cols: () => secRef.current.colBone.map((b, j) => ({
-                        n: ((b.userData as { mmdBoneName?: string })?.mmdBoneName) ?? b.name,
-                        r: +(secRef.current.colR[j] ?? 0).toFixed(4),
-                        half: +(secRef.current.colHalf[j] ?? 0).toFixed(4),
-                    })),
+                    /* ⚠️ 第二十六轮 T1-I4 修：补 null 守卫。同文件别的探针都写了
+                     *  `secRef.current ? … : null`，这里漏了 ⇒ `TS18047`。
+                     *  运行期不会崩（调用前 `__mmd` 已就绪），但类型上是脏的。 */
+                    cols: () => (secRef.current ? (() => {
+                        const s = secRef.current!;
+                        return s.colBone.map((b, j) => ({
+                            n: ((b.userData as { mmdBoneName?: string })?.mmdBoneName) ?? b.name,
+                            r: +(s.colR[j] ?? 0).toFixed(4),
+                            half: +(s.colHalf[j] ?? 0).toFixed(4),
+                        }));
+                    })() : null),
                     /** ★★ m13789 任务③ 的判据：**布料互相**穿模。长袖（`driveSel===1`）
                      *  与前襟/裙摆（`driveSel===2` / 名字含 `Skirt_`）之间没有任何碰撞体，
                      *  所以它们的互相穿插只能这样量：异组骨棒的最短距离。
                      *  `minDist < 0.02` ⇒ 网格基本已经互穿；`under1/under2` 是计数。 */
                     clashAudit: (under5?: number, top?: number) =>
                         auditClash(secRef.current, under5 ?? 0.05, top ?? 12),
+                    /** ★★★ 第二十四轮 v3：**头发 ↔ 布料**的穿模读数。
+                     *  用户 m02740 指出背面图里头发明显插进白裙与披风 ——
+                     *  原有 `clashAudit` 的分组里**没有头发**，所以这件事一直是 0 读数。
+                     *  `minDist < 0.02` 基本可认定互穿；`byGroup` 指出穿在哪一类布上。 */
+                    hairClash: (under5?: number, top?: number) =>
+                        auditHairClash(secRef.current, under5 ?? 0.05, top ?? 10),
                     /** ★ m11046 任务3 的判据：树干碰撞圆的复算结果 + 当前角色位置到
                      *  最近树的「净距」（`gap < 0` = 已经插进树里）。 */
                     trees: () => TREE_COLS.map((t) => ({
@@ -2760,6 +3667,267 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                             sideNames: s.slice(0, limit),
                         };
                     },
+                    /** ★★★ 用户 m18305「袖子向两侧飘」的 A/B 读数：袖骨骨尾相对**动画姿势**
+                     *  尾位在角色自身坐标系里的 X（侧向）/ Z（前后）分量均值，单位米。
+                     *  同一份样本取多次再平均，见 `_tools/sleeve-probe.js`。
+                     *  只读，不改任何粒子/四元数。 */
+                    sleeve: () => (secRef.current ? measureSleeve(secRef.current) : null),
+                    /** ★ t16：**走向无关**的袖向读数 —— 量的是求解后实际生效的静止目标方向
+                     *  `_vRest`（世界单位向量）相对动画静止方向的偏角，**不含** `carry`/风按
+                     *  行走方向加的偏置。`sideDeg` 正 = 朝该骨自己那一侧张开。
+                     *  用途：证明「朝 +X 走」与「朝 +Z 走」的袖子姿态相同。 */
+                    sleevePose: () => (secRef.current ? measureSleevePose(secRef.current) : null),
+                    sleeveDbg: () => (secRef.current ? ((secRef.current as unknown as {_sleeveDbg?: unknown})._sleeveDbg ?? null) : null),
+                    rawprobe: () => {
+                        const r = secRef.current as unknown as { n: number; driveSel: Uint8Array; particle: Float32Array; bones: { name: string; parent: { name: string } | null }[] };
+                        if (!r) return null;
+                        const idx: number[] = [];
+                        for (let k = 0; k < r.n; k++) if (r.driveSel[k] === 1) idx.push(k);
+                        return {
+                            rigN: r.n, partLen: r.particle.length, selN: idx.length,
+                            r183: [183, 184, 250, 300, 400, 500].map((k) => [k, r.bones[k].name, r.particle[k*3], r.particle[k*3+2]]),
+                            probeRange: (() => { const s = secRef.current as unknown as { particle: Float32Array; restLen: Float32Array; parentIdx: Int32Array }; const out: (number | string)[][] = []; for (let k = 182; k <= 360; k++) out.push([k, Number.isFinite(s.particle[k*3]) ? 1 : 0, s.parentIdx[k], r.bones[k].name]); return out; })(),
+                            parentNames: (() => { const s = secRef.current as unknown as { parentIdx: Int32Array }; const set: string[] = []; for (let k = 0; k < r.n; k++) { if (s.parentIdx[k] >= 0) continue; const p = r.bones[k].parent; if (!p) continue; const nm = p.name; if (!set.includes(nm)) set.push(nm); } return set.slice(0, 40); })(),
+                            nanFin: (() => { const s = secRef.current as unknown as { particle: Float32Array; particlePrev: Float32Array; parentIdx: Int32Array; sideSel: unknown }; const bad: number[] = []; for (let k = 0; k < r.n; k++) if (!Number.isFinite(s.particle[k*3])) bad.push(k); const badFin = bad.filter((k) => Number.isFinite((s.particlePrev as Float32Array)[k*3])); return { badN: bad.length, firstBad: bad.slice(0, 8), badWithFinitePrev: badFin.slice(0, 8), hasSideSel: !!(s.sideSel as number[]) }; })(),
+                            nanHist: (() => { const s = secRef.current as unknown as { particle: Float32Array; _nanHist?: number[] }; const v = s._nanHist; if (!v) return null; const out: number[][] = []; for (let i = 0; i < 8; i++) out.push(v.slice(i * 6, i * 6 + 6).map((x) => +x.toFixed(3))); return out; })(),
+                            direct: (() => { const s = secRef.current as unknown as { particle: Float32Array }; return [s.particle[183*3], s.particle[184*3]]; })(),
+                            dsel183: r.driveSel[183],
+                            first: idx.slice(0, 4).map((k) => [k, r.bones[k].name, r.particle[k*3]]),
+                            finiteAll: (() => { let ok = 0; for (let k = 0; k < r.n; k++) if (Number.isFinite(r.particle[k*3])) ok++; return ok; })(),
+                            finiteSel: idx.filter((k) => Number.isFinite(r.particle[k*3])).length,
+                            firstFiniteIdx: (() => { for (let k = 0; k < r.n; k++) if (Number.isFinite(r.particle[k*3])) return k; return -1; })(),
+                            win: [170, 200, 340, 372].map((k) => (k < r.n ? [k, r.bones[k].name, Number.isFinite(r.particle[k*3]) ? 1 : 0] : [k, '?', -1])),
+                            finRanges: (() => { const out: number[][] = []; let st = -1; for (let k = 0; k <= r.n; k++) { const f = k < r.n && Number.isFinite(r.particle[k*3]); if (f && st < 0) st = k; else if (!f && st >= 0) { out.push([st, k - 1]); st = -1; } } return out; })(),
+                        };
+                    },
+                    /** ★ 侧向摆动的判据链（缺一个就说明那段没跑）：
+                     *  `sideBones` = 抓到的胳膊关节根数（0 ⇒ 构建期没找到）、
+                     *  `sideArm` = 关节名、`sideN` = 本帧被侧向推的袖骨根数、
+                     *  `sideDeg` = 本帧最大侧向角（度）、`sideRoll` = 每侧摆速归一值
+                     *  （−1 = 该侧没数据）。 */
+                    side: () => {
+                        const r = secRef.current;
+                        if (!r) return null;
+                        return {
+                            sideBones: r.sideArm.length,
+                            sideArm: r.sideArm.map((b) => b.name),
+                            /** ★ t20 标定：捕获到的关节世界 y（与 sideArm 同序） */
+                            sideArmY: (r.sideArmY || []).map((v) => +v.toFixed(3)),
+                            sideSideN: r.sideSideN,
+                            sideN: r.sideN,
+                            sideDeg: +(r.sideDeg * 57.29578).toFixed(2),
+                            sideRoll: r.sideRoll,
+                            sideAmp: r.sideAmt ?? 0,
+                            dbg: [r._sideDbgW, r._sideDbgRoll, r._sideDbgAmt, r._sideDbgSd],
+                            dbgDeg: r._sideDbgDeg ?? 0,
+                            /* ★★ t20：近裙摆减推量的三项参数（复核时用来复算 hw）。 */
+                            sideHi: [r.sideHiK ?? 0, r.sideHiLo ?? 0, r.sideHiHi ?? 0],
+                            /* ★★ t20：本帧最后一根袖骨的高度权重（1 = 满推） */
+                            sideHiW: r._sideDbgH ?? null,
+                            /** ★ t20 标定：本帧算 hw 用的 `_vHead.y`（场景世界坐标） */
+                            sideHiY: r._sideDbgHy ?? null,
+                            sel1: r._sideDbgSel1, hit: r._sideDbgHit, kids: r._sideDbgKids, names: r._sideDbgNames,
+                        };
+                    },
+                    /** ★ 袖↔衣专属互穿读数（`auditClash` 是全组混算，袖↔衣的改善会被
+                     *  裙摆↔裙摆的 0.0017 m 埋掉）。返回衣身/前襟两档最短距离与命中根数。 */
+                    sleeveClash: () => (secRef.current ? auditSleeveClash(secRef.current) : null),
+                    /* ★★ 骨表全量转储（诊断用）：列出**每一根**骨的名字/索引/落脚权重/骨长/
+                     *  世界高度，用来查「同名骨重复」这种会让 `secTail(name)` 取错对象的问题。
+                     *  只能用索引取骨：`Skirt_15_1` 在本模型里存在**两个实例**（一个 w=1.00 是真裙摆，
+                     *  一个 w=0.09 是别处同名对象），`findIndex` 只会拿到第一个。 */
+                    secDump: () => {
+                        const r = secRef.current;
+                        if (!r) return null;
+                        const out: object[] = [];
+                        for (let i = 0; i < r.n; i++) {
+                            const b = r.bones[i];
+                            const nm = b.name || '';
+                            if (!/Skirt|Hair|髪/.test(nm)) continue;
+                            b.updateWorldMatrix(true, false);
+                            _vTip.setFromMatrixPosition(b.matrixWorld);
+                            out.push({
+                                i, nm,
+                                lw: +r.landWgt[i].toFixed(3),
+                                y: +_vTip.y.toFixed(3),
+                                len: +r.restLen[i].toFixed(3),
+                                sel: r.secdriveSel[i],
+                                par: b.parent ? (b.parent.name || '') : '',
+                            });
+                        }
+                        return out;
+                    },
+                    /* ★★★ 按**索引**取骨尾（诊断）。必须提供这个：本模型存在大量同名骨
+                     *  （`Skirt_0_1` 有 20 个实例、`Skirt_15_1` 有 3 个），`secTail(name)` 的
+                     *  `findIndex` 只会返回**第一个**同名骨 —— 那个往往 `landWgt=0.09`，
+                     *  于是「落脚脉冲没效果」的结论其实是**测错了骨**（踩过两次）。
+                     *  真裙摆满权重链：i=543(Skirt_10_1,w0.70) → 549(w0.77) → 555(w0.84)
+                     *  → 561(w0.91) → 567(w0.96) → 571(Skirt_15_1,w1.00)。 */
+                    /* ★ 材质名 → 覆盖骨数（`_tools/matdump.js` 用）。
+                     *  为什么需要它：第十九轮的 `collectPieceSel()` 按材质名分片，
+                     *  而「带」这个判据实测选中 **360 根**骨 —— 比披风的 119 根多 3 倍，
+                     *  怀疑不止腰侧飘带（可能含裙带）。要判这一点只能把材质名数出来，
+                     *  不能靠猜。这里还顺带给出每组覆盖到的**骨名去重前 8 个**，
+                     *  一眼就能看出「这是飘带还是裙片」。 */
+                    hairSkinAudit: () => {
+                        const source = model.mesh as THREE.SkinnedMesh;
+                        const mesh = source;
+                        const g = mesh.geometry, sk = mesh.skeleton;
+                        const si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+                        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+                        const r = secRef.current;
+                        const rows: any[] = [];
+                        for (const gr of g.groups) {
+                            const name = (mats[gr.materialIndex ?? 0]?.userData as any)?.mmdMaterial?.name ?? '';
+                            if (!/^髮$/.test(name)) continue;
+                            const counts = new Map<number, Set<number>>();
+                            for (let j = gr.start; j < gr.start + gr.count; j++) {
+                                const vi = g.index!.getX(j);
+                                for (let k = 0; k < 4; k++) {
+                                    if (sw.array[vi * 4 + k] < 0.15) continue;
+                                    const bi = si.array[vi * 4 + k];
+                                    if (!counts.has(bi)) counts.set(bi, new Set());
+                                    counts.get(bi)!.add(vi);
+                                }
+                            }
+                            for (const [bi, vertices] of counts) {
+                                const b = sk.bones[bi], ri = r?.bones.indexOf(b) ?? -1;
+                                let minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+                                for (const vi of vertices) {
+                                    const v = new THREE.Vector3().fromBufferAttribute((source.userData.hairAuditPosition ?? g.attributes.position) as THREE.BufferAttribute, vi);
+                                    mesh.applyBoneTransform(vi, v); v.applyMatrix4(mesh.matrixWorld);
+                                    minY = Math.min(minY, v.y); maxY = Math.max(maxY, v.y);
+                                    minZ = Math.min(minZ, v.z); maxZ = Math.max(maxZ, v.z);
+                                }
+                                rows.push({bi, name:b.name, ri, group:ri>=0?r?.matGroup[ri]:null, count:vertices.size, minY,maxY,minZ,maxZ, auto:b.matrixAutoUpdate, scale:b.scale.toArray(), raw:b.userData.mmdBoneName, rest:b.userData.mmdRestPosition, head:b.getWorldPosition(new THREE.Vector3()).toArray()});
+                            }
+                        }
+                        return rows;
+                    },
+                    mmdMaterials: () => {
+                        const mesh: any = (model as any)?.mesh;
+                        if (!mesh) return null;
+                        const g = mesh.geometry;
+                        const idx = g?.index;
+                        const si = g?.attributes?.skinIndex;
+                        const sw = g?.attributes?.skinWeight;
+                        const groups = g?.groups;
+                        const rawMats = mesh.material;
+                        const mats: any[] = Array.isArray(rawMats) ? rawMats : [rawMats];
+                        const allBones: any[] = mesh.skeleton?.bones ?? [];
+                        if (!idx || !si || !sw || !groups) return null;
+                        const itemSize = si.itemSize || 4;
+                        const iArr = idx.array, siArr = si.array, swArr = sw.array;
+                        const out: any[] = [];
+                        for (const gr of groups) {
+                            const m = mats[gr.materialIndex as number];
+                            const nm = m?.userData?.mmdMaterial?.name || '';
+                            if (!nm) continue;
+                            const names = new Set<string>();
+                            const end = Math.min(gr.start + gr.count, iArr.length);
+                            for (let j = gr.start; j < end; j++) {
+                                const vi = iArr[j];
+                                if (vi == null) continue;
+                                for (let k = 0; k < itemSize; k++) {
+                                    const w = swArr[vi * itemSize + k];
+                                    if (!(w >= 0.15)) continue;
+                                    const bb = allBones[siArr[vi * itemSize + k]];
+                                    if (bb?.name) names.add(bb.name);
+                                }
+                            }
+                            out.push({ index: gr.materialIndex, name: nm, bones: names.size, sample: [...names].slice(0, 8) });
+                        }
+                        /* 同名材质会出现在多个 group 里（本体 + 描边）⇒ 合并同名。 */
+                        const by: Record<string, any> = {};
+                        for (const r of out) {
+                            const k = r.name;
+                            if (!by[k]) by[k] = { name: k, groups: 0, bones: 0, sample: r.sample };
+                            by[k].groups++;
+                            by[k].bones = Math.max(by[k].bones, r.bones);
+                        }
+                        return Object.values(by);
+                    },
+                    secTailI: (i: number) => {
+                        const r = secRef.current;
+                        const gg = groupRef.current;
+                        if (!r || !gg || !(i >= 0 && i < r.n)) return null;
+                        const b = r.bones[i];
+                        b.updateWorldMatrix(true, false);
+                        _vTip.set(r.restDirLocal[i * 3], r.restDirLocal[i * 3 + 1], r.restDirLocal[i * 3 + 2])
+                            .multiplyScalar(r.restLen[i]);
+                        _vTip.applyMatrix4(b.matrixWorld);
+                        const ry3 = gg.rotation.y;
+                        const rx3 = _vTip.x - gg.position.x, rz3 = _vTip.z - gg.position.z;
+                        const ry4 = gg.position.y;
+                        return {
+                            i, name: b.name || '',
+                            lw: +r.landWgt[i].toFixed(4),
+                            len: +r.restLen[i].toFixed(4),
+                            ldeg: +((r.landN > 0 ? r.landDeg : 0)).toFixed(3),
+                            tipU: +(_vTip.y - ry4).toFixed(4),
+                            tipS: +(rx3 * Math.cos(ry3) - rz3 * Math.sin(ry3)).toFixed(4),
+                            /* ★ 第十九轮：**前后**分量（角色局部 +Z = 正面）。
+                             *  任务3「裙子被大腿顶起来往前飘」要量它：向前 = tipF 变大。 */
+                            tipF: +(rx3 * Math.sin(ry3) + rz3 * Math.cos(ry3)).toFixed(4),
+                            /* ★ 真·径向距离（到角色中轴的水平距离）。`tipS` 只是「左右」一个轴，
+                             *  量不到身后的布；参考视频的 `hemW` 量的是**整圈**跨度，
+                             *  用 `tipR` 取全圈均值/最大才是同一口径。 */
+                            tipR: +Math.hypot(rx3, rz3).toFixed(4),
+                            /* ★ 第二十九轮：把 `gg` 本身也报出来（tipS/tipF/tipR 的参照系）。
+                             *  为什么需要：`secTailI` 的骨表只含布料+头发（腿不在内），
+                             *  探针要量腿的「朝前分量」必须用**同一个** gg，否则两个数不可比。
+                             *  本轮实测：靠猜候选对象的 local position 反算，delta 差 10 m。 */
+                            gx: +gg.position.x.toFixed(5),
+                            gy: +gg.position.y.toFixed(5),
+                            gz: +gg.position.z.toFixed(5),
+                            gry: +gg.rotation.y.toFixed(5),
+                            /* ★ 第二十轮：世界坐标（绝对，不减 `g.position`）。
+                             *  为什么要有它：上面那些都是「相对角色」的量，量不出
+                             *  「停下来之后布还在自己漂 / 相邻帧骨尾突然跳一大下」——
+                             *  那类判据必须比同一根骨的**世界位置**逐帧差。
+                             *  探针 `_tools/stopdrift.js` 就靠它算 `maxJump`。 */
+                            ux: +_vTip.x.toFixed(5), uy: +_vTip.y.toFixed(5), uz: +_vTip.z.toFixed(5),
+                            /* ⚠️ 第二十五轮曾在这里加过一个「逐骨 dev（当前方向 vs 动画方向）」，
+                             *  实测四组全 89~116°、且方向相反 —— `restDirWorld` 在 **character
+                             *  空间**而非 world 空间，与骨世界方向点积得到的是垃圾。
+                             *  按 R5「量具先自检」撤掉，**不要照着重写**。判「哪片布在晃」用
+                             *  `tipU/tipS/tipF` 相对**站定姿态**的位移（口径明确，已验证）。 */
+                            /* 骨头世界坐标（相对角色；判「上段/下段」用它，比骨尾稳） */
+                            /* â ç¬¬ä¸åä¸è½®ï¼éª¨å¤´ä¸çåæ ï¼ä¸ ux/uy/uz åä¸å¥åä½ï¼ã
+                             *  ä¸ºä»ä¹è¦æï¼`hU` åªæé«åº¦ï¼éãéª¨æ£ Ã éª¨æ£ãæè¿è·ç¦»æ¼ä¸åºæ¥ã
+                             *  ç¬¬ä¸åä¸è½®å¤´åç©¿æ¨¡éå·å°±å ä¸ºç¼ºå®åªè½æ¿éª¨å°¾å½ç¹éã */
+                            hx: +r.bones[i].matrixWorld.elements[12].toFixed(5),
+                            hy: +r.bones[i].matrixWorld.elements[13].toFixed(5),
+                            hz: +r.bones[i].matrixWorld.elements[14].toFixed(5),
+                            hU: +(() => { const e = r.bones[i].matrixWorld.elements; return e[13] - gg.position.y; })().toFixed(4),
+                            /* ★★ 第二十六轮 d：**骨自身的方向**（角色坐标，单位向量）。
+                             *  为什么必须补：判「披肩上段是不是不动」只能用**转角**，
+                             *  不能用骨尾位移 —— 位移 = 转角 × 骨长，披肩下段骨链长、
+                             *  上段短，同样转角下位移天然差 5 倍（`shawlwgt.js` 已记过这个坑）。
+                             *  本轮我又用 `dU`（竖直）、`tipS`（左右）、3D 位移各错了一次。
+                             *  three 的骨骼沿自身 +Y 延伸 ⇒ `matrixWorld` 第 2 列就是骨方向。 */
+                            dirS: +(() => {
+                                const e = r.bones[i].matrixWorld.elements;
+                                let x = e[4], y = e[5], z = e[6];
+                                const l = Math.hypot(x, y, z) || 1;
+                                x /= l; z /= l;
+                                return x * Math.cos(ry3) - z * Math.sin(ry3);
+                            })().toFixed(5),
+                            dirF: +(() => {
+                                const e = r.bones[i].matrixWorld.elements;
+                                let x = e[4], y = e[5], z = e[6];
+                                const l = Math.hypot(x, y, z) || 1;
+                                x /= l; z /= l;
+                                return x * Math.sin(ry3) + z * Math.cos(ry3);
+                            })().toFixed(5),
+                            dirU: +(() => {
+                                const e = r.bones[i].matrixWorld.elements;
+                                let x = e[4], y = e[5], z = e[6];
+                                const l = Math.hypot(x, y, z) || 1;
+                                return y / l;
+                            })().toFixed(5),
+                        };
+                    },
                     secTail: (name: string) => {
                         const r = secRef.current;
                         const gg = groupRef.current;
@@ -2773,10 +3941,42 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                         const rz = r.particle[i * 3 + 2] - gg.position.z;
                         return {
                             name, sel: r.axisSel[i], sign: r.axisSign[i],
+                            /* ★ 落脚脉冲诊断：该骨在本帧是否真被这条通道选中/转动。
+                             *  `lw` 是高度权重（0 = 没选中）、`lbd` = 写回基准方向是否非零、
+                             *  `len` = 骨长（决定同样角度下骨尾能移动多少）、`ldeg` = 本帧角度（度）。 */
+                            lw: +r.landWgt[i].toFixed(4),
+                            len: +r.restLen[i].toFixed(4),
+                            lbd: (r.landBaseDir[i * 3] !== 0 || r.landBaseDir[i * 3 + 1] !== 0 || r.landBaseDir[i * 3 + 2] !== 0) ? 1 : 0,
+                            ldeg: +((r.landN > 0 ? r.landDeg : 0)).toFixed(3),
                             fwd: +(rx * fx + rz * fz).toFixed(4),
                             up: +ry2.toFixed(4),
                             side: +(rx * fz - rz * fx).toFixed(4),
                             hits: r.antiHits, maxDeg: +r.antiMaxDeg.toFixed(3),
+                            /* ★ 真·渲染位置（骨尾世界坐标 = 骨骼矩阵 × 本地骨长方向）。
+                             *  ⚠️ 上面 `up/side/fwd` 读的是 `r.particle` —— 那是**约束之后**
+                             *  的粒子位置，而 `landBaseDir` 的四元数增量是在**这之后**才写到
+                             *  `b.quaternion` 上的 ⇒ 粒子读不到落脚脉冲的贡献。
+                             *  判「落脚脉冲到底动没动」，必须读这里。 */
+                            /* 骨尾 = 头 + matrixWorld × (restDirLocal × restLen)。
+                             *  必须在 `updateWorldMatrix` **之后**读，否则拿到上一帧。 */
+                            tipU: +(() => {
+                                const b = r.bones[i];
+                                b.updateWorldMatrix(true, false);
+                                _vTip.set(r.restDirLocal[i * 3], r.restDirLocal[i * 3 + 1], r.restDirLocal[i * 3 + 2])
+                                    .multiplyScalar(r.restLen[i]);
+                                _vTip.applyMatrix4(b.matrixWorld);
+                                return _vTip.y - gg.position.y;
+                            })().toFixed(4),
+                            tipS: +(() => {
+                                const b = r.bones[i];
+                                const ry3 = gg.rotation.y;
+                                b.updateWorldMatrix(true, false);
+                                _vTip.set(r.restDirLocal[i * 3], r.restDirLocal[i * 3 + 1], r.restDirLocal[i * 3 + 2])
+                                    .multiplyScalar(r.restLen[i]);
+                                _vTip.applyMatrix4(b.matrixWorld);
+                                const rx3 = _vTip.x - gg.position.x, rz3 = _vTip.z - gg.position.z;
+                                return rx3 * Math.cos(ry3) - rz3 * Math.sin(ry3);
+                            })().toFixed(4),
                         };
                     },
                     /* ★ 方向性约束的总账：把所有前侧骨/后侧骨在**角色前向轴**上的尾巴坐标
@@ -2823,6 +4023,7 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                         stride: STRIDE, loopDur: LOOP_DUR, cycleSec: CYCLE_SEC,
                         walkSpeed: WALK_SPEED,
                         runSpeed: RUN_SPEED, gaitCap: GAIT_CAP, idleCreep: IDLE_CREEP,
+                        pace: PACE, gain: SPEED_GAIN,
                         maxFrame: maxFrameRef.current, warned: warned.current,
                         // ★ 长时走路的定量证据：加载器当前落在第几帧。
                         //   若「走着走着腿不动」，这个数会停住；正常会 0→maxFrame 循环。
@@ -2870,6 +4071,212 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                                 limbSwing: Array.from(secRef.current._limbSwing).map((v) => +v.toFixed(3)),
                                 limbRef: Array.from(secRef.current._limbRef).map((v) => +v.toFixed(3)),
                                 driveN: secRef.current.driveN,
+                                /* ★★ 袖子外撑（用户 2026-10-21 反馈1「袖子走路时向外延」）。
+                                 *   三个数缺一不可，因为它们各自堵一类「参数对、功能没生效」：
+                                 *   `flareBones` 是**构建期**分类结果（静态）。为 0 ⇒ 分类根本没跑，
+                                 *     此时任何运行期读数都会是 0，先查这个再看别的；
+                                 *   `flareN` 是**运行期**本帧被撑开的骨数。`flareBones>0` 而这里 0
+                                 *     ⇒ 撑开量被速度门压成 0（`flareSpd` 会给出实际用的速度）；
+                                 *   `flareDeg` 是参数本身（度），用来证明 URL 参数真的读进来了。
+                                 *   `flareAmt` 是本帧撑开量 0..1，与 `flareDeg` 相乘才是实际角度。 */
+                                flareDeg: +(secRef.current.flareAmp * 57.29578).toFixed(2),
+                                flareBones: secRef.current.flareBones,
+                                flareN: secRef.current.flareN,
+                                flareAmt: +secRef.current.flareAmt.toFixed(3),
+                                flareSpd: +secRef.current.flareSpd.toFixed(3),
+                                flareMeanDeg: +secRef.current.flareDeg.toFixed(3),
+                                /* 米级取证：袖骨离体轴的水平距离。外撑生效 ⇒ 同一相位下
+                                 * `flareOlMean` 随 `?secflare=` 单调变大；单位米，可直接与
+                                 * 「衣身半径」比较判断还有多少穿模余量。 */
+                                flareOlMean: +secRef.current.flareOlMean.toFixed(4),
+                                flareOlMax: +secRef.current.flareOlMax.toFixed(4),
+                                /* ★ 米级取证（判据）：外撑**净贡献**的位移 —— 「带外撑」与
+                                 * 「不带外撑」两种求解下袖骨位置的欧氏距离，单位米。
+                                 * 随 `?secflare=` 单调变大才算「撑开真的有效」，不受步态相位影响。 */
+                                flareShiftMean: +secRef.current.flareShiftMean.toFixed(5),
+                                flareShiftMax: +secRef.current.flareShiftMax.toFixed(5),
+                                flareShiftN: secRef.current.flareShiftN,
+                                /* ★★★ 袖子侧向摆动（用户 m18305「袖子向两侧飘」）。
+                                 *  判据与 `flareBones/flareN` 同一套：`sideBones`（构建期臂饰分类）
+                                 *  > 0 才说明 `?secside=` 这条通道真的建起来了；`sideN` 是本帧
+                                 *  被摆的骨数，`sideDeg` 是本帧平均摆角（度）。`?secside=-1`
+                                 *  时三者应同时归 0。 */
+                                sideBones: secRef.current.sideBones,
+                                sideN: secRef.current.sideN,
+                                /* ★ 第二十四轮 v3：每根骨属于哪类布（0其它/1头发/2披风/3带/4披肩/5裙/6袖）。
+                                 *  `hairClash` 量具和 `_tools/hairradial.js` 都要它 —— 没有这张表，
+                                 *  「头发穿进裙」只能靠肉眼看图（用户 m02740 就是这么发现的）。 */
+                                matGroup: secRef.current.matGroup,
+                                /* ★ 第二十四轮 v3：头发径向让位的逐帧读数。
+                                 *  `hairSepN` = 本帧真正让位的头发骨数、`hairSepDeg` = 累计让位角（度）。
+                                 *  `?hairsep=0` 时两者恒 0（可回滚判据）。 */
+                                /* ★ 第二十四轮 v4：弹簧刚度/限角乘数 + 本帧刚度均值。
+                                 *  `stiffMean` 从 `stiff[]` 数组**重算**，证明乘数真的进了数组
+                                 *  而不只是读进了常量（本文件踩过「参数打印正确 ≠ 功能生效」3 次）。 */
+                                spring: {
+                                    stiffK: secRef.current.stiffK,
+                                    limitK: secRef.current.limitK,
+                                    kHair: secRef.current.kHair,
+                                    kSkirt: secRef.current.kSkirt,
+                                    kOther: secRef.current.kOther,
+                                    stiffMean: +(secRef.current.stiffMean || 0).toFixed(2),
+                                    stiffRef: +(
+                                        (() => {
+                                            const P = secRef.current;
+                                            if (!P.stiffness || !P.stiffness.length) return 0;
+                                            let s4 = 0;
+                                            for (let i4 = 0; i4 < P.n; i4++) s4 += P.stiffness[i4];
+                                            return s4 / Math.max(1, P.n);
+                                        })()
+                                    ).toFixed(2),
+                                },
+                                hairSep: secRef.current.hairSep,
+                                hairSepN: secRef.current.hairSepN,
+                                hairSepDeg: +(secRef.current.hairSepDeg).toFixed(2),
+                                hairApplied: secRef.current.hairApplied,
+                                sideDeg: +(secRef.current.sideDeg * 57.29578).toFixed(2),
+                                sideRoll: +secRef.current.sideRoll.toFixed(3),
+                                sideAmt: +secRef.current.sideAmt.toFixed(3),
+                                sideFrontKill: +secRef.current.sideFrontKill.toFixed(3),
+                                /* ★★★ 落脚脉冲（用户 m07388）—— 判据与 sideBones 同一套：
+                                 *  `landBones`（构建期建表根数）> 0 才说明通道真的建起来了；
+                                 *  `landN` 是本帧被转的骨数、`landDeg` 本帧平均角（度）、
+                                 *  `landPulse` 本帧脉冲强度（0..1）、`stepPhase` 步态相位。
+                                 *  `?secland=-1` 时后四者应同时归 0 / NaN。 */
+                                landBones: secRef.current._landN,
+                                landN: secRef.current.landN,
+                                landDeg: +(secRef.current.landDeg * 57.29578).toFixed(2),
+hairFloorN: secRef.current.hairFloorN,
+hairAnimOnly: secRef.current.hairAnimOnly,
+hairSolveOff: secRef.current.hairSolveOff,
+hairFloorDeg: +(secRef.current.hairFloorDeg * 57.29578).toFixed(2),
+                                landPulse: +secRef.current.landPulse.toFixed(3),
+                                /* ⚠️ `landLiftE / landSpreadE` 本对象里只许出现**一次** ——
+                                 *  原来这两行在下面「起步渐入」那块又写了一遍，esbuild 每帧报
+                                 *  `Duplicate key "landSpreadE" in object literal`（第二十三轮引入，
+                                 *  语义无害但刷屏）。统一留下面那对（带 `|| 0`）。 */
+                                landApplied: secRef.current.landApplied,
+                                /* ★ 第二十一轮诊断：
+                                 *  `piece*` = 整片布（披风/带）通道；`thigh*` = 裙子被大腿顶起。
+                                 *  ⚠️ 两个「骨数」别混：
+                                 *    `pieceCapeN/pieceRibbonN` = **构建期**选中的骨数（常数）；
+                                 *    `pieceN/pieceApplied` = **本帧**真正转过 / 写回的骨数。
+                                 *  站定时两条通道都不跑 ⇒ 全部为 0（符合设计）。 */
+                                pieceN: secRef.current.pieceN,
+                                pieceApplied: secRef.current.pieceApplied,
+                                pieceDeg: +(secRef.current.pieceDegNow).toFixed(4),
+                                pieceAmp: +(secRef.current.pieceAmp * 57.29578).toFixed(2),
+                                pieceCapeN: secRef.current.pieceCapeN,
+                                pieceRibbonN: secRef.current.pieceRibbonN,
+                                /* 选骨下标表：`piecescan.js` 要在同一批骨上做开/关 A/B，
+                                 *  没有它只能盲猜下标（本模型骨名重名 92 处，按名字找必错）。 */
+                                pieceIds: (() => {
+                                    const P = secRef.current;
+                                    const cape: number[] = [], ribbon: number[] = [];
+                                    const thigh: number[] = [], thighW: number[] = [];
+                                    const shawl: number[] = [];
+                                    for (let i = 0; i < P.n; i++) {
+                                        if (P.pieceSel[i] === 1) cape.push(i);
+                                        else if (P.ribbonSel[i] === 1) ribbon.push(i);
+                                        else if (P.shawlSel[i] === 1) shawl.push(i);
+                                    }
+                                    for (let i = 0; i < P.n; i++) {
+                                        if (P.thighSel[i] === 1) { thigh.push(i); thighW.push(+P.thighWgt[i].toFixed(3)); }
+                                    }
+                                    return { cape, ribbon, thigh, thighW, shawl };
+                                })(),
+                                /* ★ 第二十二轮：披肩整片通道的读数（判「整片是否同时动」） */
+                                shawlN: secRef.current.shawlN,
+                                shawlApplied: secRef.current.shawlApplied,
+                                shawlDeg: +(secRef.current.shawlDegNow).toFixed(4),
+                                /* ★ 第二十九轮：披肩**整片前移**（编号4）的设定值与本帧实际值。
+                                 *  `pushN` 必须 > 0 才说明通道真的跑了（否则是参数没进来 / 选骨为空）。 */
+                                shawlPush: +(secRef.current.shawlPush * 57.29578).toFixed(2),
+                                shawlPushSign: secRef.current.shawlPushSign,
+                                shawlPushOsc: +(secRef.current.shawlPushOsc * 57.29578).toFixed(2),
+                                shawlPushN: secRef.current.shawlPushN,
+                                shawlPushDeg: +(secRef.current.shawlPushDegNow * 57.29578).toFixed(3),
+                                /* ★ 第三十二轮 d：钉住通道的设定值与本帧生效骨数。 */
+                                shawlAmp: +(secRef.current.shawlAmp * 57.29578).toFixed(2),
+                                shawlBones: secRef.current.shawlBones,
+                                /* ★ 第二十四轮：四片布总幅度乘数（原值，核对参数真的读到）
+                                 *  + `sleeveIds`（袖骨下标表）—— 逐骨验收要用：
+                                 *  袖片没有 `pieceIds` 那种归属表，只能按 `secdriveSel===1` 反查。 */
+                                clothAmp: secRef.current.clothAmp,
+                                /* 1袖 的两条幅度（度，**已乘 clothAmp**）—— 必须同报：
+                                 *  `sideDeg` 是**运行期平均角**，含速度归一（`sideAmt`），
+                                 *  原地播放动画（不产生位移）时恒 0，单看它分不清
+                                 *  「参数没进来」和「速度不够」。这条坑本文件第 1600 行记过。
+                                 *  ⚠️ `sideAmt` 本对象里已在上面出现过一次（esbuild 会报
+                                 *  `Duplicate key "sideAmt"` 刷屏），这里不再重复。 */
+                                sideAmpDeg: +(secRef.current.sideAmp * 57.29578).toFixed(2),
+                                sideOscAmpDeg: +(secRef.current.sideOscAmp * 57.29578).toFixed(3),
+                                sleeveIds: (() => {
+                                    const P = secRef.current;
+                                    const A: number[] = [];
+                                    for (let i = 0; i < P.n; i++) if (P.secdriveSel[i] === 1) A.push(i);
+                                    return A;
+                                })(),
+                                /* ★★★ 第二十四轮 v2：**四片布的幅度一次给全**（设定角 + 本帧实际角）。
+                                 *  为什么必须两个都给：`set` 证明 URL 读进来了，`now` 证明真的转了。
+                                 *  只看 set 会把「参数读对但没生效」当成正常（本文件踩过 3 次同型）。 */
+                                clothFlat: {
+                                    /* 设定角（度，已乘 clothAmp） */
+                                    set: {
+                                        sleeve: +(secRef.current.sideAmp * 57.29578).toFixed(2),
+                                        sleeveOsc: +(secRef.current.sideOscAmp * 57.29578).toFixed(2),
+                                        shawl: +(secRef.current.shawlAmp * 57.29578).toFixed(2),
+                                        cape: +(secRef.current.pieceAmp * 57.29578).toFixed(2),
+                                        ribbon: +(secRef.current.pieceAmp * 0.65 * 57.29578).toFixed(2),
+                                    },
+                                    /* 本帧实际（度）：侧摆/披肩/披风+带 的逐骨平均角 */
+                                    now: {
+                                        sleeve: +(secRef.current.sideDeg * 57.29578).toFixed(2),
+                                        shawl: +(secRef.current.shawlDegNow * 57.29578).toFixed(2),
+                                        piece: +(secRef.current.pieceDegNow * 57.29578).toFixed(2),
+                                    },
+                                    amp: secRef.current.clothAmp,
+                                },
+                                /* ★★★ 第二十五轮：**本轮四条新通道的生效证据**。
+                                 *  `netN` / `holdN` = 本帧真被一致化 / 被压住的骨数。
+                                 *  只看设定值会把「参数读对但通道没跑」当成正常
+                                 *  （本文件踩过 6 次同型坑：pieceAmp/thighAmp/shawlAmp/
+                                 *   sideFrontKill/hairSep/matGroup/stiff）。
+                                 *  自检口诀：设了非 0 却 `*N === 0` ⇒ 通道没跑，先查闸门/作用域。 */
+                                clothNet: {
+                                    netCape: secRef.current.netCape,
+                                    netRibbon: secRef.current.netRibbon,
+                                    netShawl: secRef.current.netShawl,
+                                    netSkirt: secRef.current.netSkirt,
+                                    netN: secRef.current.netN,
+                                    holdCape: secRef.current.holdCape,
+                                    holdRibbon: secRef.current.holdRibbon,
+                                    holdShawl: secRef.current.holdShawl,
+                                    holdSkirt: secRef.current.holdSkirt,
+                                    holdN: secRef.current.holdN,
+                                    holdReady: secRef.current.holdReady,
+                                    stiffCape: secRef.current.stiffCape,
+                                    stiffRibbon: secRef.current.stiffRibbon,
+                                    stiffShawl: secRef.current.stiffShawl,
+                                },
+                                /* ★ 第二十二轮：起步渐入权重 + 头发相位偏移（验收要读） */
+                                gaitW: +secRef.current.gaitW.toFixed(3),
+                                hairPh: secRef.current.hairPh,
+                                hairLiftE: +(secRef.current._hairLiftE || 0).toFixed(3),
+                                hairSpreadE: +(secRef.current._hairSpreadE || 0).toFixed(3),
+                                /* 裙摆的两条包络（对比用：验「头发比裙摆先扬」） */
+                                landLiftE: +(secRef.current._landLiftE || 0).toFixed(3),
+                                landSpreadE: +(secRef.current._landSpreadE || 0).toFixed(3),
+                                thighN: secRef.current.thighN,
+                                thighApplied: secRef.current.thighApplied,
+                                thighDeg: +(secRef.current.thighDeg).toFixed(4),
+                                thighAmt: +secRef.current.thighAmt.toFixed(3),
+                                /* ★ 分侧驱动量：逐骨验收要按侧配对（见 `_tools/thighscan2.js`） */
+                                amtL: +secRef.current.amtL.toFixed(3),
+                                amtR: +secRef.current.amtR.toFixed(3),
+                                thighAmp: +(secRef.current.thighAmp * 57.29578).toFixed(2),
+                                stepPhase: Number.isFinite(secRef.current.stepPhase)
+                                    ? +secRef.current.stepPhase.toFixed(3) : null,
                                 collide: secRef.current.info.collide,
                                 ms: +secRef.current.lastMs.toFixed(3),
                                 limitDeg: +(secRef.current.limit[0] * 57.29578).toFixed(2),
@@ -2982,14 +4389,64 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
         //    之前只判 `T_FREEZE`，于是传了 `?animt=` 但没传 `?tfreeze=` 时
         //    播放头走的是「已走距离 ÷ 步长」那条相位路径，`animt` 被静默忽略
         //    —— 八张「不同相位」的图其实是同一次加载的同一瞬间（实测几乎全同）。
-        const frozen = T_FREEZE !== null || ANIM_T !== null;
+        /* ★★★ `?seclock=<秒>`：**定格动画时钟、但布料照常每帧积分**（t16 新增）。
+         *
+         *  为什么需要：`?tfreeze=` / `?animt=` 走的是 `secFrozen` 那条路 —— 暖机一次之后
+         *  逐帧 `updateSecondary` 被永久跳过（见 `:3746` 与 `:3714` 的注释）。对「看裙摆
+         *  静态形状」够用，但对**袖子侧摆**这种「需要速度信号 + 每帧积分」的通道是致命的：
+         *  实测 `?tfreeze=1.6&animt=1.6&secvelx=0&secvelz=1.446` 下 `sleeve.x` 报 0.30 m、
+         *  `pose.sideMax` 报 28°，可 `Bone_ArmLets01_L` 的 `boneMatrix` 与 `?secside=-1`
+         *  **逐个元素相同**、像素差 0.16%（全在星点噪声上）—— 量到的是「粒子」，不是
+         *  「被渲染的那份骨骼」（判据 J：参数打印正确 ≠ 功能生效）。
+         *
+         *  `?seclock=` 的做法：把动画**姿态**钉在 t 上（父骨每帧重写成同一姿态 ⇒ 可复现），
+         *  但**不置** `secFrozen`，于是 `:3766` 的逐帧 `updateSecondary` 照常执行，
+         *  速度用 `?secvelx/?secvelz` 注入（STANDING 判据之外，见 `SEC_VEL_ON`）。
+         *  ⇒ 既有逐像素可复现的 A/B，又是真被渲染的骨姿。
+         */
+        const secLock = SEC_CLOCK !== null;
+        const frozen = (T_FREEZE !== null || ANIM_T !== null) && !secLock;
         let moving = 0;
         // ★ 本帧移动前的水平位置 —— 碰撞推出后要拿它算「实际走了多少」（见下面「场景碰撞」）
         const preX = g ? g.position.x : 0;
         const preZ = g ? g.position.z : 0;
 
 
-        if (g && MOVE_ON && !frozen && autoRef.current > 0) {
+        /* ── ★★ 用户 m02037 任务5：自动寻路（点任务列表 → 自己走过去）────────
+         * 这一支**只做两件事**：问 `autowalk.ts` 要本帧的世界方向、按方向推一步。
+         * 位移仍然走下面同一段「树/桌/船推出 + 贴地 + 收尾」代码 —— 卡片要求
+         * 「不新写移动系统」，所以这里绝不另起一套碰撞。
+         *
+         * 为什么排在 `?autowalk=` 那条诊断分支**之前**：两者都是「外部驱动」，
+         * 但寻路是玩家点的，必须优先；诊断开关只用于无头出图，冲突时让位。
+         *
+         * 取消（卡片第 3 条）：任意方向键一按下就交还手动 —— 不靠 keyup，
+         * 也不改 `controls.ts` 的 keyBindings（那套是电平式，按住连发的语义
+         * 与「点一下走一段」完全不同）。
+         */
+        if (g && MOVE_ON && !frozen && navState.target) {
+            const navKey = input.isPressed('MoveForward') || input.isPressed('MoveBackward')
+                || input.isPressed('RotateLeft') || input.isPressed('RotateRight');
+            if (navKey) stopNav('user');
+            const nv = navKey ? null : navStep(g.position.x, g.position.z, d);
+            if (!nv) {
+                // 到点 / 判定失败 / 被按键取消 —— 内部已 `stopNav()` 并通知 UI，
+                // 这里只是把本帧速度清零，下一帧就落回正常的「松开方向键」分支。
+                moving = 0;
+                prevSpeed.current = 0;
+            } else {
+                const want = Math.atan2(nv.dx, nv.dz);
+                let dy = want - g.rotation.y;
+                dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+                g.rotation.y += THREE.MathUtils.clamp(dy, -NAV_TURN * d, NAV_TURN * d);
+                phys.current.speed = nv.speed;
+                _fwdDir.set(Math.sin(g.rotation.y), 0, Math.cos(g.rotation.y));
+                g.position.addScaledVector(_fwdDir, nv.speed * d);
+                moving = nv.speed;
+                prevSpeed.current = nv.speed;
+                autoWasOn.current = true;
+            }
+        } else if (g && MOVE_ON && !frozen && autoRef.current > 0) {
             // ⚠️ 这里必须走 else-if：`solveCam` 每帧也会被调用（`isControlEnabled` 为真），
             //    没有输入时它 `targetSpeed = 0`，但 `s.speed` 上一帧刚被我们设成 AUTOWALK，
             //    只会按 lerp 衰减到 0.9×，而 `moveAngle === null` ⇒ 它退化成
@@ -3089,9 +4546,9 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                     const remA = ((STAND_PH - ph) % 1 + 1) % 1;
                     const remB = (((STAND_PH + 0.5) % 1) - ph) % 1;
                     const remB2 = (remB + 1) % 1;
-                    // ⚠️ 再给一个硬上限 0.4 m：她这条步态的 STRIDE 是 4.35 m，
-                    //   哪怕只走 0.25 个循环也是 1.09 m —— 用户说的「走出很远」
-                    //   就是这个量级。0.4 m ≈ 半步，剩下的姿势差由 SETTLE_SEC`n                    //   （0.45 s）的腿链合成补掉。
+                    /* ⚠️ 再给一个硬上限 0.4 m：哪怕只走 0.25 个循环也很远 —— 用户说的
+                     *   「走出很远」就是这个量级。0.4 m ≈ 半步，剩下的姿势差由 SETTLE_SEC
+                     *   （0.45 s）的腿链合成补掉。 */
                     const rem = Math.min(Math.min(remA, remB2), 0.4 / STRIDE);
                     landRef.current = dist.current + rem * STRIDE;
                     landSpeed.current = Math.max(lastSpeed, LAND_MIN * WALK_SPEED);
@@ -3119,7 +4576,7 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
         //   ⚠️ 2026-10-09（m04735）：原来这里的门槛是 `TREE_COLS.length > 0`，
         //      而树只在**会场**有、飞船在**月球** ⇒ 若照抄，月球那侧的飞船碰撞
         //      会被整段静默跳过（和当年 `CHAR_POS[1]` 那个判据踩的是同一个坑）。
-        if (g && MOVE_ON && !frozen && moving > 0 && (TREE_COLS.length > 0 || SHIP_COL_ON || DESK_COL_ON)) {
+        if (g && MOVE_ON && !frozen && moving > 0 && (TREE_COLS.length > 0 || SHIP_COL_ON || DESK_COL_ON || FOREST_COL_ON)) {
             const dx0 = g.position.x - preX;
             const dz0 = g.position.z - preZ;
             const nominal = Math.hypot(dx0, dz0);
@@ -3142,6 +4599,28 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                         if (dd < 1e-5) { cx = t.x + rr; cz = t.z; }
                         else { cx = t.x + (ex / dd) * rr; cz = t.z + (ez / dd) * rr; }
                         pushed = true;
+                    }
+                    /* ── ★★ 森林树干（用户 2026-10-23 反馈 3「人物直接穿过树干」）────
+                       与上面会场那 26 棵**同一套推出**，只是数据源不同：
+                         · 会场：`core/venueRing.ts` 的静态表（26 件，模块加载时算好）；
+                         · 森林：`core/world/treeCollide.ts` 的注册表，由 `Forest.refill()`
+                           在每次收集实例时整表重建（半径 = frac × h × sxz，见该文件注释）。
+                       `FOREST_COL_ON` 单独一个开关：森林树干密（一次 refill 几百件），
+                       要能在 A/B 时只关它、不动会场的 26 棵。
+                       ⚠️ 这里**必须**并联遍历而不是 `else if`：会场树与森林树可能挨在一起，
+                          只推一个会导致「推出会场树、再插进森林树」的抖动。 */
+                    if (FOREST_COL_ON) {
+                        const fc = treeColliderList();
+                        for (let k = 0; k < fc.length; k++) {
+                            const t = fc[k];
+                            const rr = t.r * FOREST_R_SCALE + CHAR_R;
+                            const ex = cx - t.x, ez = cz - t.z;
+                            const dd = Math.hypot(ex, ez);
+                            if (dd >= rr) continue;
+                            if (dd < 1e-5) { cx = t.x + rr; cz = t.z; }
+                            else { cx = t.x + (ex / dd) * rr; cz = t.z + (ez / dd) * rr; }
+                            pushed = true;
+                        }
                     }
                     /* ── 飞船椭圆碰撞（用户 m04735：「飞船穿模，没做碰撞」）──────
                        推出解抽成了模块级纯函数 `shipPush()`（定义见文件上方常量区）：
@@ -3185,6 +4664,40 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                 }
             }
         }
+        /* ── ★ task-20（用户 m02364 任务5）：月坑浅水涉水 ─────────────────────
+           只在这里「读外部状态 + 乘系数」，**不动** `solveCam`、也**不动**
+           `shipPush()` / `deskPush()` / keepOut 的推出逻辑（上面前两段一行没改）。
+           ① 涉水阻力：水里把**本帧位移**按 `waterPaceAt()` 缩掉，并把
+              `moving` 同比例缩 —— 和上面碰撞那段「按实际位移缩相位」是同一手法，
+              否则播放头（`dist`）跑到位置前面 ⇒ 脚底打滑。
+              ★ 2026-10-21 反馈3：系数**随脚点水深插值**（水线边上 1.0 → 最深处 0.75），
+                不再是常量 0.75 —— 常量手感是「整片水都是一个粘滞平面」。
+           ② 垂直沉降：水里按 `waterSinkAt()` 往下沉最多 4.5 cm，出水后 0.35 s 内
+              线性回位（`_sinkY` 平滑，避免贴地那一步与它打架产生抖动）。
+              为什么需要：只缩水平位移时角色像在冰面上平移，读作「打滑」；
+              人涉水时脚会踩进泥、身体被水托住，**整体略低**才是涉水。
+           ③ 把脚点与速度喂给 `core/world/waterState.ts`：涟漪中心 = 这个脚点，
+              所以波纹**跟着人走**，停下 1.5 s 内衰减干净。
+           玩家允许站在水里（脚在水面下 0.3 m 是正常的），不做游泳、不做浮力。 */
+        if (g && MOVE_ON) {
+            const wetNow = inPond(g.position.x, g.position.z, 0.6);
+            const pace = waterPaceAt(g.position.x, g.position.z);
+            if (wetNow && pace < 1 && moving > 0) {
+                g.position.x = preX + (g.position.x - preX) * pace;
+                g.position.z = preZ + (g.position.z - preZ) * pace;
+                moving *= pace;
+            }
+            /* 沉降：目标值随水深变，用一阶低通追随（出水时自然回升，不突变）。
+               ⚠️ 必须在这里算、并在下面并入 `groundY` —— 不能直接改 `g.position.y`，
+                  因为下面那段贴地会把 y **整个覆写**成 `groundY + ...`，
+                  写在前面等于白写（第一版就是这么踩的，出图完全看不出沉降）。
+               `0.35 s` 是手感平滑的时间常数，不是艺术参数；真值（沉多深）在 `PACE_SINK`。 */
+            const sinkTarget = waterSinkAt(g.position.x, g.position.z);
+            const sinkK = 1 - Math.exp(-(d > 0 ? d : 1 / 60) / 0.35);
+            _sinkY.current += (sinkTarget - _sinkY.current) * sinkK;
+            setPlayerWaterState(g.position.x, g.position.z, moving, delta);
+        }
+
         // 悬浮感 ─────────────────────────────────────────────────────────────
         // ★★ 用户 m07241 给了她步态的**本质**：**走和跑都没有双支撑相**。
         //   - 正常人走路：前脚迈出 → 后脚离地 → 前脚支撑不动 → 后脚向前变前脚落地
@@ -3218,10 +4731,28 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
             //    `worldHeightCPU` 对会场**刻意返回 0**。所以会场的表现与改造前
             //    逐字一致 —— 这是有意的：不为了新区域制造老区域的回归。
             //    月球/浅海才是这次要修的地方，而那里 CPU 与 GPU 是严格相等的。
-            const groundY = CHAR_POS[1] + worldHeightCPU(g.position.x, g.position.z);
+            const groundY = CHAR_POS[1] + worldHeightCPU(g.position.x, g.position.z) + _sinkY.current;
             if (moving > 0.05) {
                 const wp = ((dist.current / STRIDE) % 1 + 1) % 1;
-                const bob = FLOAT_BOB * (1 - Math.cos(2 * Math.PI * (wp - FLOAT_PH))) * 0.5;
+                /* ★★★ 第二十二轮：起伏改成**每步一个抛物线**（一个循环 = 两个）。
+                 *
+                 *  用户给的运动模型（本轮原话）：
+                 *    「她走路并非向前，而是一个**略向上的抛物线**」
+                 *    「需要滞空时稍微抬升整个模型不让她触地，在需要落地时放下」
+                 *    「步态：左脚离地开始迈步 → 左脚落地 → 右脚离地 → 右脚落地」
+                 *
+                 *  ⇒ 一个整圈两步 ⇒ 两个抛物线 ⇒ 一个循环里 **y 有两个谷、两个峰**。
+                 *  旧式 `(1−cos(2π·wp))/2` 只有**一个**峰（周期为整圈），
+                 *  与「每步一次腾空」不符 ⇒ 改成用**步内相位** `sp2` 驱动：
+                 *      y = FLOAT_Y + FLOAT_BOB · (1 − cos(2π·sp2)) / 2
+                 *  其中 `sp2 = frac(stepPhase·2)` 是步内相位（0 = 一只脚落地、0.5 = 另一只脚落地）。
+                 *
+                 *  ⚠️ `FLOAT_PH` 是**谷的相位**（缺省 0.5）：`(1−cos)/2` 在 `sp2 = ph` 处取 0（谷）。
+                 *     取 0.5 ⇒ 谷落在「另一只脚落地」那一刻，与上面的步态 4 阶段对齐。
+                 *  ⚠️ 用 `dist/STRIDE` 而不是墙钟：定格出图可复现（与布线通道同一口径）。
+                 *     两者在本文件里等价（`stepPhase` 也是 `dist/STRIDE` 的模），但这里显式写出来。 */
+                let sp2 = wp * 2; sp2 -= Math.floor(sp2);
+                const bob = FLOAT_BOB * (1 - Math.cos(2 * Math.PI * (sp2 - FLOAT_PH))) * 0.5;
                 g.position.y = groundY + FLOAT_Y + bob;
             } else {
                 g.position.y = groundY + Math.sin(e * 0.5) * BOB_AMP;
@@ -3285,7 +4816,9 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
             //    现在显式给了 `?phase0=` 就按相位定格。
             t = ANIM_T !== null
                 ? ANIM_T
-                : PHASE0 !== null ? (PHASE0 * LOOP_DUR) / ANIM_SPEED : T_FREEZE!;
+                : PHASE0 !== null ? (PHASE0 * LOOP_DUR) / ANIM_SPEED
+                : SEC_CLOCK !== null ? SEC_CLOCK : T_FREEZE!;
+            if (secLock) animT.current = t;
         } else {
             const eff = moving > 0.05
                 ? Math.min(moving, GAIT_CAP)     // 封顶：宁可极限速度下轻微滑步，也不要风火轮
@@ -3305,6 +4838,50 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
             const wrap = physWrapRef.current > 0 ? physWrapRef.current : LOOP_DUR;
             t = tMono % wrap;
             animT.current = t % LOOP_DUR;
+        }
+        /* ★★★ 步态相位写进次级运动（用户 m07388 落脚脉冲的输入）。
+         *
+         *  口径：`dist / STRIDE` 的**小数部分** —— 0 与 0.5 各是一只脚刚落地
+         *  （`LOOP_DUR` 一个整循环 = 两步；相位 0 = 左足着地、0.5 = 右足着地，
+         *   与 `MmdCharacter.tsx` 建链处「第 20 帧左右对调」的实测一致）。
+         *  ⚠️ 用 `dist` 而不是 `animT`：`?tfreeze`/冻结路径下 `animT` 被钉死，
+         *    而 `dist` 在定格时也不动 ⇒ 两种路径都在**同一个相位**上，出图可复现。
+         *  ⚠️ 站定时 `landDone` 会把 `dist` 钉住而 `landPulse` 仍按相位算 ⇒
+         *    站定可能停在「脉冲半途」。所以**站定（moving ≤ 0.05）时不喂相位**
+         *    （保持 NaN）⇒ 整块不跑 ⇒ 站定姿态与改动前逐位一致。
+         *  ★ 诊断旋钮 `?seclandph=`：直接钉死相位（见 `SEC_LAND_PH` 的注释），
+         *    优先级高于 `dist`，且站定时也生效（不然定格出图里没法看指定相位）。 */
+        if (secRef.current) {
+            /* ★★★ 第二十二轮：**起步平滑接入**（用户：「以上说的所有运动，你需要格外注意
+             *  一下开始走的那一下」）。
+             *
+             *  旧行为是硬开关：`moving > 0.05 ? 相位 : NaN`。
+             *  起步那一帧 `stepPhase` 从 NaN 突然变成 0~1 的数字，
+             *  三条布料通道（整片布 / 披肩 / 落脚脉冲）在同一帧从「完全不跑」
+             *  跳到「按当前相位全力跑」⇒ 视觉上一记突兀的抽动。
+             *
+             *  改法：给每条通道一个**权重斜坡** `gaitW ∈ [0,1]`，起步后约
+             *  `?gaitfade=` 秒（缺省 0.35）线性升到 1，停步后再降回 0。
+             *  通道内部把角度乘以这个权重 ⇒ 起步是"渐入"，不是"啪一下出现"。
+             *  ⚠️ 站定时 `moving ≤ 0.05` 仍要喂 NaN（否则 landPulse 会停在半途），
+             *     所以斜坡只乘**幅度**、不改相位的供给条件。 */
+            const onNow = moving > 0.05;
+            const wPrev = gaitWRef.current;
+            gaitWRef.current += ((onNow ? 1 : 0) - gaitWRef.current)
+                * Math.min(1, d / Math.max(0.02, GAIT_FADE_SEC));
+            if (gaitWRef.current < 0.002) gaitWRef.current = 0;
+            secRef.current.gaitW = gaitWRef.current;
+            /* ★ 第二十二轮：**起步脉冲**的时间轴。
+             *  「从站定第一次进入走路」那一帧把 startT 归 0，之后累加；
+             *  停步（gaitW 掉回 0）时置 −1 表示"不在起步期"。
+             *  用途见 `SecondaryRig.startT`：给头发一个与相位无关的起扬脉冲。 */
+            if (onNow && wPrev <= 0.0001) secRef.current.startT = 0;
+            else if (!onNow && gaitWRef.current <= 0) secRef.current.startT = -1;
+            else if (secRef.current.startT >= 0) secRef.current.startT += d;
+
+            secRef.current.stepPhase = SEC_LAND_PH !== null
+                ? SEC_LAND_PH
+                : (onNow ? (((dist.current / STRIDE) % 1) + 1) % 1 : NaN);
         }
         // 物理解算的驱动（用户 m08676 任务3(2)）：
         //  · 运动帧：`physics: true`，加载器内部走 `stepExternalPhysics`。
@@ -3334,6 +4911,10 @@ export function MmdCharacter({ visible = true }: { visible?: boolean }) {
                     //   放在这里（而不是建链处）的理由：`model.update()` 会把每一根骨的四元数
                     //   按动画**整份重写** ⇒ 在它前面乘的任何旋转都会被抹掉。
                     applyStance();
+                    /* ★ 任务4：胳膊外展。放在 stance 之后 —— 转的是完全不同的骨
+                     *  （`左腕`/`右腕` vs `左足`/`右足`），顺序其实无所谓，
+                     *  但都必须在 `model.update()` **之后**（否则被动画整份重写）。 */
+                    applyArmAbd(1 / 60, moving);
                     return r;
                 };
                 if (l.physics && frozen) {

@@ -9,15 +9,13 @@ import { smaa } from "three/addons/tsl/display/SMAANode.js";
 
 import { useGameStore, CameraMode } from "../../core/store/gameStore";
 import { useEffectsControls } from "./useEffectsControls";
-import { BeamSceneContext, FOCUS_DIST } from "../../app/App";
-import { useContext } from "react";
+import { FOCUS_DIST } from "../../app/App";
 
 export default function Effects() {
   const { isHighQuality, cameraMode, bloom: bloomCfg, dof: dofCfg, toneMapping: tmCfg, smaa: smaaEnabled } = useEffectsControls();
 
   const characterRef = useGameStore((state) => state.characterRef);
   const { gl, scene, camera } = useThree();
-  const beamScene = useContext(BeamSceneContext);
 
   const postProcessingRef = useRef<THREE.PostProcessing | null>(null);
 
@@ -67,10 +65,6 @@ export default function Effects() {
     const sceneTex = scenePass.getTextureNode('output');
     const sceneDepth = scenePass.getViewZNode();
 
-    const beamPass = pass(beamScene as THREE.Scene, camera);
-    const beamColor = beamPass.getTextureNode('output');
-    const beamDepth = beamPass.getViewZNode();
-
     const uvNode = uv();
 
     const getBaseColor = Fn(() => {
@@ -107,10 +101,6 @@ export default function Effects() {
         uParams.current.bokeh
       );
     }
-
-    const depthDiff = beamDepth.sub(sceneDepth);
-    const beamOcclusion = smoothstep(float(0), float(10), depthDiff);
-    finalNode = finalNode.add(beamColor.mul(beamOcclusion));
 
     const vignette = smoothstep(0.2, 0.8, dist);
     const mask = clamp(float(1.0).sub(vignette), 0.0, 1.0);

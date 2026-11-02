@@ -20,6 +20,7 @@
 
 import { create } from 'zustand';
 import { LETTERS, QUESTS, type Quest } from './copy';
+import { pointXZ } from './layout';
 
 /* ==================================================================
  * 阶段
@@ -79,6 +80,21 @@ interface GameState {
     picked: Record<string, boolean>;
     /** 已交付（完成）的委托 id。 */
     delivered: string[];
+    /**
+     * 「最后一个委托已交付，但交付台词还没播完」—— 该切宴会了，**先等对话**。
+     *
+     * 用户任务13原话：「当最后一个委托交付时，按 F 直接开始刷新切蛋糕场景，
+     * 委托交付对话在切换场景之后才会刷出，改为先完成委托交付对话，再切换场景。」
+     *
+     * 旧实现：`deliverQuest` 在**同一个 `set` 里**就把 `phase` 改成 `'feast'`，
+     * 于是 `GameLayer` 当帧卸载站姿 NPC、挂上宴会并拉起 `BlackFade`（zIndex 90），
+     * 而 `DialogBox` 只有 zIndex 40 ⇒ 玩家在黑屏上盲翻台词。
+     *
+     * 现在：交付只记 `pendingFeast`；对话走到最后一句（`nextDialogLine`）或玩家
+     * 跳过/关掉对话（`closeDialog`）时才由 `commitPendingFeast()` 兑现成
+     * `phase: 'feast'`。`Game` 层还有一层兜底（见 `GameLayer.tsx` 的待切宴会 effect）。
+     */
+    pendingFeast: boolean;
 
     /* ── 任务③ 切蛋糕 ── */
     /** 蛋糕已切。 */
@@ -124,6 +140,10 @@ interface GameState {
     /** 标记**某一处**采集点已被采走（键 = `pointId:index`，见 `picked` 的注释）。 */
     pickSpot: (key: string) => void;
     deliverQuest: (id: string) => void;
+    /** 把「待切宴会」（`pendingFeast`）兑现成 `phase: 'feast'`。幂等，没 pending 时不动。 */
+    commitPendingFeast: () => void;
+    /** 测试按钮「完成当前任务」（用户任务15）：只结算**已接取、未交付**的委托。 */
+    finishAcceptedQuests: () => void;
 
     cutCake: () => void;
     closePhoto: () => void;
@@ -137,7 +157,9 @@ interface GameState {
     addShot: (url: string) => void;
     openAlbum: () => void;
     closeAlbum: () => void;
-    showToast: (text: string, sub?: string) => void;
+    /** 弹一条屏幕中央提示，**`ms` 毫秒后自己消失**（缺省 `TOAST_MS_DEFAULT`）。
+     *  传 `ms = 0` 表示「不自动消失」，交给调用方自己 `clearToast()`。 */
+    showToast: (text: string, sub?: string, ms?: number) => void;
     clearToast: () => void;
     setFade: (f: { title: string; sub: string } | null) => void;
 
@@ -156,6 +178,7 @@ const initial = {
     collected: {} as Record<string, number>,
     picked: {} as Record<string, boolean>,
     delivered: [] as string[],
+    pendingFeast: false,
     cakeCut: false,
     photoSeen: false,
     dialog: null,
@@ -166,6 +189,24 @@ const initial = {
     toast: null,
     fade: null,
 };
+
+/* ── Toast 自动消失（用户任务5）─────────────────────────────────────────
+ * 以前 toast 只由调用方各自 `window.setTimeout(clearToast)`，两个毛病：
+ *   ① 拍照那条路径**忘了**起定时器 ⇒ 提示永久停在屏幕中央；
+ *   ② 连续两次提示时，第 1 次留下的 clearToast 会把第 2 次刚弹出来的提示提前清掉
+ *      （表现为「一闪而过」）—— 见 `GameLayer.tsx` 里旧的那段注释。
+ * 所以定时器**只有一份**，放在 store 外面（它是副作用句柄，进 state 只会白白触发重渲染，
+ * 又成不了渲染依据），由 `showToast` 自己持有、每次先清旧的。
+ */
+const TOAST_MS_DEFAULT = 2600;
+let _toastTimer: number | null = null;
+
+function stopToastTimer() {
+    if (_toastTimer !== null) {
+        window.clearTimeout(_toastTimer);
+        _toastTimer = null;
+    }
+}
 
 export const useGameStore2 = create<GameState>((set, get) => ({
     ...initial,
@@ -211,7 +252,9 @@ export const useGameStore2 = create<GameState>((set, get) => ({
     pickSpot: (key) =>
         set((s) => (s.picked[key] ? s : { picked: { ...s.picked, [key]: true } })),
 
-    /** 交付：标记完成；14 个全完成则进 `feast` 阶段。 */
+    /** 交付：标记完成。**不直接切 `feast`** —— 交付台词还没播（用户任务13）：
+     *  最后一个委托交付时只记 `pendingFeast`，等对话收尾才由 `commitPendingFeast()`
+     *  兑现成 `phase: 'feast'`。原因见上面 `pendingFeast` 字段的注释。 */
     deliverQuest: (id) =>
         set((s) => {
             if (s.delivered.includes(id)) return s;
@@ -219,7 +262,60 @@ export const useGameStore2 = create<GameState>((set, get) => ({
             const all = delivered.length >= QUESTS.length;
             return {
                 delivered,
-                ...(all ? { phase: 'feast' as Phase } : {}),
+                ...(all ? { pendingFeast: true } : {}),
+            };
+        }),
+
+    commitPendingFeast: () =>
+        set((s) =>
+            s.pendingFeast ? { pendingFeast: false, phase: 'feast' as Phase } : s,
+        ),
+
+    /* ★ 2026-10-20 用户任务15：测试按钮「完成当前任务」。
+     *
+     * 与 `__game.deliverAll()` 的区别（**别混用**）：
+     *   `deliverAll()` 是验收探针 —— 不管接没接，14 条全塞进 `delivered`；
+     *   本动作只结算 `accepted` 里**还没交付**的那些，模拟玩家把接到的活干完。
+     *
+     * 采集/到访类必须**同时**补两本账，否则症状很迷惑：
+     *   · `collected[委托id]` 不补 → 任务列表进度不涨、`canDeliver` 仍 false；
+     *   · `picked[点id:下标]` 不补 → 地上那几株道具**还在**、互动点仍可点，
+     *     玩家会看到「任务已完成，但东西还能摘」的鬼画面。
+     *   一个点位有几个实例由 `pointXZ` 的长度决定（`POINT_SPOTS` 是唯一真值），
+     *   所以按长度整组写满，而不是只写一条。
+     *
+     * `talk` 类不看采集数（`canDeliver` 对它恒 false），直接算交付。 */
+    finishAcceptedQuests: () =>
+        set((s) => {
+            const todo = s.accepted.filter((id) => !s.delivered.includes(id));
+            if (!todo.length) return s;
+
+            const collected = { ...s.collected };
+            const picked = { ...s.picked };
+            const delivered = [...s.delivered];
+
+            for (const id of todo) {
+                const q = QUESTS.find((x) => x.id === id);
+                if (!q) continue;
+                if (q.kind !== 'talk') {
+                    const need = q.count ?? 1;
+                    if ((collected[id] ?? 0) < need) collected[id] = need;
+                    if (q.pointId) {
+                        const n = pointXZ(q.pointId).length;
+                        for (let i = 0; i < n; i++) picked[`${q.pointId}:${i}`] = true;
+                    }
+                }
+                delivered.push(id);
+            }
+
+            /* 凑满 14 条：**不在这里切场景** —— 走任务13 的 `pendingFeast`，
+             * 由 `GameLayer` 的兜底 effect 在没有对话时兑现（这个按钮没有对话）。 */
+            const all = delivered.length >= QUESTS.length;
+            return {
+                collected,
+                picked,
+                delivered,
+                ...(all ? { pendingFeast: true } : {}),
             };
         }),
 
@@ -252,11 +348,25 @@ export const useGameStore2 = create<GameState>((set, get) => ({
         set((s) => {
             if (!s.dialog) return s;
             const next = s.dialog.line + 1;
-            if (next >= s.dialog.lines.length) return { dialog: null };
+            if (next >= s.dialog.lines.length) {
+                /* 最后一句读完了 —— 这才是「交付对话已播完」，此刻才允许切场景
+                 * （用户任务13）。同一 `set` 里清 dialog + 兑现 pendingFeast，
+                 * 保证渲染时不会出现「对话还开着但场景已经切了」的中间态。 */
+                return s.pendingFeast
+                    ? { dialog: null, pendingFeast: false, phase: 'feast' as Phase }
+                    : { dialog: null };
+            }
             return { dialog: { ...s.dialog, line: next } };
         }),
 
-    closeDialog: () => set({ dialog: null }),
+    /* 跳过/关掉对话也要能推进 —— 否则最后一个委托交付后玩家一按 Esc 就永远卡在
+     * `pendingFeast`（宴会永远不来）。这里与 `nextDialogLine` 的收尾走同一套兑现。 */
+    closeDialog: () =>
+        set((s) =>
+            s.pendingFeast
+                ? { dialog: null, pendingFeast: false, phase: 'feast' as Phase }
+                : { dialog: null },
+        ),
 
     openPhoto: (url, caption) => set({ photo: { url, caption } }),
 
@@ -272,11 +382,27 @@ export const useGameStore2 = create<GameState>((set, get) => ({
     openAlbum: () => set({ albumOpen: true }),
     closeAlbum: () => set({ albumOpen: false }),
 
-    showToast: (text, sub = '') => set({ toast: { text, sub } }),
-    clearToast: () => set({ toast: null }),
+    showToast: (text, sub = '', ms = TOAST_MS_DEFAULT) => {
+        // 先清上一个定时器：否则「第 1 次的到期」会掐掉第 2 次刚弹出的提示
+        stopToastTimer();
+        set({ toast: { text, sub } });
+        if (ms > 0) {
+            _toastTimer = window.setTimeout(() => {
+                _toastTimer = null;
+                useGameStore2.setState({ toast: null });
+            }, ms);
+        }
+    },
+    clearToast: () => {
+        stopToastTimer();
+        set({ toast: null });
+    },
     setFade: (f) => set({ fade: f }),
 
-    reset: () => set({ ...initial }),
+    reset: () => {
+        stopToastTimer();
+        set({ ...initial });
+    },
 }));
 
 /* ==================================================================

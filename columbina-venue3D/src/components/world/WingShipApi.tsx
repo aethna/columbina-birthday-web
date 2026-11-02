@@ -49,6 +49,8 @@ import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { QNUM } from '../../core/utils/query';
 import { CRATERS, worldHeightCPU } from '../../core/worldRegions';
+import { setShipKeepOut } from '../../core/world/keepOut';
+import { syncKeepOutUniforms } from '../grass/hooks/useGrassUniforms';
 import { placeOnTerrain } from './MoonShip';
 
 import shipGlbUrl from '../../assets/wingship_api/Ship01.glb?url';
@@ -136,6 +138,14 @@ async function buildApi(sb: string[]): Promise<THREE.Group | null> {
 
     const halfL = s1.z / 2;
     const halfW = s1.x / 2;
+    /* ★★ 船肚子下面不长草/花（用户 m02038：要「草不穿模」这套范式跟邀请函月牙桌同一份真值）。
+       把船的占地椭圆写进 `core/world/keepOut.ts` 的第 9 个槽（`KEEP_OUT_MAX` 已 8→9），
+       再刷新草的 keep-out uniform —— 与 `GameLayer.tsx:195` 对道具 keep-out 的用法完全一致。
+       ⚠️ 传参是 `(半宽, 半长, 绕 Y 弧度)`：`halfW = 展向/2 = 8.25`、`halfL = 船长/2 = 13.00`，
+          顺序别写反（`keepOut.ts:191 setShipKeepOut`）。
+       ⚠️ 只在 `WAPI_ON` 时 `buildApi` 才会跑（见下面 useEffect 的早退），所以 `?wapi=0`
+          不会在坑底凭空压出一块秃地。 */
+    if (setShipKeepOut(halfW, halfL, (API_YAW * Math.PI) / 180)) syncKeepOutUniforms();
     sb.push(
         `[wingship-api] 原始 ${s0.x.toFixed(3)}x${s0.y.toFixed(3)}x${s0.z.toFixed(3)}` +
         ` × ${k.toFixed(3)} ⇒ ${s1.x.toFixed(2)}x${s1.y.toFixed(2)}x${s1.z.toFixed(2)} 米` +

@@ -34,6 +34,7 @@ import {
 } from 'three/tsl';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { QNUM } from '../../core/utils/query';
+import { R_VIS, VISR_ON, outsideVis } from '../../core/world/visRadius';
 import { REGION_BY_ID, scatterRegion, type ScatterItem } from '../../core/worldRegions';
 import { loadMoonRegolith, type GroundMaps } from '../../core/textures/groundMaps';
 import { uSunDir } from '../../core/shaders/uniforms';
@@ -347,13 +348,29 @@ export function RegionProps({ visible = true }: { visible?: boolean }) {
     }, []);
     /* ★★ 距离剔除 —— 与 `VenuePropsReal` 同一件事（用户 m02260 / m02439）。
        月岩散置在月球区（中心 0,-196、半径 40）里，地形盘半宽 80 m，
-       相机离月球中心超过 140 m 时它们已经在地形盘外，直接不发 draw call。 */
+       相机离月球中心超过 140 m 时它们已经在地形盘外，直接不发 draw call。
+       ★ 2026-10-20 task-15：上面这条 140 m 是**整组开关**，粒度太粗 ——
+         从会场（离月心 ~196 m）看，整组是关的；但站在会场附近朝别的方向，
+         浅海那批礁石 / 岛上树在 40~130 m 依然被提交。
+         用户在 10-20 反馈3/4 里要的是「相机 40 m 之外一律不画」⇒ 这里再叠一层
+         **逐件**剔除（每件都是独立 mesh，位置已在世界坐标里），判据取唯一真值
+         `core/world/visRadius.ts` 的 `R_VIS`。整组 140 m 那条保留（`?visr=0` 时
+         就完全回到旧行为）。 */
     const HIDE_R = 140;
     const MOON_CX = 0, MOON_CZ = -196;
+    const _wp = new THREE.Vector3();
     useFrame(({ camera }) => {
         if (!group) return;
         const dx = camera.position.x - MOON_CX, dz = camera.position.z - MOON_CZ;
-        group.visible = visible && dx * dx + dz * dz < HIDE_R * HIDE_R;
+        const on = visible && dx * dx + dz * dz < HIDE_R * HIDE_R;
+        group.visible = on;
+        if (!on || !VISR_ON) return;
+        /* 逐件：超过 `R_VIS` 直接不提交（`visible=false` 只影响渲染，不动几何）。 */
+        group.traverse((o) => {
+            if (o === group || !(o as THREE.Mesh).isMesh) return;
+            o.getWorldPosition(_wp);
+            o.visible = !outsideVis(_wp.x, _wp.z, camera.position.x, camera.position.z, R_VIS);
+        });
     });
     if (!group) return null;
     return <primitive object={group} visible={visible} />;

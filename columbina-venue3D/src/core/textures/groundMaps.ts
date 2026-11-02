@@ -60,9 +60,9 @@ function loadTex(url: string, srgb: boolean): Promise<THREE.Texture> {
 export function loadMoonRegolith(): Promise<GroundMaps> {
     const dir = '/textures/ground'
     return Promise.all([
-        loadTex(`${dir}/moon_dusted_01_diff_2k.jpg`, true),
-        loadTex(`${dir}/moon_dusted_01_nor_gl_2k.jpg`, false),
-        loadTex(`${dir}/moon_dusted_01_rough_2k.jpg`, false),
+        loadTex(`${dir}/moon_dusted_01_diff_2k.png`, true),
+        loadTex(`${dir}/moon_dusted_01_nor_gl_2k.png`, false),
+        loadTex(`${dir}/moon_dusted_01_rough_2k.png`, false),
     ]).then(([albedo, normal, rough]) => ({
         albedo,
         normal,
@@ -77,9 +77,9 @@ export function loadMoonRegolith(): Promise<GroundMaps> {
 export function loadMoonMeteor(): Promise<GroundMaps> {
     const dir = '/textures/ground'
     return Promise.all([
-        loadTex(`${dir}/moon_meteor_01_diff_2k.jpg`, true),
-        loadTex(`${dir}/moon_meteor_01_nor_gl_2k.jpg`, false),
-        loadTex(`${dir}/moon_meteor_01_rough_2k.jpg`, false),
+        loadTex(`${dir}/moon_meteor_01_diff_2k.png`, true),
+        loadTex(`${dir}/moon_meteor_01_nor_gl_2k.png`, false),
+        loadTex(`${dir}/moon_meteor_01_rough_2k.png`, false),
     ]).then(([albedo, normal, rough]) => ({
         albedo,
         normal,

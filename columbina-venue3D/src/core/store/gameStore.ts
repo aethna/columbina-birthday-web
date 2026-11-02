@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { Group } from 'three';
 import { AudioListener } from 'three/webgpu';
 import * as THREE from 'three/webgpu';
-import { QUALITY } from '../qualityPresets';
 
 export enum CameraMode {
   Follow  = 0,
@@ -111,9 +110,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   isMobile: false,
   setIsMobile: (isMobile) => set({ isMobile: isMobile }),
 
-  // 由 ?quality= 决定初始档位：low 档关后期；high/max 都走高画质后期
-  // （max 与 high 的差别在草叶密度，由 qualityPresets 在启动时定死）
-  quality: QUALITY === 'low' ? 'low' : 'high',
+  quality: 'high',
   toggleQuality: () => set((state) => ({ quality: state.quality === 'high' ? 'low' : 'high' })),
 
   isControlEnabled: false,

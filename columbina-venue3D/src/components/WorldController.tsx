@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useMemo } from 'react';
+import { Suspense, useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useControls } from 'leva';
 import * as THREE from 'three/webgpu';
@@ -17,7 +17,6 @@ import {
     uTerrainColor,
 } from '../core/shaders/uniforms';
 import { groundFogNode, updateGroundFog } from '../core/shaders/groundFog';
-import { CosmicSystem } from './cosmic/CosmicSystem';
 import { Terrain } from './Terrain';
 import { StarrySky } from './background/StarrySky';
 import { useGameStore } from '../core/store/gameStore';
@@ -30,6 +29,8 @@ import { VenueProps, PROPS_ON } from './venue/VenueProps';
 import { VenuePropsReal, REAL_ON } from './venue/VenuePropsReal';
 import { RegionProps } from './world/RegionProps';
 import { Forest } from './world/Forest';
+/* ★ task-20：月坑浅水（`?craterwater=0` 关）。 */
+import { CraterWater } from './water/CraterWater';
 import { MoonShip } from './world/MoonShip';
 import { WingShip } from './world/WingShip';
 import { WingShipApi } from './world/WingShipApi';
@@ -41,7 +42,10 @@ import { WingShipApi } from './world/WingShipApi';
    `?psky=0` 可退回老路（渐变那条仍然在跑）。见该文件顶部注释。 */
 import { PhysicalSky } from './background/PhysicalSky';
 import { VENUE } from '../core/venuePalette';
-import { regionWeights, forestWeight, worldHeightCPU } from '../core/worldRegions';
+import { regionWeights, forestWeight, worldHeightCPU, CRATERS } from '../core/worldRegions';
+import { R_VIS, VISR_ON, useVisGate } from '../core/world/visRadius';
+/* 森林剔除半径：雾的远端从这份真值推导，别各写一个常数（见下方 FOREST_FOG_FAR 注释）。 */
+import { CULL_R } from '../core/forest';
 import { SkyClock, sunStateFor } from '../core/sky/sunCycle';
 import { MmdCharacter, MMD_ON } from './columbina/MmdCharacter';
 import { GameLayer } from './game/GameLayer';
@@ -139,6 +143,26 @@ const FOG_ON = QNUM('fog', 1)! > 0 ? 1 : 0;
  *    之后靠 uniform 在三种区域之间插值。
  * ⚠️ `?ffog=` 的语义跟着变：现在它是 **`far` 的倍率**（0.5~2），`?ffog=0` 仍然是完全关雾。 */
 const FOREST_FOG_FAR_SCALE = QNUM('ffog', 1)!;
+/* ★★ 2026-10-21 第四轮反馈 4b：「草地之外的地板也渲染了」★★
+ *
+ *  用户要 Minecraft 的渲染距离语义 ⇒ 40 m 外**只留裸基底**。
+ *  地形细节在 40 m 处已经由 `shaders/worldHeight.ts` 的 `renderFadeNode()` 归零
+ *  （`Terrain.tsx` 的每一条细节层都乘了它），但**地形网格本身不能删**
+ *  （它是地面，删了就露出虚空）。
+ *
+ *  所以剩下的收尾工作在这里：雾必须**在 40 m 之后还有一小段**，
+ *  让「细节没了」这件事被雾接住，而不是在 40 m 处出现一条「细节/裸基底」的硬圆环。
+ *
+ *  ⚠️ 历史口径与本次的区别：
+ *    · task-15 把 far 收到 `CULL_R = 40`（= 树在 40 m 一刀切、雾在 40 m 满）。
+ *      那时 40 m 外是**全雾色**，本来就是平的 —— 站在地面看不到「地板」。
+ *    · 现在 `renderFadeNode` 在 39→45 m 才把细节收干净，若 far 仍然正好 40，
+ *      40~45 m 那一圈会**细节已经半退、雾还没满** ⇒ 一条可辨的过渡环。
+ *    ⇒ far 乘 1.35（= 54 m）把雾墙拉长到细节完全退干净之后。
+ *      40 m 处透过率仍是 (40-20)/(54-20) ≈ 59% 的雾，观感更通透一点，
+ *      换来的是 45 m 处 100% 雾、边界彻底化掉。
+ *      要回旧口径：`?ffog=0.74`（= 40 m）；`?rvfade=0&rvfade2=0` 可把细节改回硬切。 */
+const FOG_FAR_4B = QNUM('fogfar4b', 1.35)!;
 /** 森林雾色的**白天**基色。夜里的深色见 `FOREST_FOG_NIGHT`。
  *  ★ 2026-10-19：原缺省 `#9bcaba` 是淡薄荷绿（亮度 ~192），夜里等于一块发光的
  *    薄荷色板。改成 `#8fb0a6`（亮度 ~166，蓝绿倾向、饱和度更高）作白天基色，
@@ -147,10 +171,53 @@ const FOREST_FOG_COLOR = QCOL('ffcol', '#8fb0a6')!;
 /** 森林雾的**夜间**色：深青（亮度 ~62）。夜里雾本该比远处树冠暗一档，这样树才
  *  有剪影；再亮就又回到「白纱」了。 */
 const FOREST_FOG_NIGHT = '#1e3735';
-const FOREST_FOG_NEAR = 42;
-const FOREST_FOG_FAR = 70 * FOREST_FOG_FAR_SCALE;
-const VENUE_FOG_NEAR = 38;
-const VENUE_FOG_FAR = 82;
+/* ★★ 2026-10-20 task-7：森林雾要**比树的剔除半径更近**一步到位。
+ *  树现在在 `CULL_R = 52 m` 处一刀切（`core/forest.ts`）。雾如果还是 42/70，
+ *  52 m 处的透过率是 (52-42)/28 ≈ 64% ⇒ 边界一眼可辨（「树突然没了」的硬边）。
+ *  改成 28/52：52 m 处雾已经 100%，边界完全化在雾里；28 m 起雾还比原来更近，
+ *  正好把用户要的「渲染范围收到草地圆盘」在小屏幕上读成「林子里有雾」。
+ *  ⚠️ 只影响森林（`forestWeight > 0` 的地方），会场/月球一个字没动。
+ *  ⚠️ `?ffog=` 仍然是远端的倍率：`?ffog=1.34` 可回到旧的 70 m 口径。 */
+/* ★★★ 2026-10-20 task-15：雾与可见半径收到**同一口径 = 草盘边缘 40 m** ★★★
+ *  裁定见 `core/world/visRadius.ts` 文件头（用户 10-20 反馈3/4）。
+ *  之前是 task-7 的森林 28 / 52：树的剔除半径 52 m，雾到 52 m 才满 ⇒ 用户红线在 40 m，
+ *  于是 40~52 m 这一圈**雾还没到、树还在画**，正是反馈3 里那一排「落在红线外的树」。
+ *  现在：树 40 m 一刀切，雾 20 m 起、**40 m 满** ⇒ 树的边界和草的边界、雾的边界三者重合，
+ *  「红线之外」只剩被雾吃掉的地形（地形是地面，不能删）。
+ *  ⚠️ 与会场雾的分工没变：`wf = forestWeight(相机)` 仍是插值权重，
+ *     只是两套参数的 **far 都收到 ≈ `R_VIS`**。
+ *  ⚠️ `?ffog=` 仍然是**森林** far 的倍率（`?ffog=1.3` 回到 52 m 口径做对照）；
+ *     会场 far 不再吃这个开关（它是固定 46，`?visr=0` 时也一样）。
+ *  ⚠️ 天空 / 星星 / 月亮 / 星球全部 `fog={false}`（见 `background/*.tsx`），
+ *     所以雾收到 40 m **不会**把月亮和星空糊掉。
+ *
+ * ★★★ 2026-10-21 反馈4 最终口径：**树 40 m / 雾 40 m 满，一起走** ★★★
+ *  用户澄清了红线语义（原话）：「比如我的世界，我把渲染距离设置为 40 m，
+ *  那么 40 m 外啥都看不见，但是角色走到哪里，地图上该有的东西进了 40 m 就会
+ *  渲染出来，出了 40 m 就看不见。」
+ *  ⇒ 40 m 是**流式渲染边界**，雾必须在**同一距离**收满，边界才化在雾里、
+ *    看不到「树突然没了」的硬边。这两个数必须从同一份真值推导，不能各写一个常数。
+ *
+ *  ⚠️ 中间有一版把两者一起抬到 96（理由「40 m 圆里只有 6.7 棵树」）——
+ *    那是把**密度问题**错当成**半径问题**去解，等于拆掉用户要的渲染距离。
+ *    真正的修法在 `core/forest.ts`：半径不动，把 40 m 内的树层密度和
+ *    `FAR_TIERS` 抽稀曲线改对。 */
+const FOREST_FOG_NEAR = 20;
+/* 远端 = 森林剔除半径本身（已含 `?far=` 乘子），再乘 `?ffog=` 做人工微调。
+ * 雾在树消失的**同一距离**才满 ⇒ 边界化在雾里，看不到「树突然没了」的硬边。
+ * ⚠️ 直接 import `CULL_R`，以后动 `?fcull=` / `?far=` 时雾自动跟随，
+ *    不会再出现「树和雾两个口径」的历史 bug（task-7 与 task-15 各踩过一次）。 */
+const FOREST_FOG_FAR = CULL_R * FOREST_FOG_FAR_SCALE * FOG_FAR_4B;
+/* 会场：原来 38 / 82（为了保住月夜星空的通透）。
+ *   · 26 m 起雾 ⇒ 会场本体（长桌、蛋糕、书架、NPC 都在这 15 m 内）一点不糊；
+ *   · far 回到 46：与森林雾同一距离收满。树在距会场中心 70 m 才出件这件事
+ *     不影响观感 —— 人只要**走出会场**（离中心 > 62 m），相机周围 40 m 内
+ *     就是满密度的森林（z ≈ -70 起），此时用的是森林雾那一套，不是会场雾。
+ *   · 中间有一版抬到 96 是为了让「站在会场中心望出去」能看穿到 70 m 外的树，
+ *     但那等于把会场月夜星空的通透感也一起糊掉，且用户要的是「走过去能看到」，
+ *     不是「站在会场里能远眺」——所以退回 46。 */
+const VENUE_FOG_NEAR = 26;
+const VENUE_FOG_FAR = 46 * FOG_FAR_4B;
 /* 预先建好 Color 对象：`lerp` 每帧都要用，别在 useFrame 里 new（GC 抖动）。
  * `FOREST_FOG_COLOR_OBJ` 是**每帧写入**的最终色（白天基色 ↔ 夜间色的插值结果）。 */
 const FOREST_FOG_DAY_OBJ = new THREE.Color(FOREST_FOG_COLOR);
@@ -164,7 +231,15 @@ const FOREST_FOG_COLOR_OBJ = new THREE.Color();
  * ★ `GF_TOP` 曾用 5.5：62 m 外**所有低于 5.5 m 的东西**（= 全部树干）被白雾
  *   整个刷掉，出图只剩树冠团浮在雾上（T3_eye 验收翻车原因）。2.5 = 只盖
  *   「地面 + 膝盖以下」，树干从膝高起完整露出，远景依然有雾墙遮秃地。 */
-const GF_ON = QNUM('gf', 1)!;
+/* ★★ 2026-10-23 第九轮（用户 m02119「把这个贴地白雾关掉」）：缺省改成 **0 = 关**。
+ *   要回到白雾墙行为：`?gf=1`（浓度 `?gfden=`、标高 `?gfh=`、最大占比 `?gfmax=`）。
+ * ⚠️⚠️ 关掉它的同时**不能**把 `updateGroundFog()` 一起停掉（见下方 useFrame）：
+ *   那个函数除了推雾参数，还每帧写 `GCOLOR = GROUND_FOG_COLOR`，而后者是
+ *   `Terrain.tsx` 里「40 m 外地面压色」的**目标色**。只 gate `scene.fogNode`
+ *   的挂载、仍然照常推进 uniform，否则 `GCOLOR` 会冻在缺省 `#2e4a5a`。
+ *   挂了 `scene.fogNode` 时线性雾（`scene.fog`）会被 three 的 `getFogNode()`
+ *   短路掉（`return scene.fogNode || ...`），所以两者只有一个生效。 */
+const GF_ON = QNUM('gf', 0)!;
 /* ═══ 2026-10-19 第三次重写：从「圆环 + 硬天花板」改成**指数高度雾** ═══
  * 用户 m03988：「雾又变成蓝色条带了。为啥要么白的发亮，要么看不见，
  * 就做不出朦胧感么？」—— 根因在 `shaders/groundFog.ts` 的形状：
@@ -232,6 +307,31 @@ const GF_MIST_TOP_OBJ = new THREE.Color();
  *   ⚠️ 别再把它调回 10 m 以上：只要遮罩盖住树冠，白球树就会回来。 */
 const GF_DSTRENGTH = QNUM('gfd', 0.5)!;
 const GF_DTOP = QNUM('gfdtop', 4.0)!;
+
+/** 会场中心（宴会长桌那一带）—— 会场道具整组剔除用的圆心。 */
+const VENUE_GATE_X = 0;
+const VENUE_GATE_Z = -6;
+/** 三艘「月船」的落点（`CRATERS[0]` 圆心）—— 整组剔除用的圆心。 */
+const SHIP_GATE_X = CRATERS[0].x;
+const SHIP_GATE_Z = CRATERS[0].z;
+
+/**
+ * ★★ task-15：给整棵子树挂「相机距离超过 `R_VIS` 就不提交绘制」的开关。
+ *
+ * 为什么不改各组件内部：船（`WingShipApi` 26.9 MB GLB / 499,834 三角）、
+ * 会场道具（`VenuePropsReal`）各自已经有自己的 `visible` 语义
+ * （`?wapi=0` / `?ship=1` / `?props=0` / 阶段门控），在**挂载层**加一层
+ * 只会额外隐藏、不会反向打开 ⇒ 不动它们的内部逻辑，也不和别处的开关打架。
+ *
+ * 判据的唯一真值在 `core/world/visRadius.ts`（`R_VIS` / `?visr=`），本组件只是消费者。
+ */
+function VisGate({ x, z, enabled = true, children }: {
+    x: number; z: number; enabled?: boolean; children: React.ReactNode;
+}) {
+    const ref = useRef<THREE.Group>(null);
+    useVisGate(ref, x, z, enabled);
+    return <group ref={ref}>{children}</group>;
+}
 
 export function WorldController() {
     const setActiveTargets = useGameStore((state) => state.setActiveTargets);
@@ -381,10 +481,14 @@ export function WorldController() {
          * ⚠️ 地面高度基准取**相机脚下的地形高度**（`worldHeightCPU`），不能取 y=0：
          *    地形本身有 ±5 m 起伏，用绝对 0 会让低洼处整片是雾。
          * ⚠️ 月球是真空 ⇒ 权重乘 (1 - wr.moon)。 */
-        if (GF_ON > 0) {
+        /* ★★ 2026-10-23 第九轮：**uniform 每帧照推，只有挂载受 `?gf` 控制**。
+         *   理由见上面 `GF_ON` 的注释 —— `updateGroundFog()` 顺带承担
+         *   「每帧把雾色写进 `GCOLOR`」，而 `GCOLOR` 是 `Terrain.tsx` 40 m 外
+         *   压色的目标色。关雾却停推颜色 ⇒ 目标色冻回 `#2e4a5a`（暗蓝），
+         *   40 m 外会从「雾色」变成一圈暗蓝——那是回归，不是关雾。 */
+        {
             const camX = camera.position.x, camZ = camera.position.z;
             const gy = worldHeightCPU(camX, camZ);
-            if (scene.fogNode !== groundFogNode) scene.fogNode = groundFogNode;
             // 夜里换成深蓝青的雾（白天基色 ↔ 夜间色插值，见文件上方注释）
             GF_MIST_OBJ.copy(GF_DAY_OBJ).lerp(GF_NIGHT_OBJ, nightMix);
             /* 高处雾色：同一个颜色压暗到 62%。复用对象、copy+multiplyScalar，
@@ -396,10 +500,13 @@ export function WorldController() {
             updateGroundFog(
                 camera.position.y, gy,
                 dens, GF_HEIGHT, GF_MAX,
-                // 月球是真空：整片雾按月球权重压掉
+                // 月球是真空：整片雾按月球权重压掉（关雾时 on 恒 0）
                 GF_ON * (1 - wr.moon),
                 GF_MIST_OBJ, GF_MIST_TOP_OBJ,
             );
+        }
+        if (GF_ON > 0) {
+            if (scene.fogNode !== groundFogNode) scene.fogNode = groundFogNode;
         } else if (scene.fogNode === groundFogNode) {
             scene.fogNode = null;
         }
@@ -415,16 +522,24 @@ export function WorldController() {
                 <PhysicalSky visible={enableEnv} />
             {/* 月亮 / 光晕 / 远景星球：霜月的天是夜空，缺省就摆在星夜里 */}
             <MoonProps />
-                <CosmicSystem />
                 <Terrain grassAreaSize={TERRAIN_AREA} />
+                {/* ★ task-20（用户 m02364 任务5）：月坑浅水。原蓝花环（`r 15~21.5`）改成
+                    一圈**贴地**的深蓝水面：顶点高度 = `worldHeightCPU + 0.30`（膝盖），
+                    所以碗形坑壁、飞船落位、碰撞全都不受影响（水面只是画上去的薄片）。
+                    材质/几何在 `components/water/CraterWater.tsx`，真值全部收在
+                    `core/world/waterState.ts`（半径/深度/涟漪/涉水阻尼）。
+                    `?craterwater=0` 关掉 ⇒ 回到 task-19 的暗蓝地面。 */}
+                <CraterWater />
                 {/* 会场道具：树木 / 石头 / 蘑菇 / 废墟建筑（老线摆位表 `wujien-layout.json`）
                     用 vite 的 Suspense 等它自己加载完；`?props=0` 关掉。
                     ★ 用户 m07996 第①条：树/建筑/柱子/石台换成 Poly Haven 的写实成品模型，
                     `?real=1`（缺省）走 `VenuePropsReal`，`?real=0` 退回原神那套 OBJ 做对照。 */}
                 {SKY_MODE !== 'fe' && PROPS_ON && (
-                    REAL_ON
-                        ? <VenuePropsReal visible={enableEnv} />
-                        : <VenueProps visible={enableEnv} />
+                    <VisGate x={VENUE_GATE_X} z={VENUE_GATE_Z} enabled={enableEnv}>
+                        {REAL_ON
+                            ? <VenuePropsReal visible={enableEnv} />
+                            : <VenueProps visible={enableEnv} />}
+                    </VisGate>
                 )}
 
                 {/* ★ 会场中央的生日宴长桌（用户 m00002）：三张 Ark 生成的实木长桌拼成
@@ -455,25 +570,28 @@ export function WorldController() {
                   线性雾的 `near` 就是「起雾距离」，把它设在草地圆盘半径上，
                   40 m 内雾权为 0（完全清晰），之外随距离渐浓 —— 不需要地面雾面。 */}
 
-                {/* ★ 停在环形山里的「带翼飞船」（用户 m03431 / m03778）。
-                     用户点名的是参考图 `背景素材10.png` 里那艘银色带翼飞船。本机三条 dump
-                     已穷举搜索、确认**没有**这艘船（详见 `WingShipApi.tsx` 头注释）。
-                     现在默认渲染的是 **Ark 图生 3D**（`doubao-seed3d-2-0-260328`）从
-                     Seedream 反推的干净单视图生成的 26.9 MB 真模型 —— `WingShipApi`。
-                     落在 `CRATERS[0]`（r=46 那个大坑）的碗底上，y / 俯仰 / 横滚都由
-                     `worldHeightCPU` 采样船底网格算出来 ⇒ 不浮不穿。
-                     `?wapi=0` 关掉；`?wlen= ?wyaw= ?wrot= ?wlift=` 可调。 */}
-                {SKY_MODE !== 'fe' && <WingShipApi visible={enableEnv} />}
+                {/* ★★ task-15：三艘船**统一按相机距离剔除**（用户 10-20 反馈3：红线里圈的那艘
+                    飞船从会场 196 m 外还在画，实测 499,834 三角 = 全场最贵的一件远景）。
+                    缺省那艘是 `WingShipApi`（`?wapi=1`），另两个是 `?wing=1` / `?ship=1` 的备选；
+                    三者落点都在 `CRATERS[0]`（(0,-196)），所以共用一个圆心。
+                    站在会场（距坑 ~196 m）⇒ 完全不可见；站到坑边（< 40 m）⇒ 完整可见。
+                    `?visr=0` 关判据 ⇒ 回到改前的「永远画」。 */}
+                <VisGate x={SHIP_GATE_X} z={SHIP_GATE_Z} enabled={enableEnv}>
+                    {SKY_MODE !== 'fe' && <WingShipApi visible={enableEnv} />}
+                </VisGate>
 
                 {/* 备选 1：手搓解析几何版（比例照 Seedream 三视图推的，细节不如上面那个真模型）。
                      默认关，`?wing=1` 调出来对照。 */}
-                {SKY_MODE !== 'fe' && <WingShip visible={enableEnv} />}
+                <VisGate x={SHIP_GATE_X} z={SHIP_GATE_Z} enabled={enableEnv}>
+                    {SKY_MODE !== 'fe' && <WingShip visible={enableEnv} />}
+                </VisGate>
 
                 {/* 备选 2：原神 dump 里那艘**月牙形小舟**（`Prop_MoonShip_01`）。
                      它跟参考图那艘带翼飞船不是一回事（详见 `MoonShip.tsx` 头注释）。
                      默认关（跟上面同坑会打架），`?ship=1` 调出来。 */}
-                {SKY_MODE !== 'fe' && <MoonShip visible={enableEnv} />}
-
+                <VisGate x={SHIP_GATE_X} z={SHIP_GATE_Z} enabled={enableEnv}>
+                    {SKY_MODE !== 'fe' && <MoonShip visible={enableEnv} />}
+                </VisGate>
                 {/* 浅海区的水面 `<SeaWater/>` 于 2026-10-11 随「删海」删除（用户 m05607）。 */}
             </group>
 

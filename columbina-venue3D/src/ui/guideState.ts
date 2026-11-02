@@ -50,3 +50,13 @@ export const questArrowState: { questId: string | null } = { questId: null };
 export function setQuestArrow(questId: string | null): void {
     questArrowState.questId = questId;
 }
+
+/* ── 无头验收探针（task-21）──────────────────────────────────────────────────
+ * 只读快照，不参与任何逻辑：验收「采集点搬进月坑后，小地图指引/任务箭头是否
+ * 跟着指向新坐标」时，需要读**解析出来的世界坐标**，而 guideState 故意不进
+ * React store（每帧被 rAF 读），页面上没有别的出口。
+ * 用法：`window.__guide()` → `{ target: {label,x,z}|null, arrow: questId|null }`。 */
+(window as unknown as Record<string, unknown>).__guide = () => ({
+    target: guideState.target,
+    arrow: questArrowState.questId,
+});

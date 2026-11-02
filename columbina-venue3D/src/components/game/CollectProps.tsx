@@ -54,9 +54,14 @@ import { useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three/webgpu';
 import { POINT_SPOTS, pointXZ } from '../../core/game/layout';
+/* ★ task-25：水环内道具抬升（岸顶露出水面）。真值全在 `core/world/waterState.ts`。 */
+import {
+    POND_CX, POND_CZ, POND_R_IN, POND_R_OUT, SURFACE_MODE, WATER_ON, pondWaterY,
+} from '../../core/world/waterState';
 import { worldHeightCPU } from '../../core/worldRegions';
 import { hash01 } from '../../core/venueRing';
 import { QNUM } from '../../core/utils/query';
+import { R_VIS, VISR_ON, outsideVis } from '../../core/world/visRadius';
 
 /* ══════════════════════════════════════════════════════════════════════════
  * 0. URL 开关与常量
@@ -70,14 +75,28 @@ const CP_GAIN = QNUM('cpgain', 1.0)!;
 const CP_SINK = QNUM('cpsink', 0.07)!;
 /** 贴地件的抬升量（米），防与地形网格 z-fighting。 */
 const CP_LIFT = QNUM('cplift', 0.01)!;
+/** ★ task-25：水环内采集道具的「岸顶露出水面」量（米）。`?pondlift=0` 回旧行为。 */
+const POND_LIFT = QNUM('pondlift', 0.03)!;
+/** ★ task-25b：点位落在**坑外水环**里时，不再画它自带的「泥底 + 小水洼」（水环本身就是水）。
+ *  `?pondpuddle=0` 回旧的叠加态（水洼叠在水环上，QA 见 `_logs/prop_ab.jpg`）；
+ *  `?pondpuddle=2` 连那圈岸石一起去掉（水里只有可采集物本身）。
+ *  判据是**几何位置**（`r ∈ [POND_R_IN, POND_R_OUT]`），**不看** `?craterwater=` ——
+ *  用户手动关水环时水洼还得照常出现（`?craterwater=0` 的 A/B 才有意义）。 */
+const PUDDLE_MODE = QNUM('pondpuddle', 1)!;
+/** 当前正在建的那个点是否落在水环里 —— 由 `buildCollectProps` 在调 builder 前设置。
+ *  builder 签名是 `(G, M, v)`，不改签名（13 个 builder + 兜底全要动），用一个
+ *  模块级标记把「点位在不在环里」传进去；建模型是同步的，所以不存在并发覆盖。 */
+let _inPondRing = false;
 /** 发光脉动开关。 */
 const CP_PULSE = QNUM('cppulse', 1)! > 0;
 /** 调试打印。 */
 const CP_DEBUG = QNUM('cpdebug', 0)! > 0;
 
-/** 相机离场心超过这个距离就整组 `visible = false`（与 `VenuePropsReal.tsx:429`、
- *  `Banquet.tsx:495` 同一套）。地形盘半宽只有 80 m，再远这些道具已经悬在盘外了。 */
-const HIDE_R = 130;
+/* 相机距离剔除的半径。★ task-15：改走 `core/world/visRadius.ts` 的唯一真值
+ *  （`R_VIS` = 草盘边缘 40 m、以相机为圆心），不再各写各的常数；
+ *  `?visr=0` 关判据时退回改前的 130 m（并恢复「离原点」那套旧行为只在数值上等价，
+ *  见下面 useFrame 的注释）。 */
+const HIDE_R = VISR_ON ? R_VIS : 130;
 
 /* ══════════════════════════════════════════════════════════════════════════
  * 1. 共享几何体 / 共享材质
@@ -234,6 +253,12 @@ function makeMats(pulse: Pulse[]) {
         /** 灯下光晕 / 水面微光：贴地半透明圈，不写 depthWrite，免得挡住水面 */
         halo: mkMat({ color: 0xffe6b8, emissive: 0xffc978, ei: 1.6, rough: 1, opacity: 0.34 }),
         haloBlue: mkMat({ color: 0x9fe4ff, emissive: 0x4fc8ff, ei: 1.8, rough: 1, opacity: 0.30 }),
+        /* ★ task-25c：**水环里**那盏「水下的一点光」用的暗版材料。
+           坑外水环的水面现在是 opacity 0.94 的近不透明深靛水，原来那套 ei 2.6 的白球
+           挂在水面上会溢成 (235,247,250) 的实心白月亮（Lead 实测 `PUD_lamp.png` 中心）。
+           这里压到「隔着水面能看见一小团冷白光晕」的程度：ei 1.1 / 球半径 0.16 m。 */
+        glowBlueDim: breathe(mkMat({ color: 0x8fd0ee, emissive: 0x1f86bd, ei: 1.1, rough: 0.4, opacity: 0.70, depthWrite: true }), 0.10, 0.7),
+        haloBlueDim: mkMat({ color: 0x6fb4d8, emissive: 0x1f86bd, ei: 0.50, rough: 1, opacity: 0.14 }),
         /** 灯笼罩：半透明灯罩，要**看得到里面的灯芯**，所以 depthWrite 关掉 */
         shade: mkMat({ color: 0xffe9c2, emissive: 0xffcf88, ei: 1.1, rough: 0.5, opacity: 0.42, side: THREE.DoubleSide }),
     };
@@ -319,25 +344,44 @@ const MUD_Y = 0.012;
  *   ② 岸边那一圈扁石头**每颗都插进地里 0.18 m** —— 石头是实体，
  *      地形怎么起伏都不会在石头底下露空。
  */
-function addPond(g: THREE.Group, G: Geos, M: Mats, R: number, nStone: number) {
-    const waterY = BANK_TOP - CP_SINK;
+/**
+ * 「水面」在局部坐标里的高度。
+ * - 陆地上：岸顶 − `?cpsink=`（= 0.03），读作一汪沉在泥岸里的水。
+ * - **水环里**（`_inPondRing`）：没有自己的洼，可采集物直接浮在环水面上 ——
+ *   组原点已抬到「岸顶刚好露出环水面 `?pondlift=` 米」（见 `buildCollectProps`），
+ *   所以局部 `BANK_TOP` 正好是水环水面 + `POND_LIFT`，贴水面的东西放这里。
+ */
+function inRingMode(): boolean { return _inPondRing; }
 
-    // ① 湿泥圈（深棕不透明，略大于水面）—— 「外圈一圈深色湿泥环」
-    put(g, G.disc, M.mud, [0, MUD_Y, 0], R * 1.14, FLAT);
-    // ② 泥壁：兜底 ①，向下埋 0.5 m 堵住地形低侧的缝
-    put(g, G.skirt, M.mud, [0, MUD_Y - 0.25, 0], [R * 1.14, 0.5, R * 1.14]);
-    // ③ 水面：半透明淡蓝 + 低粗糙 + 中金属 + 一点自发光（夜里才看得见）
-    put(g, G.disc, M.water, [0, waterY, 0], R, FLAT);
+function surfY(): number {
+    return _inPondRing ? BANK_TOP : BANK_TOP - CP_SINK;
+}
+
+function addPond(g: THREE.Group, G: Geos, M: Mats, R: number, nStone: number) {
+    const waterY = surfY();
+    const bare = _inPondRing && PUDDLE_MODE >= 1;
+
+    if (!bare) {
+        // ① 湿泥圈（深棕不透明，略大于水面）—— 「外圈一圈深色湿泥环」
+        put(g, G.disc, M.mud, [0, MUD_Y, 0], R * 1.14, FLAT);
+        // ② 泥壁：兜底 ①，向下埋 0.5 m 堵住地形低侧的缝
+        put(g, G.skirt, M.mud, [0, MUD_Y - 0.25, 0], [R * 1.14, 0.5, R * 1.14]);
+        // ③ 水面：半透明淡蓝 + 低粗糙 + 中金属 + 一点自发光（夜里才看得见）
+        put(g, G.disc, M.water, [0, waterY, 0], R, FLAT);
+    }
     // ④ 岸边石：兜底 ②，一圈扁石头，各自插进地里
-    for (let i = 0; i < nStone; i++) {
-        const a = (i / nStone) * Math.PI * 2 + (hash01(i, 91, 7) - 0.5) * 0.55;
-        const r = R * 1.19 + hash01(i, 92, 7) * 0.10;
-        put(
-            g, G.ico, M.stone,
-            [Math.cos(a) * r, BANK_TOP - 0.14, Math.sin(a) * r],
-            [0.26 + hash01(i, 93, 7) * 0.10, 0.14, 0.22 + hash01(i, 94, 7) * 0.08],
-            [0, hash01(i, 95, 7) * 3.1, 0],
-        );
+    //    ★ task-25b：水环里默认保留（读作「井口」），`?pondpuddle=2` 时一起去掉
+    if (!(_inPondRing && PUDDLE_MODE >= 2)) {
+        for (let i = 0; i < nStone; i++) {
+            const a = (i / nStone) * Math.PI * 2 + (hash01(i, 91, 7) - 0.5) * 0.55;
+            const r = R * 1.19 + hash01(i, 92, 7) * 0.10;
+            put(
+                g, G.ico, M.stone,
+                [Math.cos(a) * r, BANK_TOP - 0.14, Math.sin(a) * r],
+                [0.26 + hash01(i, 93, 7) * 0.10, 0.14, 0.22 + hash01(i, 94, 7) * 0.08],
+                [0, hash01(i, 95, 7) * 3.1, 0],
+            );
+        }
     }
 }
 
@@ -411,13 +455,22 @@ const buildRose: Builder = (G, M, _v) => {
 const buildLamp: Builder = (G, M, _v) => {
     const g = new THREE.Group();
     addPond(g, G, M, 0.95, 7);
-    const wy = BANK_TOP - CP_SINK;
-    // 灯芯：压在**水面以下** 0.20 m —— 「水下的一点光」，所以不能浮在水上
-    put(g, G.ball, M.glowBlue, [0, wy - 0.20, 0], 0.30);
+    const wy = surfY();
+    /* ★ task-25c：水环里没有自带水洼，灯芯就得对着**环水面**重新摆：
+       · 深度 `wy − 0.12`（水下 12 cm，透过近不透明的水还能看见轮廓；不能再贴水面，
+         贴上去就是「水面上挂了个月亮」）；
+       · 球半径 0.30 → **0.16 m**、内芯 0.15 → 0.085、材质换暗版（ei 2.6 → 1.1），
+         目标是「一小团冷白光晕」而不是溢出的实心白球；
+       · 水面那圈 `haloBlue` 微光 0.78 → **0.30 m**、换暗版（ei 1.8→0.5 / opacity 0.30→0.14），
+         否则读成一圈亮青色椭圆。 */
+    const inRing = inRingMode();
+    const dy = inRing ? 0.12 : 0.20;
+    const coreMat = inRing ? M.glowBlueDim : M.glowBlue;
+    put(g, G.ball, coreMat, [0, wy - dy, 0], inRing ? 0.16 : 0.30);
     // 内芯更亮一层：单层半透明球在雾里读不出「有个点光源」
-    put(g, G.blob, M.glowBlue, [0, wy - 0.20, 0], 0.15);
+    put(g, G.blob, coreMat, [0, wy - dy, 0], inRing ? 0.085 : 0.15);
     // 水面上的微光圈：贴在水面上方 5 mm，半透明不加 depthWrite
-    put(g, G.ring, M.haloBlue, [0, wy + 0.005, 0], 0.78, FLAT);
+    put(g, G.ring, inRing ? M.haloBlueDim : M.haloBlue, [0, wy + 0.005, 0], inRing ? 0.30 : 0.78, FLAT);
     return g;
 };
 
@@ -425,7 +478,7 @@ const buildLamp: Builder = (G, M, _v) => {
 const buildSpring: Builder = (G, M, _v) => {
     const g = new THREE.Group();
     addPond(g, G, M, 1.15, 8);
-    const wy = BANK_TOP - CP_SINK;
+    const wy = surfY();
     // 细杆把银球「举」在水面上 —— 悬空的球会读成穿模
     put(g, G.tube, M.stone, [0, wy + 0.5, 0], [0.018, 1.0, 0.018]);
     put(g, G.ball, M.glowSilver, [0, wy + 1.05, 0], 0.26);
@@ -544,7 +597,7 @@ const buildCake: Builder = (G, M, _v) => {
 const buildFish: Builder = (G, M, _v) => {
     const g = new THREE.Group();
     addPond(g, G, M, 1.30, 9);
-    const wy = BANK_TOP - CP_SINK;
+    const wy = surfY();
     // 三条鱼：扁椭球身 + 三角尾，半沉在水里（露出脊背）
     for (let i = 0; i < 3; i++) {
         const a = hash01(i, 71, 23) * Math.PI * 2;
@@ -574,7 +627,7 @@ const buildFish: Builder = (G, M, _v) => {
 const buildWater: Builder = (G, M, _v) => {
     const g = new THREE.Group();
     addPond(g, G, M, 1.30, 9);
-    const wy = BANK_TOP - CP_SINK;
+    const wy = surfY();
     // 木桶摆在岸边石圈外面，桶底插进地里 2 cm（坡地上不露缝）
     const bx = 1.55;
     const bz = 0.55;
@@ -748,13 +801,31 @@ function buildAll(): Built {
 
         for (let i = 0; i < spots.length; i++) {
             const [x, z] = spots[i];
+            // ★ task-25b：**先**判「这个点在不在水环里」——builder 内部据此决定要不要
+            //   画自带的「泥底 + 小水洼」（水环本身就是水，再叠一层亮盘很突兀）。
+            //   判据是**纯几何**（r ∈ [POND_R_IN, POND_R_OUT]）+ 水环确实是平面环，
+            //   **不看** `?craterwater=`：用户手动关水环时水洼还得照常出现。
+            const rr = Math.hypot(x - POND_CX, z - POND_CZ);
+            /* 判据 = **几何位置**（在不在环带里）+ 环水真的在渲染（`?craterwater=0` 时
+               把水关掉了，那这里就没有水，自带水洼必须照常出现，否则点位光秃秃）。
+               `?craterwater=` 只当「环水是否存在」这一个共条件，不当判据本身。 */
+            const ringGeo = SURFACE_MODE === 'plane' && rr >= POND_R_IN && rr <= POND_R_OUT;
+            _inPondRing = WATER_ON && ringGeo;
             // ⚠️ 每处**单独建**，不是 clone 同一份 —— `litter` 有 5 处、
             //    `mushroom` 有 2 处，五处一模一样一眼就看出是复制粘贴的
             const inst = make(G, M, i);
             inst.name = `collect_${id}_${i}`;
             // ★ 落位：地面高度必须现取。会场中心 worldHeightCPU 恒为 0，
             //   但采集点在 r = 28~40 m 的外圈，写死 y = 0 会浮空或埋进土里
-            inst.position.set(x, worldHeightCPU(x, z) + CP_LIFT, z);
+            // ★ task-25：落进**坑外水环**（r 25.5~33）的点要额外抬一档 —— 环槽比水面深 0.32 m，
+            //   不抬的话整个浅水坑（岸顶只在原地的 +0.10）全泡在水下 0.2 m，只剩一圈白边。
+            //   抬到「岸顶露出水面 `?pondlift=` 米（缺省 3 cm）」，判据用 ring 半径，坑内/会场不变。
+            const groundY = worldHeightCPU(x, z) + CP_LIFT;
+            /* 抬升只在水环**真的在渲染**时才做（`?craterwater=0` 时地面才是落点）；
+               几何判定复用上面已经算好的 `_inPondRing`。 */
+            const inRing = WATER_ON && _inPondRing;
+            const pondY = inRing ? pondWaterY() + POND_LIFT - BANK_TOP : -Infinity;
+            inst.position.set(x, Math.max(groundY, pondY), z);
             // 朝向：需要面朝场心的（石碑）用 atan2，其余用哈希随机（同一处每次一样）
             inst.rotation.y = FACE_HUB.has(id)
                 ? Math.atan2(-x, -z) + (hash01(x, z, 71) - 0.5) * 0.25
@@ -823,28 +894,44 @@ export function CollectProps({ visible = true, picked }: {
      *
      * 按索引顺序收（第 0 处先没）—— 哈希随机会让玩家看见「远处的先消失」，
      * 那比顺序消失更莫名其妙。 */
-    /* ★ 「采过就收起来」。 */
-    useFrame(() => {
-        if (!picked) return;
-        for (const [id, arr] of built.insts) {
-            for (let i = 0; i < arr.length; i++) arr[i].visible = !picked[`${id}:${i}`];
-        }
-    });
+    /* ★ 「采过就收起来」—— 与距离剔除合并到下面同一个 `useFrame` 里写 `visible`
+       （两个 useFrame 抢同一属性时后注册的会覆盖前一个）。 */
 
+    /* ★ task-15：可见半径统一（用户 10-20 反馈3/4）。
+       原来这里是「相机离**世界原点** 130 m 就整组关」，两个问题：
+         · 口径与草盘（40 m）/ 森林（40 m）/ 船（40 m）不一致；
+         · 判据取离原点而不是离相机 ⇒ 站在 (50,-50) 时离原点 71 m，
+           身边 5 m 的采集点也被整组关掉。
+       现在：判据取 `core/world/visRadius.ts` 的唯一真值 `R_VIS`（= 40 m，相机为圆心），
+       **逐点位**算距离（`built.insts` 是每个采集点的 mesh 数组），
+       并和「采过就收起」合并成同一次 `visible` 写入 —— 两个 useFrame 抢
+       `visible` 时后注册的会覆盖前一个，合并后语义才是
+       `在半径内 && 没被采走`。`?visr=0` 关判据 ⇒ 完全回到改前的 130 m 口径。
+       代价：每帧 255 次 `getWorldPosition`（≈0.03 ms），比原来多一次矩阵分解，
+       但换掉的是「整组 130 m 还在提交」这一大块过绘。 */
+    const HIDE_R = VISR_ON ? R_VIS : 130;
+    const _wp = useMemo(() => new THREE.Vector3(), []);
     useFrame(({ camera, clock }) => {
-        // ① 距离剔除（与 `VenuePropsReal.tsx:429` / `Banquet.tsx:495` 同一套）：
-        //    地形盘半宽只有 80 m，相机退远了这些道具已经悬在盘外，直接不发 draw call
-        const dx = camera.position.x;
-        const dz = camera.position.z;
-        const near = dx * dx + dz * dz < HIDE_R * HIDE_R;
-        group.visible = visible && near;
+        const cx = camera.position.x;
+        const cz = camera.position.z;
+        let anyNear = false;
+        for (const [id, arr] of built.insts) {
+            for (let i = 0; i < arr.length; i++) {
+                const o = arr[i];
+                o.getWorldPosition(_wp);
+                const near = !outsideVis(_wp.x, _wp.z, cx, cz, HIDE_R);
+                if (near) anyNear = true;
+                o.visible = near && !(picked && picked[`${id}:${i}`]);
+            }
+        }
+        group.visible = visible;
 
         // ② 发光脉动。
         //    ★ 这里是**唯一**的每帧写入，而且只写 `pulse` 里那 4 份**共享材质**的
         //      `emissiveIntensity` —— 全场上百个发光 mesh 共用它们，所以代价是
         //      「4 次属性写入/帧」，**不是**遍历场景（遍历几百个 mesh 才是要避免的）。
         //      四个光源相位错开，否则会读成「整个屏幕在闪」而不是「各自在呼吸」。
-        if (!CP_PULSE || !near || !visible) return;
+        if (!CP_PULSE || !anyNear || !visible) return;
         const t = clock.getElapsedTime();
         for (const p of built.pulse) {
             p.mat.emissiveIntensity = p.base * (1 + p.amp * Math.sin(t * p.speed + p.phase));

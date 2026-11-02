@@ -34,6 +34,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { questLines, useGameStore2 } from '../core/game/questStore';
 import { QUESTS } from '../core/game/copy';
 import { setQuestArrow } from './guideState';
+import { NAV_ON, cancelNav, navActiveId, navState, subscribeNav, toggleAutowalk } from '../core/game/autowalk';
 
 /** 面板底色统一走这里，改主题色只改一处。 */
 const CARD: CSSProperties = {
@@ -101,6 +102,11 @@ export function QuestList() {
      * 为什么用 useState 而不是直接读 `questArrowState`：本组件要点亮选中行，
      * 必须触发重渲染；模块级容器是给 `QuestArrow` 每帧读的，两边的用法正好互补。 */
     const [arrowId, setArrowId] = useState<string | null>(null);
+    /* ★ 用户 m02037 任务5：正在自动走向哪一条。数据源是 `core/game/autowalk.ts`
+     *  的模块容器（每帧被角色 `useFrame` 读），这里只订阅**切换事件** ——
+     *  和 `QuestArrow` 读 `questArrowState` 的分工完全一样：每帧量不进 React。 */
+    const [walkId, setWalkId] = useState<string | null>(() => navActiveId());
+    useEffect(() => subscribeNav(() => setWalkId(navActiveId())), []);
     const [hoverId, setHoverId] = useState<string | null>(null);
     const [canScroll, setCanScroll] = useState(false);
     const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -118,7 +124,9 @@ export function QuestList() {
     const deliveredKey = s.delivered.join('|');
     useEffect(() => {
         if (arrowId && s.delivered.includes(arrowId)) setArrowId(null);
-    }, [arrowId, deliveredKey, s.delivered]);
+        /* 自动寻路同理：目标交付完成后互动点会注销，不能继续朝一个空位走。 */
+        if (walkId && s.delivered.includes(walkId)) cancelNav();
+    }, [arrowId, walkId, deliveredKey, s.delivered]);
 
     /* 内容超高才显示「滚动查看全部」。
      * 用 ResizeObserver 会更稳，但这里行数变化必然伴随 re-render（lines 变），
@@ -132,9 +140,49 @@ export function QuestList() {
         return () => window.removeEventListener('resize', measure);
     }, [lines, arrowId]);
 
-    /** 点同一条 = 收起；点另一条 = 切过去（单选，不是多选）。 */
+    /* ★ 任务5 降级位置：正在寻路的那一行**滚出了列表可视区**没有。
+     *   14 条委托必然要滚，玩家点了最下面一条、列表又停在顶部时，行下方那句
+     *   「自动寻路中…」他是看不见的 ⇒ 这时改到整栏底部再写一条（用户原话：
+     *   「如放不下，提示位置改为整个任务栏下方」）。
+     *   用 getBoundingClientRect 与滚动容器矩形比对，不用 offsetTop —— 后者
+     *   相对 offsetParent，稍改布局就会量错。 */
+    const [walkHidden, setWalkHidden] = useState(false);
+    useEffect(() => {
+        const el = scrollRef.current;
+        if (!el) {
+            setWalkHidden(false);
+            return;
+        }
+        const measure = () => {
+            if (!walkId) {
+                setWalkHidden(false);
+                return;
+            }
+            const row = el.querySelector('[data-walking="1"]') as HTMLElement | null;
+            if (!row) {
+                setWalkHidden(true);
+                return;
+            }
+            const rr = row.getBoundingClientRect();
+            const cr = el.getBoundingClientRect();
+            setWalkHidden(rr.top < cr.top - 1 || rr.bottom > cr.bottom + 1);
+        };
+        measure();
+        el.addEventListener('scroll', measure, { passive: true });
+        window.addEventListener('resize', measure);
+        return () => {
+            el.removeEventListener('scroll', measure);
+            window.removeEventListener('resize', measure);
+        };
+    }, [walkId, lines]);
+
+    /** 点同一条 = 收起；点另一条 = 切过去（单选，不是多选）。
+     *  ★ 任务5 起，同一个点击顺带启动/取消**自动寻路**（`?autowalk=0` 时只剩箭头）。
+     *    两者共用一次点击是刻意的：玩家点一条任务，期望的是「指给我看 + 带我过去」，
+     *    而不是两个入口。 */
     const toggleArrow = (id: string) => {
         setArrowId((cur) => (cur === id ? null : id));
+        toggleAutowalk(id);
     };
 
     return (
@@ -191,13 +239,23 @@ export function QuestList() {
                         const clickable = questIds.has(l.id);
                         const selected = arrowId === l.id;
                         const hovered = hoverId === l.id;
+                        const walking = walkId === l.id;
                         return (
                             <div
                                 key={l.id}
+                                /* `data-quest` / `data-walking`：无头验收要能按任务 id
+                                 * 点到具体那一行并读「是否在走」（用户看不到 F12，
+                                 * 所以每条验收都得有可复现的选择器）。 */
+                                data-quest={clickable ? l.id : undefined}
+                                data-walking={walking ? '1' : undefined}
                                 onClick={clickable ? () => toggleArrow(l.id) : undefined}
                                 onMouseEnter={clickable ? () => setHoverId(l.id) : undefined}
                                 onMouseLeave={clickable ? () => setHoverId(null) : undefined}
-                                title={clickable ? '点击在世界中标出目标；再点一次取消' : undefined}
+                                title={clickable
+                                    ? (NAV_ON
+                                        ? '点击：自动走向目标并在世界里标出位置；再点一次取消'
+                                        : '点击在世界中标出目标；再点一次取消')
+                                    : undefined}
                                 style={{
                                     marginTop: 6,
                                     padding: '5px 6px',
@@ -227,6 +285,13 @@ export function QuestList() {
                                     <span style={BADGE}>{l.progress}</span>
                                 </div>
                                 <div style={{ ...MUTED, fontSize: 12, marginTop: 2 }}>{l.desc}</div>
+                                {/* ★ 任务5：「自动寻路中」写在**该行下方**（用户原话），
+                                    不再另开浮层 —— 玩家刚点的地方就是他要确认的地方。 */}
+                                {walking && (
+                                    <div style={{ fontSize: 11, color: '#e8d8a8', marginTop: 2 }}>
+                                        自动寻路中…
+                                    </div>
+                                )}
                             </div>
                         );
                     })}
@@ -268,6 +333,25 @@ export function QuestList() {
                         </div>
                     )}
                 </div>
+
+                {/* ★ 任务5 的**降级位置**（用户原话：「如放不下，提示位置改为整个任务栏下方」）：
+                    正在寻路的那一行**滚出可视区**时（14 条委托必然要滚），行下方的提示
+                    玩家根本看不见 ⇒ 这时在整栏底部再写一条，带上目标名。
+                    判定用 `getBoundingClientRect` 与滚动容器的矩形比对（`offsetTop`
+                    会受 `position` 影响，不同浏览器/布局漂移过）。 */}
+                {walkId && walkHidden && (
+                    <div
+                        style={{
+                            marginTop: 8,
+                            paddingTop: 6,
+                            borderTop: '1px solid rgba(255,255,255,0.08)',
+                            fontSize: 11,
+                            color: '#e8d8a8',
+                        }}
+                    >
+                        自动寻路中…{navState.target ? `（${navState.target.label}）` : ''}
+                    </div>
+                )}
             </div>
         </div>
     );

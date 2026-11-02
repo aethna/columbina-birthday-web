@@ -1,4 +1,4 @@
-import { InputSystem } from '@core';
+﻿import { InputSystem } from '@core';
 
 export type GameAction = 'MoveForward' | 'MoveBackward' | 'RotateLeft' | 'RotateRight' | 'Run' | 'Jump';
 
@@ -50,6 +50,5 @@ export const keyBindings: Record<string, GameAction> = {
   KeyS: 'MoveBackward', ArrowDown: 'MoveBackward',
   KeyA: 'RotateLeft', ArrowLeft: 'RotateLeft',
   KeyD: 'RotateRight', ArrowRight: 'RotateRight',
-  ShiftLeft: 'Run', ShiftRight: 'Run',
-  Space: 'Jump'
+    Space: 'Jump'
 };

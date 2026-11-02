@@ -51,13 +51,11 @@ import {
   applyVertexSway,
   applySlopeAlignment,
   applyViewDependentTilt,
-  createWaveLogic,
 } from "./shaderHelpers";
-import { waveStructure } from "../../cosmic/hooks/useCosmicWaves";
-import { uTime, uWindDir, uActiveWaveCount, GlobalWaveState, uGlobalHueShift } from "../../../core/shaders/uniforms";
+import { uTime, uWindDir, uGlobalHueShift } from "../../../core/shaders/uniforms";
 import { shiftHSV } from "../../../../packages/three-core/src/utils/tsl/color";
 /* ★ 分区草密度：月球那片地长出草来是穿帮的（见 `core/worldRegions.ts` 的 grass.density） */
-import { regionGrassMaskNode, grassHeightScaleNode, forestWeightNode, hexToVec3, FOREST_GRASS_BASE, FOREST_GRASS_TIP } from "../../../core/shaders/worldHeight";
+import { regionGrassMaskNode, grassHeightScaleNode, forestWeightNode, hexToVec3, FOREST_GRASS_BASE, FOREST_GRASS_TIP, craterFloorWeightNode, CRATER_GRASS_BASE, CRATER_GRASS_TIP, CRATER_GRASS_HEIGHT_K, CRATER_GRASS_WIDTH_K } from "../../../core/shaders/worldHeight";
 
 /**
  * Creates a grass material with vertex shader that scales blade geometry
@@ -104,13 +102,6 @@ export function createGrassMaterial(
 
   const uGroupOffset = uniforms.uGroupOffset ?? uniform(new THREE.Vector3(0, 0, 0));
 
-  // Wave
-  const waveBuffer = GlobalWaveState.buffer
-    ? storage(GlobalWaveState.buffer, waveStructure, 16)
-    : null;
-
-  const calculateWaves = createWaveLogic(waveBuffer, uActiveWaveCount, uTime);
-
   const trueIndex = visibleIndicesBuffer.element(instanceIndex);
   const data = grassData.element(trueIndex);
 
@@ -122,7 +113,12 @@ export function createGrassMaterial(
 
     const instancePos = d0.xyz;
     const bladeType = floor(d0.w.mul(3.0));
-    const width = d1.x;
+    /* ★ 2026-10-20 复审（lead QA 问题 2「俯视像暗绿苔藓」）：坑内叶片**加宽**（×1.5）。
+       坑底草是稀疏插在红褐土上的，40 m 俯视时细叶之间露出大片土色 ⇒ 读成苔藓斑点。
+       加宽叶片不改密度、不改高度，覆盖感立刻上来，近距离也不失真（草叶本就宽窄不一）。
+       只乘坑底权重，坑外逐位不变。 */
+    const wCraterK = mix(float(1.0), float(CRATER_GRASS_WIDTH_K), craterFloorWeightNode(vec2(instancePos.x, instancePos.z)));
+    const width = d1.x.mul(wCraterK);
     /* ★ 区域草场闸门（第一道，也是最可靠的一道）：把叶片高度乘上闸门值。
        ⚠️ 光靠 colorNode 的 alpha + alphaTest **实测不够** —— `R_grass_gate_16s.png`
        里人物在 `z=-78`、离月球圆心只剩 92 m（按新闸门草密度已经是 0），
@@ -146,7 +142,14 @@ export function createGrassMaterial(
           用相机距离会在移动时出现一圈跟着走的环。 */
     const rLocal = length(instancePos.xz.sub(uGroupOffset.xz));
     const edgeFade = float(1).sub(smoothstep(float(GRASS_EDGE_FADE_IN), float(GRASS_EDGE_FADE_OUT), rLocal));
-    const height = d1.y.mul(gate).mul(heightScale).mul(edgeFade);
+    /* ★ 2026-10-20 task-17 复审（用户 m01992 / lead QA）：坑内那片草**拔高一档**。
+       原因：坑底是碗形深处，40 m 俯视时齐会场高度的草只剩一层「苔藓感」，
+       用户要的是「飞船周围是草叶」；×1.28 之后才有草的轮廓，又不至于埋掉船腹
+       （船腹离地 0.66 m，草高 ~0.55 m × 1.28 ≈ 0.70 m，仍碰不到龙骨，
+        且船体投影内由 `keepOut` 压到 8% ⇒ 穿模风险仍为 0）。
+       只乘坑底权重 `craterFloorWeightNode`，坑外（会场/森林）逐位不变。 */
+    const hCrater = mix(float(1.0), float(CRATER_GRASS_HEIGHT_K), craterFloorWeightNode(vec2(instancePos.x, instancePos.z)));
+    const height = d1.y.mul(gate).mul(heightScale).mul(edgeFade).mul(hCrater);
     const bend = d1.z;
     const windStrength01 = d1.w;
     const rotSin = d2.x;
@@ -194,14 +197,6 @@ export function createGrassMaterial(
     p1 = windPushed.p1;
     p2 = windPushed.p2;
     p3 = windPushed.p3;
-
-    // Apply Wave Push (affects control points for shockwave effects)
-    const waveEffects = calculateWaves(worldXZ);
-    const waveForce = waveEffects.get('force');
-    // Apply wave force to bezier control points
-    p1.addAssign(waveForce.mul(float(0.3)));
-    p2.addAssign(waveForce.mul(float(0.7)));
-    p3.addAssign(waveForce.mul(float(1.2)));
 
     // Calculate spine and tangent
     const spine = bezier3(p0, p1, p2, p3, t);
@@ -339,8 +334,21 @@ export function createGrassMaterial(
        只换 base/tip 两支颜色，后面的 clump/blade 种子变化与 AO 照常，
        所以林下草地仍有疏密深浅，不是一块平色。 */
     const wForest = forestWeightNode(vWorldPos.xz);
-    const baseC = mix(uniforms.uBaseColor, hexToVec3(FOREST_GRASS_BASE), wForest);
-    const tipC = mix(uniforms.uTipColor, hexToVec3(FOREST_GRASS_TIP), wForest);
+    /* ★★ 2026-10-20 task-17：月坑「飞船草区」改**绿色**（用户 m01992 原话：
+       「飞船周围 + 飞船底部 = 绿色草叶（成片、颜色绿）」）。
+       ⚠️ 这是**两套**配色：会场/森林的草是朱红家族（`uBaseColor/uTipColor` +
+       `FOREST_GRASS_*`），坑内草区是绿（`CRATER_GRASS_*`），由 `wCrater` 分开，
+       坑外 `wCrater = 0` ⇒ 会场与森林逐位不变（零回归）。
+       手法与森林那支完全相同：只换 base/tip 两支颜色，clump/blade 种子变化与 AO 照常。 */
+    const wCrater = craterFloorWeightNode(vWorldPos.xz);
+    const baseC = mix(
+      mix(uniforms.uBaseColor, hexToVec3(FOREST_GRASS_BASE), wForest),
+      hexToVec3(CRATER_GRASS_BASE), wCrater,
+    );
+    const tipC = mix(
+      mix(uniforms.uTipColor, hexToVec3(FOREST_GRASS_TIP), wForest),
+      hexToVec3(CRATER_GRASS_TIP), wCrater,
+    );
     // Base Color (Height Gradient)
     const color = mix(baseC, tipC, vHeight);
     
@@ -388,36 +396,6 @@ export function createGrassMaterial(
       return envSample;
     }
     return vec3(0.0, 0.0, 0.0);
-  })();
-
-  material.emissiveNode = Fn(() => {
-    const worldPosXZ = vec2(vWorldPos.x, vWorldPos.z);
-
-    const waveEffects = calculateWaves(worldPosXZ);
-    const baseStrength = waveEffects.get('strength');
-
-    const isActive = step(float(0.001), baseStrength);
-
-    // Height Gradient
-    const heightFactor = smoothstep(float(0.0), float(1.0), vHeight);
-    const tipGlow = heightFactor.mul(heightFactor);
-
-    const electricCrackle = vCrackleNoise.mul(0.5).add(1.0);
-
-    // Heat Color Ramp
-    const coolColor = materialEmissive;
-    const hotColor = mix(coolColor, vec3(1.0), float(0.8));
-    const finalColor = mix(coolColor, hotColor, baseStrength.mul(baseStrength));
-
-    const glow = baseStrength
-      .mul(finalColor)
-      .mul(tipGlow)
-      .mul(electricCrackle)
-      .mul(float(5.0)); // Boost intensity for Bloom 
-
-    const hueShifted = shiftHSV(glow, vec3(uGlobalHueShift, float(0.0), float(0.0))); 
-
-    return hueShifted.mul(isActive);
   })();
 
 

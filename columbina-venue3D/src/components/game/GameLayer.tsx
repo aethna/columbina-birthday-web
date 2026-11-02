@@ -53,6 +53,9 @@ import {
     registerInteractable, updateNearest, clearNearest, startInteractKey, interactState,
 } from '../../core/game/interact';
 import { setGuide } from '../../ui/guideState';
+/* ★ 任务5：自动寻路。这里只用「取消」和「探针」，目标解析/每帧步进都在
+ *  `autowalk.ts`（被 `QuestList` 触发、被 `MmdCharacter` 的 useFrame 消费）。 */
+import { cancelNav, navActiveId, navState, navStep, toggleAutowalk } from '../../core/game/autowalk';
 
 import { DeskProps } from './DeskProps';
 import { CollectProps } from './CollectProps';
@@ -74,8 +77,10 @@ const HUB_CLEAR = 9.5;
 /** 黑屏过渡的时长（毫秒）。太短遮不住卡顿，太长玩家等得烦。 */
 const FADE_MS = 1100;
 
-/** 屏幕提示的显示时长。 */
-const TOAST_MS = 2600;
+/** 切场景那类提示的显示时长（毫秒）。
+ *  普通提示（采集计数等）走 `questStore.showToast` 的缺省 2.6 s，不必在这里写；
+ *  只有「邀请函已寄出」这种要跨过一次黑屏、要读完整句的才单独给 4 s。 */
+const TOAST_SWITCH_MS = 4000;
 
 /** 同理，信箱前面站的位置。 */
 const MAILBOX_STAND_D = 1.15;
@@ -162,6 +167,8 @@ export function GameLayer() {
     const cakeCut = useGameStore2((s) => s.cakeCut);
     const dialogOpen = useGameStore2((s) => s.dialog !== null);
     const photoOpen = useGameStore2((s) => s.photo !== null);
+    /* 最后一个委托交付了、但交付台词还没播完（用户任务13）。 */
+    const pendingFeast = useGameStore2((s) => s.pendingFeast);
 
     /* ── 3D 侧的「现在该显示什么」──────────────────────────────────────
      * 全部由 `phase` 推出来，**不额外存一份 state** —— 两份状态一定会不同步。 */
@@ -197,6 +204,9 @@ export function GameLayer() {
         if (dialogOpen || photoOpen) {
             /* 对话/看合影时清掉目标 —— 否则「按 F 继续」和「按 F 打招呼」两条提示会同时出现。 */
             clearNearest();
+            /* ★ 任务5：对话/合影弹出来时也停下自动寻路 —— 玩家已经到跟前了，
+             *  再往前走就会顶着 NPC 转圈（而且他根本看不见脚下的路）。 */
+            cancelNav();
             return;
         }
         updateNearest(c.position.x, c.position.z);
@@ -237,11 +247,10 @@ export function GameLayer() {
     /* ── 屏幕提示 + 黑屏过渡的定时清理 ─────────────────────────────── */
     useEffect(() => {
         if (!lettersSent) return;
-        /* 用户原话：「屏幕显示文字提示邀请函已寄出即可」。 */
+        /* 用户原话：「屏幕显示文字提示邀请函已寄出即可」。
+           切场景这类提示给 4 s（`TOAST_SWITCH_MS`）—— 玩家要读完整句，也要跨过一次黑屏。 */
         const st = useGameStore2.getState();
-        st.showToast('邀请函已寄出', '朋友们正在赶来…');
-        const t = window.setTimeout(() => useGameStore2.getState().clearToast(), TOAST_MS);
-        return () => window.clearTimeout(t);
+        st.showToast('邀请函已寄出', '朋友们正在赶来…', TOAST_SWITCH_MS);
     }, [lettersSent]);
 
     /* ── 黑屏过渡：只在「大批刷新」时用（用户 m02762 授权）─────────────
@@ -259,6 +268,19 @@ export function GameLayer() {
         const t = window.setTimeout(() => useGameStore2.getState().setFade(null), FADE_MS);
         return () => window.clearTimeout(t);
     }, [phase]);
+
+    /* ── 待切宴会：兜底兑现（用户任务13）────────────────────────────────
+     * 正常路径已经由 `nextDialogLine`（对话读完最后一句）和 `closeDialog`
+     * （跳过/关掉）兑现了，这里只兜住「最后一个委托是在没有对话的路径上交付的」
+     * 那种情况 —— 调试探针 `__game.deliverAll()`、任务14 的测试按钮、或将来新增
+     * 的批量完成。不兜的话 `pendingFeast` 会一直挂着，宴会永远不来。
+     *
+     * 为什么不会误触发：交付与 `openDialog` 在同一个事件回调里同步完成，
+     * effect 要等 React 渲染完才跑，那时 `dialogOpen` 已经是 true。 */
+    useEffect(() => {
+        if (!pendingFeast || dialogOpen || photoOpen) return;
+        useGameStore2.getState().commitPendingFeast();
+    }, [pendingFeast, dialogOpen, photoOpen]);
 
     /* ── 切蛋糕：`cakeCut` 一置位就把合影推给 PhotoView（用户要求 F 收起）── */
     useEffect(() => {
@@ -558,9 +580,10 @@ function talkToNpc(id: string): void {
             s.deliverQuest(q.id);
             lines.push(...q.deliver);
         }
-        /* 全部交付完 ⇒ `deliverQuest` 已把 phase 推成 feast，补一句转场提示。 */
+        /* 全部交付完 ⇒ `deliverQuest` 只记下 `pendingFeast`（不再当场切场景），
+           补一句转场提示，真正的切换在对话收尾时发生（用户任务13）。 */
         const after = useGameStore2.getState();
-        if (after.phase === 'feast') {
+        if (after.pendingFeast) {
             lines.push('（远处传来桌子的挪动声。）');
         }
         after.openDialog(id, lines.length ? lines : ['……']);
@@ -572,9 +595,10 @@ function talkToNpc(id: string): void {
     /* ② 交付 */
     if (q && s.accepted.includes(q.id) && !s.delivered.includes(q.id) && canDeliver(s, q)) {
         s.deliverQuest(q.id);
-        /* 交付后如果全部完成，`deliverQuest` 已经把 phase 推成 `feast` —— 这里再读一次。 */
+        /* 交付后如果全部完成，`deliverQuest` 只记 `pendingFeast` —— 这里再读一次，
+           给台词尾巴补上转场提示；场景要等对话播完才切（用户任务13）。 */
         const after = useGameStore2.getState();
-        if (after.phase === 'feast') {
+        if (after.pendingFeast) {
             after.openDialog(id, [...q.deliver, `（${q.reward} 已收下。远处传来桌子的挪动声。）`]);
         } else {
             after.openDialog(id, q.deliver);
@@ -617,14 +641,9 @@ function collectAt(questId: string, spotKey: string, need: number): void {
     } else {
         s.showToast(ok, `${got}/${need}`);
     }
-    /* ⚠️ 这个 `clearTimeout` 兜底是**无效**的（2026-10-17 记）：
-       `t` 在 TOAST_MS 后已经把 toast 清掉了，再过 100 ms 去 clear 一个已经跑完的
-       定时器没有任何作用；而真正的问题是**连续采集时定时器互相踩** ——
-       第 2 次的 toast 会被第 1 次留下的 `clearToast` 提前清掉（表现为提示一闪而过）。
-       正确做法是把「当前 toast 的定时器 id」存进 store、每次先清上一个。
-       这里先留下判断注释，等 toast 改成 store 持有 id（见报告 3.x）。 */
-    const t = window.setTimeout(() => useGameStore2.getState().clearToast(), TOAST_MS);
-    window.setTimeout(() => window.clearTimeout(t), TOAST_MS + 100);
+    /* 2026-10-20 任务5 已修：定时器现在由 `questStore.showToast` 自己持有（只有一份，
+       每次先清旧的），所以这里**不要**再自己 setTimeout(clearToast) —— 那正是以前
+       「连续采集时第 2 条提示被第 1 条留下的 clear 提前掐掉（一闪而过）」的成因。 */
 }
 
 /* ==================================================================
@@ -662,6 +681,9 @@ if (typeof window !== 'undefined') {
             const d = useGameStore2.getState().dialog;
             return d ? { npc: d.npc, line: d.line, total: d.lines.length } : null;
         },
+        /* 「最后一个委托已交付、等对话播完再切宴会」（用户任务13）。
+           验收脚本靠它判断交付后是「先看对话」还是「已经切场景」了。 */
+        pendingFeast: () => useGameStore2.getState().pendingFeast,
         /* 当前最近的可互动对象 —— 用来验证「人走到哪、提示就指到哪」。 */
         nearest: () => ({ id: interactState.id, label: interactState.label, hint: interactState.hint }),
         /* ── 端到端脚本要用的「坐标真值」出口 ─────────────────────────
@@ -676,6 +698,13 @@ if (typeof window !== 'undefined') {
             pointId: q.pointId ?? null, count: q.count ?? 1, targetNpc: q.targetNpc ?? null,
         })),
         pointXZ: (id: string) => pointXZ(id),
+        /* 某个采集点的**每个实例**是否已被取走（按 `pointId:index` 逐条读）。
+           任务15 的「完成当前任务」必须把地上道具一起收掉 —— 只看 `delivered`
+           个数证不了这件事，脚本要能看到 `[true,true,true]`。 */
+        pickedAt: (id: string) => {
+            const p = useGameStore2.getState().picked;
+            return pointXZ(id).map((_, i) => !!p[`${id}:${i}`]);
+        },
         /* 切蛋糕主位坐标（`CAKE_STAND_XZ`）—— 端到端脚本要走到这里按 F。 */
         cakeSpot: () => CAKE_STAND_XZ.slice() as [number, number],
         /* 当前弹着的合影 URL（切蛋糕之后应该是 photo_feast.png） */
@@ -685,6 +714,11 @@ if (typeof window !== 'undefined') {
         album: () => useGameStore2.getState().albumOpen,
         /* 当前 Toast 内容（无头出图时确认提示真的弹了）。 */
         toast: () => useGameStore2.getState().toast,
+        /* ★ 直接弹一条提示（验收用，用户任务5）。
+         * 为什么需要它：从「拍照按钮」那条路测时长会被 toDataURL 的回读拖住主线程，
+         * 定时器只能迟到、量不准；要量「ms 到点自己消失」和「连弹不互踩」就得绕开拍照。 */
+        toastShow: (text: string, ms?: number, sub = '') =>
+            useGameStore2.getState().showToast(text, sub, ms),
         /* ★ 直接把黑屏过渡**停住**（出图验收用）。
          *
          * 正常流程里 `setFade` 由阶段切换触发，`FADE_MS`(1.1 s) 后自动清掉 ——
@@ -702,6 +736,14 @@ if (typeof window !== 'undefined') {
             c.position.z = z;
             return true;
         },
+        /* 读玩家当前坐标/朝向 —— 验收任务15「初始化要把人传回出生点」需要，
+         * 否则只能靠截图肉眼看位置（用户看不到 F12，得给数字）。
+         * 注意：这里**必须**从 store 取 ref，不能用组件里的 `characterRef` ——
+         * 探针工厂是模块级函数，闭包不到组件作用域（第一版就因此 ReferenceError）。 */
+        playerXZ: () => {
+            const c = useGameStore.getState().characterRef?.current;
+            return c ? [c.position.x, c.position.y, c.position.z, c.rotation.y] : null;
+        },
         /* 直接驱动状态机（跳过 F 键），用来快速跳到某个阶段出图。 */
         setPhase: (p: Phase) => useGameStore2.getState().setPhase(p),
         writeAll: () => {
@@ -718,6 +760,41 @@ if (typeof window !== 'undefined') {
             const st = useGameStore2.getState();
             for (const q of QUESTS) st.deliverQuest(q.id);
         },
+        /* 只交付指定的一条 —— 验收「最后一个委托」要先凑到 13/14（用户任务13/14）。 */
+        deliverOne: (id: string) => useGameStore2.getState().deliverQuest(id),
+        /* 只接取指定的一条 —— 验收任务15「完成当前任务只碰已接取的」必须有办法
+         * 造出「只接了 2 条」的中间态（`acceptAll()` 一接就是 14 条，证不了这件事）。 */
+        acceptOne: (id: string) => useGameStore2.getState().acceptQuest(id),
+        /* ── 任务5 自动寻路的探针 ────────────────────────────────────────
+         * `nav()`：当前状态快照。验收要的「起点 → 终点 + 用了多少秒」全在这里，
+         *           `fromX/fromZ` 是点下去那一刻的坐标，`walkSec` 是真实行走耗时。
+         * `navTo(id)`：等价于点一次任务行（`toggleAutowalk` 是同一个函数），
+         *          用来在无头里跑「点 → 走 → 到」的完整链路；UI 点击另有 DOM 验收。 */
+        nav: () => ({
+            active: navActiveId(),
+            id: navState.target?.interactId ?? null,
+            label: navState.target?.label ?? null,
+            x: navState.target?.x ?? null,
+            z: navState.target?.z ?? null,
+            stopDist: navState.target?.stopDist ?? null,
+            fromX: navState.fromX,
+            fromZ: navState.fromZ,
+            walkSec: navState.walkSec,
+            blockedMs: navState.blockedMs,
+            detourMs: navState.detourMs,
+            detours: navState.detours,
+            lastResult: navState.lastResult,
+        }),
+        /* ★ 直接推进一帧寻路逻辑（验收「卡住兜底」用）。
+         * 为什么需要它：真机里「卡住」很难稳定复现 —— 树干推出允许「顺着树皮滑过去」，
+         * 于是偏斜撞上其实不会卡（真实 C 跑：贴住树干净距 0.000 m 然后绕开了）。
+         * 要证明「0.6 s 位移 < 0.05 m ⇒ ±45° 绕行 ⇒ 2 s 仍卡 ⇒ 放弃并提示」这三个阈值
+         * 真的按代码走，只能把**同一坐标**喂给 `navStep` 若干次，让它自己判。 */
+        navTick: (px: number, pz: number, dt: number) => {
+            const r = navStep(px, pz, dt);
+            return { step: r, nav: { active: navActiveId(), detours: navState.detours, blockedMs: navState.blockedMs, detourMs: Math.round(navState.detourMs), lastResult: navState.lastResult } };
+        },
+        navTo: (id: string) => toggleAutowalk(id),
         cutCake: () => useGameStore2.getState().cutCake(),
         closePhoto: () => useGameStore2.getState().closePhoto(),
         /* 相机模式：出图时经常要在 Follow / FPV / Detached 之间切。 */

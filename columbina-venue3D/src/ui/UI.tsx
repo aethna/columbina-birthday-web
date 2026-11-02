@@ -1,7 +1,6 @@
 import { useGameStore } from "../core/store/gameStore";
 import { LoadingScreen } from "./LoadingScreen";
 import AudioButton from "./AudioButton";
-import { SideBar } from "./SideBar";
 import { MiniMap } from "./MiniMap";
 import { WorldMap } from "./WorldMap";
 import { QuestList } from "./QuestList";
@@ -85,7 +84,21 @@ export function UI() {
                 transition: `opacity 0.5s ease, visibility 0s linear ${isControlEnabled ? '0s' : '0.5s'}`
             }}>
                 <AudioButton />
-                <SideBar />
+
+                {/* ★ 2026-10-25（用户 m10834 任务2）：右上角那两个圆形按钮**整组移除**。
+                    原来这里挂 `<SideBar />`，它只有一个列容器、两个 IconButton：
+                      ① `AutoAwesomeIcon` —— tooltip 「Quality / Performance」，点一下切
+                         `gameStore.quality`（'high' ↔ 'low'），实际作用只是让
+                         `useEffectsControls().isHighQuality` 变 false ⇒ 关掉 DoF / Bloom / SMAA；
+                      ② `ThreeSixtyIcon` / `PersonIcon` / `VisibilityIcon` —— 循环切
+                         `cameraMode`（Follow → FPV → Detached）。
+                    用户认为这两个按钮没用，要求去掉。所以 SideBar 不再渲染
+                    （文件 `ui/SideBar.tsx` 保留，未删，便于以后恢复）。
+                    **被带走的只是「按钮入口」，功能本身都还在**：
+                      · 画质：`quality` 仍是 store 的缺省 `'high'`，不受影响；需要降档时
+                        用 URL `?dof=0&bloom=0&smaa=0` 或改 `gameStore.ts:113`。
+                      · 换视角：键盘 **C** 键仍走 `App.tsx:161-163` 的
+                        `useShortcut('c', toggleCameraMode)`；`window.__mmd` 那套诊断钩子不受影响。 */}
 
                 {isMobile &&
                     <TouchJoystick

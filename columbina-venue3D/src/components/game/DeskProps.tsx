@@ -9,8 +9,25 @@
  *   两件都是 `_tools/ph-blender.py --normalize --ground` 的产物：
  *   **高度被归一化到 1.0**（不是「宽 1 高 1 深 1 的立方体」）⇒ scale 就等于真实高度。
  *     · `desk_n7.glb`      原始 1.719 × 1.000 × 0.825 ⇒ ×0.75 = 1.289 × 0.750 × 0.619 m
- *     · `mailbox_flag.glb` 原始 0.162 × 1.000 × 0.488 ⇒ ×1.15 = 0.187 × 1.150 × 0.561 m
+ *     · `mailbox_nodkrai_genshin.glb` 归一化高度 1.0 ⇒ ×1.30 = 0.295 × 1.300 × 0.600 m
  *   （以上尺寸是解析 GLB 的 JSON chunk、递归应用节点旋转后算出的**世界** bbox，不是访问器原始值）
+ *
+ *   ★★ 2026-10-20 换信箱素材（用户任务：邮箱过于简陋，像块灰木板）：
+ *   **旧件** `venue/game/mailbox_flag.glb` 只有 **242 三角 / 贴图 256 px**，
+ *   归一化 bbox 0.162 × 1.000 × 0.488 ⇒ 真实只有 **0.19 × 1.15 × 0.56 m** 的一块薄板，
+ *   近景里就是「灰色方盒 + 白色圆角标签 + 一根木桩」，投信口都看不出来。
+ *   **新件** `venue/props/mailbox_nodkrai_genshin.glb`：**908 三角 / 512² 底色 + 512² 法线**，
+ *   金框石柱 + 深色横向投信口 + 紫色燕尾旗 + 石砌底座，1.30 m 高；
+ *   金/紫/石的颜色与宴会的冷月色调同族，近景能一眼认出「这是个信箱，槽口在正面」。
+ *   来源：`公用区\素材\yq_probe\Mesh\Property_Ani_Prop_SYRMailBox_01_Vo.obj`
+ *   + `Texture2D\..._Diffuse.png` / `..._Normal.png`（**原神「挪德卡莱」场景道具**，
+ *   与项目里 furina/paimon 等角色 PMX 同一来源口径；不是 CC0，随项目内部使用）。
+ *   转换脚本 `_logs/asset/obj2glb.py`（OBJ → 建 Principled 材质 → 高 1.0 归一化 → 底面居中 → GLB）。
+ *   **备用件**（同一批已转换、都在 `公用区\素材\道具\glb\`，可 `?mburl=` 直接 A/B）：
+ *   `mb_royalmail.glb`（英国皇家邮政立式邮筒，2568 tri / 3 贴图，最写实但正红在夜色里最跳）、
+ *   `mb_polygoogle.glb`（564 tri，深蓝木箱式）、`mb_sirkitree.glb`（2395 tri，无贴图 ⇒ 会被
+ *   `prepMaterials` 的暖白自发光洗白）、`mb_darwin.glb`（444 tri，无贴图，同样洗白）。
+ *   同机位对比图：`_logs/asset/mb_contact6.jpg`（5 选 1）、`_logs/asset/cmp_mailbox_final.jpg`（前/后）。
  *
  *   ★★ 2026-10-17 再换素材（用户 m00718「写邀请函的书桌太小太简陋。换一个。」）：
  *   上一版 `desk_n7`（Poly Haven `small_wooden_table_01`）真实尺寸只有
@@ -60,9 +77,10 @@
  *   ?desk=0            整组不渲染
  *   ?deskglow=0        关掉书桌/信箱脚下的发光指引环
  *   ?deskscale=<k>     书桌缩放倍率（缺省 1.0，乘在 0.75 上）
- *   ?mbscale=<k>       信箱缩放倍率（缺省 1.0，乘在 1.15 上）
+ *   ?mbscale=<k>       信箱缩放倍率（缺省 1.0，乘在 1.30 上）
  *   ?deskurl=<url>     换书桌素材（备选：desk_a / desk_console / desk_school / desk_wooden）
- *   ?mburl=<url>       换信箱素材（备选：mailbox_a / mailbox_b / mailbox_c / mailbox_e / mailbox_f）
+ *   ?mburl=<url>       换信箱素材（备选：/venue/game/mailbox_flag.glb 旧件、
+ *                      /venue/props/cand_mb_* 见上，四个都在 `公用区\素材\道具\glb\`）
  *   ?deskemis=<k>      自发光强度（缺省 0.06）
  *   ?desklift=<m>      离地抬升（缺省 0；地形是起伏网格，桌腿啃进坡里时用它救场）
  *   ?deskdebug=1       打印加载/落位明细
@@ -76,6 +94,7 @@ import {
 } from '../../core/game/layout';
 import { worldHeightCPU } from '../../core/worldRegions';
 import { QNUM, QSTR } from '../../core/utils/query';
+import { R_VIS, VISR_ON, outsideVis } from '../../core/world/visRadius';
 
 /* ══════════════════════════════════════════════════════════════════════════
  * 0. 常量
@@ -89,8 +108,11 @@ import { QNUM, QSTR } from '../../core/utils/query';
  *  （`_tools/moon-table-build.py` 生成，顶点色、无贴图），桌面高 0.78 m。
  *  旧的木桌 `desk_n17.glb` 仍在 `public/venue/game/` 里，`?deskurl=/venue/game/desk_n17.glb` 可 A/B 回去。 */
 const DESK_H = 0.75;   // 月牙凹槽底（= 桌面）的**世界高度**，= 0.431（模型内实测）× MOON_SCALE
-/** 信箱真实高度（米）。同上。 */
-const MB_H = 1.15;
+/** 信箱真实高度（米）。同上。
+ *  ★ 2026-10-20（用户任务：邮箱过于简陋）：换 `mailbox_nodkrai_genshin.glb`，1.30 m。
+ *  1.15 m 时投信口只有 ≈0.90 m（玩家 1.6 m，弯腰才够得着），提到 1.30 m 后
+ *  投信口 ≈1.00 m、箱体正中 ≈1.05 m，站着投正好。 */
+const MB_H = 1.30;
 
 /** 指引环的离地抬升（米）。地形是三角网格，环贴着 y=地面 会 z-fighting 闪。 */
 const RING_LIFT = 0.012;
@@ -129,7 +151,7 @@ const DESK_SCALE = QNUM('deskscale', MOON_SCALE)!;
 const MB_SCALE = MB_H * QNUM('mbscale', 1)!;
 /** 素材地址可覆盖 —— 同目录还有 11 个备选，不换素材就没法做 A/B 选型。 */
 const DESK_URL = QSTR('deskurl', '/venue/game/moon_table.glb')!;
-const MB_URL = QSTR('mburl', '/venue/game/mailbox_flag.glb')!;
+const MB_URL = QSTR('mburl', '/venue/props/mailbox_nodkrai_genshin.glb')!;
 /** 自发光强度。GLB 没有 emissive 贴图，只给一点点，纯为夜景不塌成黑块。 */
 const EMIS = QNUM('deskemis', 0.55)!;
 /** 离地抬升（米）。缺省 0 = 底面正好落在地形高度上。 */
@@ -522,6 +544,18 @@ export function DeskProps(
     }, [ringGeo, deskRingMat, mbRingMat]);
 
     useFrame((state) => {
+        /* ★ task-15：**书桌与信箱以前完全没有距离剔除** —— 它们是 `GameLayer` 里一直挂着的
+           两个 group，站在 60 m 外回望时 `MoonTable`（24,000 三角）+ 桌面陈设 + 信箱仍在提交。
+           现在按 `core/world/visRadius.ts` 的唯一真值（`R_VIS` = 草盘边缘 40 m，相机为圆心）
+           逐件判：书桌用 `DESK_XZ`、信箱用 `MAILBOX_XZ` 各自算，互不牵连。
+           `?visr=0` 关判据 ⇒ 退回改前行为（无剔除，一直画）。
+           ⚠️ 只写 `deskRef/mbRef` 这两个 group 的 `visible`，不动父级 `visible` 与
+              `mailboxVisible`（那是任务阶段门控，见下面 JSX 的注释）。 */
+        if (VISR_ON) {
+            const cx = state.camera.position.x, cz = state.camera.position.z;
+            if (deskRef.current) deskRef.current.visible = !outsideVis(DESK_XZ[0], DESK_XZ[1], cx, cz, R_VIS);
+            if (mbRef.current) mbRef.current.visible = mailboxVisible && !outsideVis(MAILBOX_XZ[0], MAILBOX_XZ[1], cx, cz, R_VIS);
+        }
         // 呼吸：只写这两份**共享材质**的 opacity，每帧 2 次属性写入，不遍历场景
         // （同 `CollectProps.tsx:801` 的做法）。用 BasicMaterial + 手动呼吸，而不是挂点光源 ——
         // 月夜场景的光源预算很紧，路标不值得占一个灯。

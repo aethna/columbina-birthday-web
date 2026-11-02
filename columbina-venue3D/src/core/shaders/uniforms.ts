@@ -54,9 +54,3 @@ export const uSkyBlend = uniform(0.0);
  *    而不是沿用会场的「亮蓝色月光」（`MOON_INTENSITY = 1.9`，几乎和正午 2.2 一样亮）。
  *  由 `DirectionalLight.tsx` 每帧写：`wr.moon * (1 - dayness)`。 */
 export const uVacuumNight = uniform(0.0);
-
-// Cosmic Wave System
-export const uActiveWaveCount = uniform(0);
-export const GlobalWaveState = {
-  buffer: null as StorageBufferAttribute | null,
-};

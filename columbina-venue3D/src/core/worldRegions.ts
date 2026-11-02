@@ -208,11 +208,422 @@ export const REGION_BY_ID: Record<RegionId, RegionDef> = {
  *       但 `worldHeightCPU` 与 GPU 侧 `craterFieldNode` 读的是**同一张表**，
  *       两边仍然逐位相等 ⇒ 道具照样精确贴地。 */
 export const CRATERS: CraterDef[] = [
-    { x: 0, z: -196, r: 24, d: 3.9, rim: 1.05 },   // 主坑：飞船落点，序号必须是 0
+    /* ★★ 2026-10-20 task-22（用户 m02364 任务7）：「月坑水环的地面原本是倾斜，改为平地。
+       即月坑的地形倾斜从原草地范围（修改后的喇叭花范围）开始」+
+       「考虑到飞船深度不变，地形倾斜范围改变会导致地形过于陡峭，因此坑底深度抬升，
+       以便下降率维持之前的大致数值。」
+       ⇒ 碗底不再是抛物面，而是 **`r ≤ 15 m` 的平台**（`CRATER_FLAT_R`，见下方
+          `craterBowlCPU`），斜坡只从 15 m 起、到坑缘 24 m 止。
+          深度 `d` 由 3.9 抬到 **2.45**：平台面 `-2.45`，坑缘脊顶仍 `+0.78`
+          ⇒ `(0.78 + 2.45) / 9 = 0.359`，与原坡度 0.36 一致（别只看 `d` 变小，
+            真正维持的是这一段斜率）。 */
+    { x: 0, z: -196, r: 24, d: 2.45, rim: 1.05 },   // 主坑：飞船落点，序号必须是 0
 ];
 
 /** 脊上碎块 `jag` 的幅值（米）。**固定值，不随 `c.rim` 缩** —— 理由见上面 CRATERS 的注释。 */
 export const RIM_JAG_AMP = 0.30;
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * ★★ 2026-10-21 用户 10-21 反馈1（红圈）：「删掉高于地面的岩石凸起，改平，
+ *    不需要山峰。」
+ *
+ * 目标物 = **坑缘脊本身**（用户 m00190 已澄清：「山就是月坑最上面，凸出地面的
+ * 部分」）。在 `craterHeight()` 里它就是 `rim + jag + ejecta` 三项之和：
+ *   · `rim`    = `c.rim(1.05) * rimVar(0.31~1.69) * rimShape` ⇒ 脊顶 0.3~1.8 m
+ *   · `jag`    = `RIM_JAG_AMP(0.30) * rimShape * bump`       ⇒ 再叠 ±0.3 m 的碎块
+ *   · `ejecta` = `c.rim*0.18 * exp(...)`                     ⇒ 坑外缓坡，p>1 一直延伸到 2.6
+ * 三项叠起来在 24 m 半径上绕一整圈 ⇒ 远看就是「一圈深蓝三角峰连成整幅宽的剪影」
+ * （反馈图里那圈东西）。
+ *
+ * `RIM_SCALE` 是这三项的**统一倍率**：
+ *   · 缺省 **0** ⇒ 三项全部归零，坑缘与周围地面齐平（`craterBowlCPU` 在 p=1 处
+ *     本来就正好返回 0 ⇒ 压平后地形在 r=24 处是**连续**的，不会留台阶）；
+ *   · `?rim=1`   ⇒ 完全恢复改造前的岩脊（A/B 出图用）；
+ *   · `?rim=0.3` ⇒ 只留 30% 的脊，用于找「有点起伏但不算山峰」的中间值。
+ *
+ * ⚠️ **坑壁/坑底的形状不受影响** —— `bowl` 单独一项，`RIM_SCALE` 只乘
+ *    rim/jag/ejecta。用户要删的是「凸出地面的山峰」，不是月坑本身。
+ * ⚠️ 与 `RIM_VAR`（`?rimvar=`）的分工：那个管「方位向高矮不齐」，这个管
+ *    「整圈脊存在与否」。`?rim=0` 时 `rimvar` 取任何值都没有意义。
+ * ⚠️ 这个 0 是有意义的取值 ⇒ 不能走 `urlNum()`（它把 `<= 0` 当无效值）。
+ * ⚠️ GPU 侧 `worldHeight.ts: craterNode` 必须**逐字同步**，否则道具会浮/陷。
+ * ══════════════════════════════════════════════════════════════════════════ */
+export const RIM_SCALE: number = (() => {
+    try {
+        const s = new URLSearchParams(window.location.search).get('rim');
+        if (s === null || s === '') return 0;
+        const v = parseFloat(s);
+        return Number.isFinite(v) && v >= 0 ? v : 0;
+    } catch {
+        return 0;
+    }
+})();
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * ★★ 2026-10-20 task-17：坑底「会场化」权重（用户 m01952）
+ *
+ *   「去掉目前的月壤地板。我的意思是，用默认的，和会场一样的地板。」
+ *
+ * ⇒ 坑**碗内**的地面观感（底色 / 反照率颗粒 / 微观法线强度 / 雾色 / 草）全部回到
+ *   会场那一套；坑缘脊与溅射毯（`p > 1`）仍然保留月壤。
+ *   ⚠️ **高度一律不动**：`worldHeightCPU` / `getWorldHeight()` 一行不改 ——
+ *      飞船是 `worldHeightCPU(API_X, API_Z)` 定 y 的（`WingShipApi.tsx:177-178`），
+ *      动高度船就浮/陷。这里只画颜色与植被。
+ *
+ *   权重定义：`p = |xz − CRATERS[0].xz| / CRATERS[0].r`（**环面距离**，与
+ *   `regionWeight` 同口径，否则伪大世界的 ±768 m 复制体会算错）。
+ *   `p ≤ CF_IN` 满权重（坑底），`p ≥ CF_OUT` 归零（坑缘脊顶）。
+ *   船半径 13 m / 坑半径 24 m ⇒ 翼尖在 p≈0.54，仍在碗内。
+ *
+ *   GPU 孪生：`core/shaders/worldHeight.ts` 的 `craterFloorWeightNode`，
+ *   **必须与这里同参同式**（本文件被 node 侧脚本引用，所以不能在这里建 TSL 节点）。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** 坑底权重满值的上限 / 归零的下限（都是 `p = d / r` 的无量纲值）。 */
+export const CF_IN = 0.88;
+export const CF_OUT = 1.00;
+
+/* ── 坑壁「会场化」（task-19 任务 4）──────────────────────────────────────
+ * 用户 m02364：「我看到月坑目前坑壁还有一圈岩石？去掉。」
+ * lead 实拍（`_logs/recon-rim-wall.png`）确认，那圈灰蓝色带 = `p 0.88~1.00` 的
+ * **坑壁 + 坑缘脊仍走月壤灰材质**（`craterFloorWeight` 在 `CF_OUT=1.00` 就归零了），
+ * 外加壁上零散小碎石。
+ *
+ * ⇒ 把「不是月壤」的范围从 `p ≤ 1.00` 推到 `p ≤ CF_WALL_EDGE (1.25)`：
+ *   · `p ≤ CF_WALL_OUT (1.02)`：满权重（碗底 + 碗壁）
+ *   · `1.02 ~ 1.25`：渐隐（坑缘脊外侧仍留一点月壤过渡，不然坑口会出现硬边）
+ *   ⇒ 30 m 以内都是会场地面色；溅射毯（`p > 1.25`）保持原样。
+ * ⚠️ 只影响**外观**（颜色/颗粒/法线/草），高度链一个字不动（船位靠 `worldHeightCPU`）。
+ * `?craterwall=0` 回旧行为（`p ≤ 1.00`）。
+ */
+export const CF_WALL_OUT = 1.02;
+export const CF_WALL_EDGE = 1.25;
+export const CRATER_WALL_ON: boolean = (() => {
+    try {
+        const s = new URLSearchParams(window.location.search).get('craterwall');
+        if (s === null || s === '') return true;
+        return s !== '0';
+    } catch {
+        return true;
+    }
+})();
+
+/** 坑底「暗蓝地面」开关（task-19 任务 2）：`?craterblue=0` 回会场红褐土。 */
+export const CRATER_BLUE_ON: boolean = (() => {
+    try {
+        const s = new URLSearchParams(window.location.search).get('craterblue');
+        if (s === null || s === '') return true;
+        return s !== '0';
+    } catch {
+        return true;
+    }
+})();
+
+/** 花岛/水下地面的**土纹**要不要叠（task-23，用户 m02431：「长喇叭花的地面不要纯色，
+ *  需要一些类似土地的纹理」）。`?cratergrain=0` 回 task-19 的纯色底，供 A/B。 */
+export const CRATER_GRAIN_ON: boolean = (() => {
+    try {
+        const s = new URLSearchParams(window.location.search).get('cratergrain');
+        if (s === null || s === '') return true;
+        return s !== '0';
+    } catch {
+        return true;
+    }
+})();
+
+/** ★ 2026-10-20 统一亮度旋钮（用户 m02767：「地板亮度太高，或者花的亮度太高，或者都高了」）。
+ *
+ *  参考图是**白天/发光环境**，把它的亮度直接搬进夜景一定过曝 —— 所以给一个旋钮，
+ *  一次乘两件事：① `CRATER_GROUND_BLUE` 在 shader 里 **RGB 同乘**（保色相，不许只压 B，
+ *  否则饱和蓝会变灰）；② 花自发光强度（`FlowerClusters` 的 `4.20 × k`，`?emissk` 显式
+ *  给了就用显式值）。**默认 `0.5`** —— 用户 2026-10-20 m02808 从 1.0 / 0.7 / 0.5 三档里选了 0.5
+ *  （「像发光地板」那个抱怨的解法）；`?craterlevel=1` 可回到参考图那版亮蓝。
+ *  范围夹到 `0.05 ~ 2`（0 会让坑内彻底变黑，手滑别把场景弄没）。 */
+export const CRATER_LEVEL: number = (() => {
+    try {
+        const s = new URLSearchParams(window.location.search).get('craterlevel');
+        if (s === null || s === '') return 0.5;
+        const v = Number.parseFloat(s);
+        if (!Number.isFinite(v)) return 0.5;
+        return Math.min(2, Math.max(0.05, v));
+    } catch {
+        return 0.5;
+    }
+})();
+
+/** ★ 2026-10-20 坑壁也走「亮蓝地」吗（用户参考图 `公用区\背景素材\素材\花海.PNG`：
+ *  坑内岩壁同样是蓝的，不是会场红褐）。
+ *  `?craterwallblue=0` ⇒ 坑壁回落成 task-19 的红褐/月壤外观，供 A/B。
+ *  ⚠️ 只影响**着色权重**（`craterBlueWeightNode`），不动任何高度/碰撞。 */
+export const CRATER_WALLBLUE_ON: boolean = (() => {
+    try {
+        const s = new URLSearchParams(window.location.search).get('craterwallblue');
+        if (s === null || s === '') return true;
+        return s !== '0';
+    } catch {
+        return true;
+    }
+})();
+
+/** 坑内还长草吗？（task-19 任务 1「原绿色草地部分改成喇叭花」⇒ 默认不长） */
+export const CRATER_GRASS_ON: boolean = (() => {
+    try {
+        const s = new URLSearchParams(window.location.search).get('cratergrass');
+        if (s === null || s === '') return false;
+        return s !== '0';
+    } catch {
+        return false;
+    }
+})();
+
+/**
+ * `?craterfloor=0` 关掉「坑底会场化」—— **只用于 A/B 对照**，默认开。
+ * 写法与 `RIM_VAR` 一致（`try/catch` 兜住 node 侧没有 `window` 的情况）。
+ */
+export const CRATER_FLOOR_ON: boolean = (() => {
+    try {
+        const s = new URLSearchParams(window.location.search).get('craterfloor');
+        if (s === null || s === '') return true;
+        return s !== '0';
+    } catch {
+        return true;
+    }
+})();
+
+/**
+ * 坑底权重：碗内 1，到坑缘脊顶渐 0。
+ * 参数**只从 `CRATERS[0]` 取**（半径也不写死）—— 坑改尺寸这里自动跟。
+ * `?craterfloor=0` 时恒为 0（= 旧观感）。
+ */
+export function craterFloorWeight(x: number, z: number, c: CraterDef = CRATERS[0]): number {
+    if (!CRATER_FLOOR_ON) return 0;
+    const dx = tdiff(x, c.x), dz = tdiff(z, c.z);
+    const p = Math.sqrt(dx * dx + dz * dz) / c.r;
+    return 1 - smoothstep01(CF_IN, CF_OUT, p);
+}
+
+/**
+ * 「不是月壤」的权重（task-19 任务 4）：碗底 + **碗壁** + 坑缘脊，`p ≤ 1.25` 全是会场地面。
+ * `?craterwall=0` 时等价于 `craterFloorWeight`（旧行为，壁上仍是月壤灰）。
+ *
+ * ⚠️ 与 `craterFloorWeight` 是**两个不同的量**，别混用：
+ *   · `craterFloorWeight`（p ≤ 1.00）→ 坑底「暗蓝地面」/ 花 / 草 的范围；
+ *   · `craterWallWeight`（p ≤ 1.25）→ 让**月壤灰外观**整体退场的范围。
+ * 花如果跟着 wall 走就会爬到斜坡上，所以两者必须分开。
+ */
+export function craterWallWeight(x: number, z: number, c: CraterDef = CRATERS[0]): number {
+    if (!CRATER_WALL_ON) return craterFloorWeight(x, z, c);
+    if (!CRATER_FLOOR_ON) return 0;
+    const dx = tdiff(x, c.x), dz = tdiff(z, c.z);
+    const p = Math.sqrt(dx * dx + dz * dz) / c.r;
+    return 1 - smoothstep01(CF_WALL_OUT, CF_WALL_EDGE, p);
+}
+
+/**
+ * ★ 2026-10-20 复审（lead QA 问题 3）：**坑内/坑缘的月岩清除半径**。
+ *
+ * 现象：坑内平视机位 `cam=-11,1.7,-173` 右前方有一大团棕褐色圆丘，比船还占地，
+ * 40 m 俯视图里却看不到它（因为它落在俯视视锥之外）。射线实测命中
+ * `moon_rock_01_LOD0`（父链 `region-props-moon-field`），世界坐标 (-10.4, -174)，
+ * 离坑心 24.3 m ⇒ `p = 24.3 / 24 = 1.01`，正好**卡在坑缘脊上**。
+ *
+ * 原来的清除只跳 `craterFloorWeight > 0.5`，等价于 `p < 0.94` —— 只清了碗底，
+ * 脊上的巨石留着（它本来就是「坑缘碎石」，但玩家站在坑内看就是「坑里还有石头」）。
+ * ⇒ 单独给一个**归一化半径**阈值 `CRATER_ROCK_CLEAR_P`（默认 1.28 ⇒ 30.7 m，
+ *    与 task-19 的 `CF_WALL_EDGE 1.25` 同量级：壁都清成会场地面了，壁上再摆
+ *    灰岩就自相矛盾），把碗底 + 坑壁 + 坑缘脊一圈的岩石都清掉；
+ *    溅射毯（p > 1.28）保留，坑外月亮区不受影响。
+ * `?craterrockr=<p>` 可调，`?craterfloor=0` 时整体关掉（= 旧观感）。
+ */
+export const CRATER_ROCK_CLEAR_P = urlNum('craterrockr', 1.45);
+export function craterRockClear(x: number, z: number, c: CraterDef = CRATERS[0]): boolean {
+    if (!CRATER_FLOOR_ON) return false;
+    const dx = tdiff(x, c.x), dz = tdiff(z, c.z);
+    return Math.sqrt(dx * dx + dz * dz) < CRATER_ROCK_CLEAR_P * c.r;
+}
+
+/* ── 坑内植被分区（task-17）──────────────────────────────────────────────
+ * 用户 m01992：①主视角是一片蓝色喇叭花丛；②飞船周围 + 船底是绿色草叶；
+ *            ③草叶不许和船穿模。
+ *
+ * ⇒ 两块**互补**的地盘，都在坑碗内：
+ *   · **飞船草区**：跟着船停泊朝向旋转的**椭圆**（不是圆）——
+ *     船身是「长条 + 展向机翼」，圆会要么盖住太多花区、要么留出翼尖。
+ *     半轴 = 实测 bbox 半轴 + 2 m 余量：`A = halfW(8.25) + 2.25 = 10.5`、
+ *     `B = halfL(13.00) + 2.00 = 15.0`，`rot = API_YAW = -24°`（`?wyaw=` 可改）。
+ *     来源：`WingShipApi.tsx:137-142` 的 `halfW = s1.x/2`、`halfL = s1.z/2`
+ *     （实测 bbox 16.51 × 3.64 × 26.00 m）。
+ *   · **花区**：碗底其余部分 = `craterFloorWeight > 0.9` 且**不在**飞船草区、
+ *     且不在 `keepOut.ts` 的飞船机身椭圆里（花不插进船肚子）。
+ *
+ * ⚠️ GPU 侧（`worldHeight.ts: shipGrassZoneNode`）读的是**同一对常量 + 同一个朝向**，
+ *    所以「花区没草」在 shader 里就是死的，不依赖运行时同步。
+ * ⚠️ 别把这两个数写进别的文件 —— 一份真值。 */
+function urlNum(key: string, dflt: number): number {
+    try {
+        const s = new URLSearchParams(window.location.search).get(key);
+        if (s === null || s === '') return dflt;
+        const v = parseFloat(s);
+        return Number.isFinite(v) && v > 0 ? v : dflt;
+    } catch {
+        return dflt;
+    }
+}
+
+/** 飞船草区椭圆：局部 X 半轴（米，展向）= 翼半展 8.25 + 2.25 余量。 */
+export const SHIP_GRASS_A = urlNum('shipgrassa', 10.5);
+/** 飞船草区椭圆：局部 Z 半轴（米，船长方向）= 半长 13.00 + 2.00 余量。 */
+export const SHIP_GRASS_B = urlNum('shipgrassb', 15.0);
+/** 飞船草区椭圆的朝向（弧度）—— 必须是船的停泊朝向，否则翼尖会跳出草区。 */
+export const SHIP_GRASS_YAW = (() => {
+    try {
+        const s = new URLSearchParams(window.location.search).get('wyaw');
+        const v = s === null || s === '' ? NaN : parseFloat(s);
+        return ((Number.isFinite(v) ? v : -24) * Math.PI) / 180;
+    } catch {
+        return (-24 * Math.PI) / 180;
+    }
+})();
+/** 草区外沿软化（相对于椭圆归一化半径的比例）—— 硬边会在低机位看出一个椭圆。
+ *  ★ 2026-10-20 复审（lead QA「俯视图里绿椭圆边界清楚、像苔藓」）：0.10 → 0.20，
+ *    过渡带宽度翻倍（沿短轴约 2.1 m、长轴 3.0 m），40 m 俯视不再是一条硬边。 */
+export const SHIP_GRASS_FADE = 0.20;
+/** 花区规划的最内半径（米）：只是「黄金角螺旋的起点」，真正的判据是下面那个 mask。 */
+export const SHIP_FLOWER_R_MIN = urlNum('shipflowerr', 6.0);
+/** 花区最外半径（米）：碗壁开始的地方（`CF_IN · r` 再收 1 m，花不爬到斜坡上）。 */
+export const SHIP_FLOWER_R_MAX = CF_IN * CRATERS[0].r - 1.0;
+
+/**
+ * 飞船草区权重（CPU 版，`worldHeight.shipGrassZoneNode` 的孪生）：
+ * `1` = 这里长绿草（花让位），`0` = 花区。
+ * 椭圆随船停泊朝向旋转；外沿 `SHIP_GRASS_FADE` 软化，免得低机位看出硬边。
+ */
+export function shipGrassZoneCPU(x: number, z: number): number {
+    const c = CRATERS[0];
+    const dx = tdiff(x, c.x), dz = tdiff(z, c.z);
+    const cs = Math.cos(-SHIP_GRASS_YAW), sn = Math.sin(-SHIP_GRASS_YAW);
+    const lx = dx * cs - dz * sn;
+    const lz = dx * sn + dz * cs;
+    const q = Math.sqrt((lx / SHIP_GRASS_A) ** 2 + (lz / SHIP_GRASS_B) ** 2);
+    return 1 - smoothstep01(1.0, 1.0 + SHIP_GRASS_FADE, q);
+}
+
+/* ── 花的船体避让（task-19 第二稿）───────────────────────────────────────
+ * 为什么不能复用 `keepOut.ts` 的飞船槽：那条椭圆是按**草的高度压制**定的
+ * （`rx 6.13 / rz 11.40`，为了盖住发动机舱），而 `keepOutFactor() > 0.85`
+ * 实际要求 q > 1.36 ⇒ 有效禁区 8.3 × 15.5 m，比 r=15 的圆盘还大 ——
+ * 上一版 44 个丛心只活了 21 个，40 m 俯视里读成「几串蓝葡萄」。
+ *
+ * 花只有 0.7 m 高，翼下离地 0.8~2.5 m，真正要躲的只有**机身/龙骨投影**：
+ * 局部 X 半轴 4.2 m（机身宽度 + 余量）、Z 半轴 11.8 m（整条龙骨），
+ * 加 0.15 m 外扩 —— 和 `SHIP_GRASS_YAW` 同一个朝向。
+ */
+export const SHIP_FLOWER_KEEP_A = 4.2;
+export const SHIP_FLOWER_KEEP_B = 11.8;
+/** 机身/龙骨投影（`true` = 这里不许种花，会插进船肚子）。 */
+export function shipHullKeepOut(x: number, z: number): boolean {
+    const c = CRATERS[0];
+    const dx = tdiff(x, c.x), dz = tdiff(z, c.z);
+    const cs = Math.cos(-SHIP_GRASS_YAW), sn = Math.sin(-SHIP_GRASS_YAW);
+    const lx = dx * cs - dz * sn;
+    const lz = dx * sn + dz * cs;
+    const q = Math.sqrt((lx / SHIP_FLOWER_KEEP_A) ** 2 + (lz / SHIP_FLOWER_KEEP_B) ** 2);
+    return q < 1.0;
+}
+
+/* ── 坑外水环常量（task-19 导出 → task-24 搬到坑外，task-25/26 消费）────────
+ * 用户 m02547 澄清：「**水环不在坑里。水环在地面上。整个坑只有蓝色喇叭花和飞船。**」
+ * 用户 m02549 选定位置：**坑缘外紧贴一圈，内径 r ≈ 25.5、外径 r ≈ 33**（宽 7.5 m）。
+ *
+ * 一份真值在这里，render（水体网格 task-25）与 questui（涉水判定 task-26）都读这几个数，
+ * 别在别的文件里再写一遍 25.5 / 33 / 0.32。
+ *
+ *   · 坑内 `r ≤ 24`：花岛（r ≤ 15 平台）+ 坑壁斜坡，**不铺任何水面**；
+ *   · 环槽 `r 25.5 ~ 33`：地面被挖低 `POND_TRENCH_D`（0.32 m），水面水平盖住；
+ *   · `POND_DEPTH_MAX`（0.42 m）= 涉水时脚没进膝盖的高度（哥伦比娅身高 1.379 m）。
+ *
+ * 地形侧实现见本文件 `pondRingShape()`（CPU）与 `shaders/worldHeight.ts: pondRingNode()`（GPU），
+ * 两边必须同参同式，否则道具会浮在槽里或陷进去。
+ */
+export const POND_R_IN = 25.5;
+export const POND_R_OUT = 33.0;
+export const POND_DEPTH_MAX = 0.42;
+
+/** 环槽深度（米）：槽底比周围平地低这么多，水面取平地 − 0.02 ⇒ 水深 ≈ 0.30 m。 */
+export const POND_TRENCH_D = 0.32;
+
+/** 环槽内外缘的平滑收边宽度（米，沿半径方向半带宽）：不做垂直槽壁。 */
+export const POND_EDGE_SOFT_M = 0.7;
+
+/** 拍平起点（米）：坑缘脊在 r 24~25，从 25 起才开始压平，别把脊削掉。 */
+export const POND_FLAT_IN_M = 25.0;
+/** 25 → 26.6 m 的 smoothstep 过渡（任务卡要求 0.8~1.5 m，这里 1.6 更软一点）。 */
+export const POND_FLAT_RAMP_M = 1.6;
+/** 平地的外边界（米）：34 之外开始淡出回原始月面。 */
+export const POND_FLAT_OUT_M = 34.0;
+/** 34 → 36 m 淡出，保证 r > 36 的地面与改动前**逐位相同**。 */
+export const POND_FLAT_FADE_M = 2.0;
+
+/** 平地基准高度（世界米）：`computePondFlatY()` 在**文件末尾**求值。
+ *  ⚠️ 声明放这里、求值放末尾 —— 它要调用 `worldHeightCPU`，而后者依赖后文才初始化的绑定
+ *     （`microRelief` / `CRATER_FIELD*` 等），模块求值期会 TDZ（task-19 踩过，拿到 -4.0）。 */
+export function pondFlatYDecl(): number {
+    return 0.06;
+}
+
+/** 预计算「未做水环整形」的地面高度时置 true，避免 `pondRingShape` 递归读 `POND_FLAT_Y`。 */
+let _pondLevelProbe = false;
+
+/**
+ * 水环整形（CPU 真值）：把 r 25 ~ 34 这一段月面**拍平**到 `POND_FLAT_Y`，
+ * 再在 r 25.5 ~ 33 挖一圈深 `POND_TRENCH_D` 的环槽；r > 36 逐位不变。
+ *
+ * GPU 孪生：`shaders/worldHeight.ts: pondRingNode()`（同参同式，改这里必须同步改那边）。
+ */
+export function pondRingShape(x: number, z: number, h: number): number {
+    const c = CRATERS[0];
+    const dx = tdiff(x, c.x), dz = tdiff(z, c.z);
+    const r = Math.sqrt(dx * dx + dz * dz);
+    if (r < POND_FLAT_IN_M - 0.2 || r > POND_FLAT_OUT_M + POND_FLAT_FADE_M + 0.2) return h;
+    const wF = smoothstep01(POND_FLAT_IN_M, POND_FLAT_IN_M + POND_FLAT_RAMP_M, r)
+        * (1 - smoothstep01(POND_FLAT_OUT_M, POND_FLAT_OUT_M + POND_FLAT_FADE_M, r));
+    let out = h + (POND_FLAT_Y - h) * wF;
+    const sIn = smoothstep01(POND_R_IN - POND_EDGE_SOFT_M, POND_R_IN + POND_EDGE_SOFT_M, r);
+    const sOut = 1 - smoothstep01(POND_R_OUT - POND_EDGE_SOFT_M, POND_R_OUT + POND_EDGE_SOFT_M, r);
+    out -= POND_TRENCH_D * sIn * sOut;
+    return out;
+}
+
+/** 平地高度：在 r = 32 m 的 32 个方位上采样**未整形**的地面高度取中位数。
+ *  r = 32 落在环槽里（槽底 = 平地 − 0.32），所以采样时用 `_pondLevelProbe` 跳过整形。 */
+function computePondFlatY(): number {
+    try {
+        const c = CRATERS[0];
+        const hs: number[] = [];
+        _pondLevelProbe = true;
+        for (let i = 0; i < 32; i++) {
+            const a = (i / 32) * Math.PI * 2;
+            hs.push(worldHeightCPU(c.x + Math.cos(a) * 32, c.z + Math.sin(a) * 32));
+        }
+        _pondLevelProbe = false;
+        if (!hs.length) return pondFlatYDecl();
+        hs.sort((a, b) => a - b);
+        return hs[(hs.length - 1) >> 1];
+    } catch {
+        _pondLevelProbe = false;
+        return pondFlatYDecl();
+    }
+}
+
+/** 水面高度：平地 − 0.02（水深 ≈ 0.30 m，且整个世界只有一个水平面）。 */
+function computePondWaterY(): number {
+    try {
+        return POND_FLAT_Y - 0.02;
+    } catch {
+        return pondFlatYDecl() - 0.02;
+    }
+}
+
 
 /* ===== 数学 ===== */
 
@@ -371,6 +782,50 @@ export const RIM_VAR: number = (() => {
     }
 })();
 
+/** 花岛平台半径（米）：`r ≤ CRATER_FLAT_R` 高度恒定，斜坡从这里才开始。
+ *  `?craterflat=<m>` 可调；**`?craterflat=0` 回旧地形**（整碗连续上坡，A/B 用）。
+ *  ⚠️ 这个 0 是有意义的取值，所以不能走 `urlNum()`（那个把 `<= 0` 当无效值）。 */
+export const CRATER_FLAT_R: number = (() => {
+    try {
+        const s = new URLSearchParams(window.location.search).get('craterflat');
+        if (s === null || s === '') return 15;
+        const v = parseFloat(s);
+        return Number.isFinite(v) && v >= 0 ? v : 15;
+    } catch {
+        return 15;
+    }
+})();
+/** `false` ⇒ 旧的抛物面碗（整碗连续上坡）。 */
+export const CRATER_FLAT_ON: boolean = CRATER_FLAT_R > 0.5;
+/** 旧地形深度（A/B 用）：`?craterflat=0` 时连深度一起回到 3.9，
+ *  否则只回「碗形」不回深度，A/B 图对不上（中心会停在 -2.45 而不是 -3.9）。 */
+export const CRATER_LEGACY_D = 3.9;
+
+/** 平台 ↔ 斜坡接缝的软化宽度（米，沿半径方向）：不加这个会留一道折线。 */
+export const CRATER_FLAT_SEAM_M = 1.5;
+
+/**
+ * 环形山的「碗」剖面（米，相对基准面，负值）。
+ * **CPU 真值**，GPU 孪生是同文件导出的参数 + `worldHeight.ts: craterNode` 里的同式实现
+ * （⚠️ 两边必须逐字一致，否则飞船/花/委托点会浮空或陷进地里）。
+ *
+ *   · `?craterflat=0`（`CRATER_FLAT_ON === false`）⇒ 旧的 `-d·(1 - p²)` 抛物面；
+ *   · 默认 ⇒ `p ≤ pf` 恒为 `-d`（平台），`pf → 1` 线性升到 0（斜坡），
+ *     接缝用二次起步做 C¹ 连续（`seam` 段内 `q²/(2·seam)`，斜率从 0 渐入）；
+ *     斜坡段末尾除以 `(1 - seam/2)` 归一到 **p=1 处正好 0**，
+ *     ⇒ 坑缘脊（`rim`）仍然叠在 0 上，脊顶高度不因平台化而变。
+ */
+export function craterBowlCPU(p: number, depth: number): number {
+    if (p >= 1) return 0;
+    if (!CRATER_FLAT_ON) return -CRATER_LEGACY_D * (1 - p * p);
+    const pf = Math.min(0.95, CRATER_FLAT_R / CRATERS[0].r);
+    if (p <= pf) return -depth;
+    const q = (p - pf) / (1 - pf);
+    const seam = Math.min(0.5, CRATER_FLAT_SEAM_M / (CRATERS[0].r * (1 - pf)));
+    const qs = q < seam ? (q * q) / (2 * seam) : q - seam / 2;
+    return -depth * (1 - qs / (1 - seam / 2));
+}
+
 /** 单个环形山的高度贡献（米） */
 export function craterHeight(x: number, z: number, c: CraterDef): number {
     const dx = x - c.x, dz = z - c.z;
@@ -378,8 +833,9 @@ export function craterHeight(x: number, z: number, c: CraterDef): number {
     const p = d / c.r;
     if (p > 2.6) return 0;                       // 溅射毯之外直接剪掉，省算力
 
-    // 坑底：抛物面碗（真实月坑底接近这个形状）
-    const bowl = p < 1 ? -c.d * (1 - p * p) : 0;
+    // 坑底：`craterBowlCPU` —— 默认是「r ≤ 15 m 平台 + 15→24 m 斜坡」（task-22），
+    // `?craterflat=0` 回旧的抛物面碗。
+    const bowl = craterBowlCPU(p, c.d);
     // 坑缘：p≈1 处的高斯脊 —— 有这道脊，坑才「立」得起来，否则只是个凹坑
     const t = p - 1;
     /* ═══ ★★ 2026-10-09 用户 m05185：「月壤坑壁最上边那一圈，还是像海浪一样」═══
@@ -449,7 +905,9 @@ export function craterHeight(x: number, z: number, c: CraterDef): number {
     const jag = RIM_VAR * RIM_JAG_AMP * rimShape * bump;
     // 外侧溅射毯：缓慢衰减的抬升
     const ejecta = p > 1 ? c.rim * 0.18 * Math.exp(-(p - 1) / 0.6) : 0;
-    return bowl + rim + jag + ejecta;
+    /* ★ 2026-10-21：三项统一乘 `RIM_SCALE`（缺省 0 = 压平，见该常量的注释）。
+       `bowl` 不参与 —— 用户要删的是「凸出地面的山峰」，不是月坑本身。 */
+    return bowl + RIM_SCALE * (rim + jag + ejecta);
 }
 
 export function craterField(x: number, z: number): number {
@@ -536,6 +994,10 @@ export function worldHeightCPU(x: number, z: number): number {
     if (w.moon > 0.001) h += craterField(x, z) * w.moon;
     // 微起伏：按月球保留下来的幅度
     h += microRelief(x, z) * REGION_BY_ID.moon.micro * w.moon;
+    /* 坑外水环（task-24）：r 25 ~ 34 拍平 + r 25.5 ~ 33 挖 0.32 m 环槽。
+       `?craterflat=0` 时整块跳过（回旧地形）；r > 36 逐位不变。
+       GPU 孪生：`shaders/worldHeight.ts: pondRingNode()`。 */
+    if (!_pondLevelProbe && CRATER_FLAT_ON) h = pondRingShape(x, z, h);
     return h;
 }
 
@@ -618,6 +1080,19 @@ export function scatterRegion(
 
         if (regionWeight(def, x, z) < minWeight) continue;
 
+        /* ★★ 2026-10-20 task-17：坑底改回「会场默认地面」之后，坑里就不该再躺着
+           月壤碎石了（用户：「去掉目前的月壤地板」）。
+           ★ 2026-10-20 复审（lead QA 问题 3）：原来只跳 `craterFloorWeight > 0.5`
+           （≈ p < 0.94，只有碗底），结果**坑缘脊上**还站着一块 3 m 高的
+           `moon_rock_01_LOD0`（射线实测世界坐标 (-10.4,-174)、p=1.01），站在坑内
+           看就是「一大团棕褐色圆丘、比船还占地」，而 40 m 俯视视锥照不到它 ——
+           正是 lead 描述的那块。改用 `craterRockClear()`（默认 p < 1.12 ≈ 26.9 m），
+           碗底 + 坑缘脊一圈的月岩全清，溅射毯（p > 1.12）保留。
+           `?craterrockr=<p>` 可调；`?craterfloor=0` 时整体关掉（= 旧观感）。
+           ⚠️ 不改 `RegionProps.tsx`（那是 `render` 的 scope）：筛在这一层，
+              月岩的「摆在哪」判据仍然只有这一处。 */
+        if (craterRockClear(x, z)) continue;
+
         // 最小间距
         let tooClose = false;
         for (const o of out) {
@@ -650,3 +1125,16 @@ export function scatterRegion(
     }
     return out;
 }
+
+/* 水环地形的高度基准（米，世界绝对 y）—— 必须在文件末尾求值：它读 worldHeightCPU，
+   而后者依赖本文件后文的 microRelief / CRATER_FIELD* 等绑定（放前面会 TDZ）。
+   `pondRingShape()` 会把 r 25~34 的地面压到这个高度，所以声明必须早于任何运行时调用 ——
+   `const` 的 TDZ 只影响「模块求值期」，运行期读它没问题（`_pondLevelProbe` 保证采样时不递归）。 */
+export const POND_FLAT_Y: number = computePondFlatY();
+
+/* ⚠️ 水面高度的**求值期快照**（米，世界绝对 y）= 平地 − 0.02。
+   **不要当基准，用水面运行时值**：`core/world/waterState.ts` 里名为 `POND_WATER_Y` 的那个
+   才是运行时现算的值（render 的 task-25 已改用它）。本模块求值那一刻地形未必已最终绑定，
+   两个实例实测差 1~2 cm（0.1252 / 0.1437），已经误导过两轮验收 ⇒
+   2026-10-20 lead 裁定：改掉这个会误导人的导出名，加 `_EVALTIME` 后缀。 */
+export const POND_WATER_Y_EVALTIME: number = computePondWaterY();

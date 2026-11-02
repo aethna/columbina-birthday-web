@@ -175,6 +175,67 @@ export function CameraViewControl({ boneName = '頭' }: Props) {
         document.dispatchEvent(mk('pointerup', 0, 500 + steps * 12, 300));
         return true;
       },
+      /**
+       * t7（dev-sleeve）验收机位：把相机摆到角色「正前方」或「正侧方」。
+       *
+       * 为什么不直接改 `camera.position`：相机每帧由 `camera-controls` 写回，
+       * 手工改会被下一帧覆盖；`setLookAt` 改的是控制器的**目标位姿**，才留得住。
+       * `false` = 不插值、当帧到位（截图脚本等 1 秒就够）。
+       *
+       * `which='front'` ⇒ 站在她前进方向的前方往回看（能看清左右两袖是否各自向外）；
+       * `which='side'`  ⇒ 站在她右手边横着看（能看清袖片与衣身的间隙）。
+       * `r` 缺省 2.6 m：刚好把整条下垂的袖子收进 560×560 画面。
+       */
+      view: (which: 'front' | 'side' = 'front', tx = 0, ty = 1.05, tz = -10, r = 2.6) => {
+        const c = controlsRef.current;
+        if (!c) return false;
+        const px = which === 'side' ? tx + r : tx;
+        const pz = which === 'side' ? tz : tz - r;
+        c.setLookAt(px, ty + 0.15, pz, tx, ty, tz, false);
+        return true;
+      },
+      /** t7 补拍：袖片特写。相机放在她自己坐标系里的 (dx, dy, dz) 偏移处，看向 (0, lookY, 0)+她。缺省对侧机位（她左手边），能同时看到她胸前与袖外侧两条轮廓线。 */
+      closeup: (dx = -0.85, dy = 0.35, dz = -0.95, lookY = 0.95, tx0 = 0, tz0 = -10) => {
+        const c = controlsRef.current;
+        if (!c) return false;
+        c.setLookAt(tx0 + dx, lookY + dy, tz0 + dz, tx0, lookY, tz0, false);
+        return true;
+      },
+      /**
+       * 探针专用：把相机放到「任意方位」并保持。
+       *
+       * 为什么必须有这个：`camera.position.set(...)` 手工改会被 `camera-controls`
+       * 每帧写回（实测 `__dsh.camera.position` 恒为场景缺省 `[20,20,30]`，距角色 48.85 m），
+       * 于是「钉机位截图」拍到的一直是缺省全景，却看起来像出图正常 —— 这是个静默失败。
+       * 必须走 `setLookAt` 改**控制器的目标位姿**才留得住，和 `view`/`closeup` 同一个理由。
+       *
+       * `azimuth`：以角色为原点、绕世界 +Y 的角度（度）。
+       * 实测标定（`_logs/round39/r39cb.jsonl` + 背面图核对）：`gry=0` 时角色**面向 +Z**
+       * （azimuth=0 且相机在 +Z 侧拍到的是脸），所以**背后 = −Z 方向** ⇒
+       * `azimuth=0` 相机放在 `tz − dist`（正后方），`azimuth=180` 是正面。
+       * （旧标定 `u39gry.js` 说「背后 = +Z」是把双马尾垂在肩前误读成了背面方向，作废。）
+       */
+      back: (opts: { azimuth?: number | null; dist?: number; hy?: number; ly?: number; side?: number } = {}) => {
+        const c = controlsRef.current;
+        if (!c) return false;
+        // 角色实际位置从 `__mmd.pos()` 读（store 里没有 playerPos 字段，别猜）。
+        // 实测走动也是原地步态：`pos()` 恒为 [0, ~0.34, -10]，只有 y 随起伏微动。
+        let tx = 0, ty = 0.34, tz = -10;
+        const mmd = (window as unknown as { __mmd?: { pos?: () => number[] } }).__mmd;
+        const pp = mmd?.pos?.();
+        if (pp && pp.length === 3) { tx = pp[0]; ty = pp[1]; tz = pp[2]; }
+        const dist = opts.dist ?? 2.2;
+        const hy = opts.hy ?? 1.55;
+        const ly = opts.ly ?? 1.55;
+        const side = opts.side ?? 0;
+        const az = opts.azimuth;
+        const a = ((az == null ? 0 : az) * Math.PI) / 180;
+        // 背后方向 = (−sin, −cos)；右手方向 = (cos, −sin)
+        const px = tx - Math.sin(a) * dist + Math.cos(a) * side;
+        const pz = tz - Math.cos(a) * dist - Math.sin(a) * side;
+        c.setLookAt(px, ty + hy, pz, tx, ty + ly, tz, false);
+        return { px, py: ty + hy, pz, tx, ty, tz };
+      },
     };
     return () => { delete w.__cam; };
   }, [camera, gl, cameraMode, isControlEnabled]);

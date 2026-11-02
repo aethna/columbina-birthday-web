@@ -238,8 +238,13 @@ export function makeLeafMaterial(m: any, tintHex: string, gain: number, emis: nu
     node.transparent = false;
     node.alphaTest = 0.5;
     node.depthWrite = true;
+    /* ⚠️ 2026-10-22 第五轮排查记录：曾怀疑这一行 `node.map` 是「整片森林零像素」的
+     * 病灶（运行期把它置空会出树），但那是**假象** —— 置空 `map` 会改变材质的
+     * cacheKey，真正生效的是「换了一个材质对象」，不是 map 本身。
+     * 决定性反证：把**同一个**材质对象重新挂回 `mesh.material` → 仍然无树；
+     *             `material.clone()` → 出树（`_logs/t5/captain/V1`、`V3`）。
+     * ⇒ 病灶在 `Forest.tsx` 的 `refill()`（首帧管线被复用），本行**不是**原因，别删。 */
     node.map = m?.map ?? null;
-    node.normalMap = m?.normalMap ?? null;
     /* ⚠️ `MeshStandardNodeMaterial extends NodeMaterial`（不是 `MeshStandardMaterial`），
        它**没有 `normalScale` 属性**，直接 `.copy()` 会 `TypeError`；
        而这个 traverse 外面通常包着 try/catch ⇒ 异常被静默吞掉，看着像「条件没命中」。
