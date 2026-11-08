@@ -58,9 +58,11 @@ export default class Minimap {
     this.visible = false;
 
     // 10 个场景排成一圈之后，260x300 会让最下面那排名字互相压住，
-    // 所以面板整体放大一档（320x340）
-    this.panelW = 320;
-    this.panelH = 340;
+    // 320x340 也只是勉强。这次整体放大 1.5 倍（480x520），
+    // 字号、节点、留白一起按比例放大，保证一眼能看清。
+    // 小屏幕上由 layout() 里的 k 系数整体缩放，不会超出屏幕。
+    this.panelW = 480;
+    this.panelH = 520;
 
     this.build();
   }
@@ -82,7 +84,7 @@ export default class Minimap {
     // 标题：加了 5 个月面场景之后就不只是「林间」了
     this.title = scene.add.text(0, 0, '世界地图', {
       fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
-      fontSize: '15px',
+      fontSize: '20px',
       color: '#ffd97a',
     }).setOrigin(0.5, 0);
 
@@ -108,9 +110,14 @@ export default class Minimap {
     const x = Math.round(w / 2);
     const y = Math.round(h / 2);
 
+    // 小屏幕整体等比缩小：大屏 k=1（文字保持 100% 清晰，不被放大，
+    // 也不产生模糊），窄屏/手机竖屏/假横屏自动缩到能装下（两侧各留 16px）。
+    const k = Math.min(1, (w - 32) / this.panelW, (h - 32) / this.panelH);
+
     this.container.setPosition(x, y);
+    this.container.setScale(k);
     this.bg.setPosition(0, 0);
-    this.title.setPosition(0, -this.panelH / 2 + 12);
+    this.title.setPosition(0, -this.panelH / 2 + 16);
   }
 
   toggle() {
@@ -134,11 +141,13 @@ export default class Minimap {
     this.labels = [];
     this.gfx.clear();
 
-    // 绘制区（留出标题空间）
-    const areaW = this.panelW - 50;
-    const areaH = this.panelH - 70;
+    // 绘制区（留出标题与图例空间）
+    // 480x520 的面板：横向两边各留 37.5px，纵向顶上留 21px、底下留 84px 给图例，
+    // 这样 15px 的节点名（最长 4 个字 ≈ 60px 宽）不会出底板、也不会互相压住。
+    const areaW = this.panelW - 75;
+    const areaH = this.panelH - 105;
     const areaX = -areaW / 2;
-    const areaY = -areaH / 2 + 14;
+    const areaY = -areaH / 2 + 21;
 
     const pos = {};
     Object.entries(LAYOUT).forEach(([id, p]) => {
@@ -175,7 +184,7 @@ export default class Minimap {
           (s.id === cur && ex.to === activeTarget) ||
           (ex.to === cur && s.id === activeTarget);
 
-        this.gfx.lineStyle(isActive ? 3 : 2, isActive ? C.lineActive : C.line, isActive ? 1 : 0.75);
+        this.gfx.lineStyle(isActive ? 4.5 : 3, isActive ? C.lineActive : C.line, isActive ? 1 : 0.75);
 
         this.gfx.beginPath();
         this.gfx.moveTo(pos[s.id].x, pos[s.id].y);
@@ -192,9 +201,9 @@ export default class Minimap {
 
           this.gfx.fillStyle(C.lineActive, 1);
           this.gfx.fillTriangle(
-            mx + Math.cos(ang) * 7, my + Math.sin(ang) * 7,
-            mx + Math.cos(ang + 2.5) * 6, my + Math.sin(ang + 2.5) * 6,
-            mx + Math.cos(ang - 2.5) * 6, my + Math.sin(ang - 2.5) * 6
+            mx + Math.cos(ang) * 10.5, my + Math.sin(ang) * 10.5,
+            mx + Math.cos(ang + 2.5) * 9, my + Math.sin(ang + 2.5) * 9,
+            mx + Math.cos(ang - 2.5) * 9, my + Math.sin(ang - 2.5) * 9
           );
         }
       });
@@ -211,22 +220,22 @@ export default class Minimap {
       // 当前场景：外圈光晕
       if (isCurrent) {
         this.gfx.fillStyle(C.nodeCurrent, 0.25);
-        this.gfx.fillCircle(p.x, p.y, 14);
+        this.gfx.fillCircle(p.x, p.y, 21);
       }
       // 目标场景：蓝色光晕
       if (isTarget) {
         this.gfx.fillStyle(C.lineActive, 0.22);
-        this.gfx.fillCircle(p.x, p.y, 12);
+        this.gfx.fillCircle(p.x, p.y, 18);
       }
 
       // 节点本体
       this.gfx.fillStyle(isCurrent ? C.nodeCurrent : C.node, 1);
-      this.gfx.fillCircle(p.x, p.y, isCurrent ? 6 : 4.5);
+      this.gfx.fillCircle(p.x, p.y, isCurrent ? 9 : 6.75);
 
       // 名字
-      const label = this.scene.add.text(p.x, p.y + 10, cfg.name, {
+      const label = this.scene.add.text(p.x, p.y + 14, cfg.name, {
         fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
-        fontSize: '11px',
+        fontSize: '15px',
         color: isCurrent ? C.textCurrent : (isTarget ? '#9ecbff' : C.textDim),
       }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(20001);
 
@@ -237,11 +246,11 @@ export default class Minimap {
     // ---- 图例 ----
     const legend = this.scene.add.text(
       0,
-      this.panelH / 2 - 24,
-      '金点=当前  蓝线=任务方向    M 关闭',
+      this.panelH / 2 - 32,
+      '金点=当前   蓝线=任务方向    M 关闭',
       {
         fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
-        fontSize: '10px',
+        fontSize: '13px',
         color: C.textDim,
       }
     ).setOrigin(0.5).setScrollFactor(0).setDepth(20001);

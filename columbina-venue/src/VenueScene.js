@@ -818,7 +818,7 @@ export default class VenueScene extends Phaser.Scene {
    * @param {string} tip 底部那行提示
    * @returns {boolean} 是否铺上了（贴图没加载好会返回 false）
    */
-  showOverlay(tex, tip = '点击任意处收起') {
+  showOverlay(tex, tip = '点击任意处收起', opts = {}) {
     if (this.overlay) return false;
     if (!this.textures.exists(tex)) {
       console.warn('[插画] 贴图不存在：', tex);
@@ -852,6 +852,18 @@ export default class VenueScene extends Phaser.Scene {
 
     this.overlay = [veil, img, tipObj];
 
+    // 合影可以存下来（用户 m01462 的第 7 项）
+    //   这张图是 canvas 上的像素，右键另存只存得到一整个画布，
+    //   所以给一个 DOM 按钮，点它直接下载原图文件。
+    this._overlayTex = tex;
+    if (opts.saveAs) {
+      const btn = document.getElementById('photo-save');
+      if (btn) {
+        btn.dataset.file = opts.saveAs;
+        btn.classList.add('show');
+      }
+    }
+
     // 点一下收起。用 once —— 收起后这里会重新挂一次，不会越积越多。
     this.input.once('pointerdown', () => this.closeOverlay());
     return true;
@@ -862,6 +874,9 @@ export default class VenueScene extends Phaser.Scene {
     if (!this.overlay) return;
     this.overlay.forEach((o) => o.destroy());
     this.overlay = null;
+    this._overlayTex = null;
+    const btn = document.getElementById('photo-save');
+    if (btn) btn.classList.remove('show');
   }
 
   /**
@@ -911,7 +926,10 @@ export default class VenueScene extends Phaser.Scene {
     const tex = pool.length
       ? pool[Math.floor(Math.random() * pool.length)]
       : `assets/cutscene/photo-${npc.id}.png`;
-    if (!this.showOverlay(tex, `与 ${npc.name} 的合影 —— 点击任意处收起`)) {
+    // 用户 m01462 第7项：「和NPC单独合影加入保存功能」
+    //   文件名带上 NPC 名字，下载到手机相册/电脑下载目录时一眼能认出来。
+    const saveAs = `与${npc.name}的合影${tex.endsWith('.png') ? '.png' : '.jpg'}`;
+    if (!this.showOverlay(tex, `与 ${npc.name} 的合影 —— 点击任意处收起`, { saveAs })) {
       this.toast('合影还没准备好，稍后再试');
       return;
     }
@@ -1868,6 +1886,22 @@ export default class VenueScene extends Phaser.Scene {
   handleInteract() {
     // 全屏插画展示中：F 不接（收起只能点鼠标）
     if (this.overlay) return;
+
+    // 对话刚关掉的这一下按键不算数（用户 m01441 的问题4）
+    //
+    // 为什么会撞上：DialogSystem 用 window keydown 推进对话，场景这边用
+    // update() 里轮询 JustDown(keyInteract) —— 两条路互不知情。
+    // 玩家在最后一句按 F，对话关掉的同时 JustDown 也是 true，
+    // 同一帧就又 startDialog() 了，看起来就是「按 F 对话永远结束不了」。
+    //
+    // 这里必须顺手把 JustDown 消费掉（不能只是 return）：
+    // Phaser 的 _justDown 标记只有被 JustDown() 读一次才清，
+    // 不读的话冷却结束后它还是 true，照样会重开。
+    if (this.dialog && this.dialog.justClosed(350)) {
+      Phaser.Input.Keyboard.JustDown(this.keyInteract);
+      consumeTouch('interact');
+      return;
+    }
 
     // 触摸的互动键是脉冲（按下时打一个 200ms 的票），消费即清，
     // 不会被 DialogSystem 的 window keydown 重复吃成「一次点击翻两页」。
