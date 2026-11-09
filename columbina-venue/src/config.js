@@ -307,7 +307,7 @@ export const NPCS = [
     id: 'npc-ineffa',
     scene: 'starship',
     guest: true,
-    tileX: 14, tileY: 7,
+    tileX: 11, tileY: 22,
     name: '伊涅芙',
     icon: '⚙️',
     color: 0xc9b6ff,
