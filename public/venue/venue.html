@@ -671,6 +671,29 @@
       border-color: rgba(201, 162, 74, .9);
     }
 
+    /* 合影保存按钮
+       只在「合影铺满屏幕」时出现（.show 由场景里 showOverlay 加/移除）。
+       为什么不用右键另存：合影是 Phaser 画在 canvas 上的像素，
+       右键存下来是整块带 HUD 的画布，不是那张图。
+       所以按钮点下去直接下原图文件（见下面的 click 处理）。 */
+    #photo-save {
+      display: none;
+      position: fixed; bottom: 34px; left: 50%; transform: translateX(-50%); z-index: 1700;
+      height: 40px; padding: 0 20px;
+      border-radius: 20px;
+      border: 1px solid rgba(201, 162, 74, .75);
+      background: rgba(201, 162, 74, .92);
+      color: #1a1410; font-size: 14px; font-weight: 600; letter-spacing: .5px;
+      -webkit-appearance: none; appearance: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      cursor: pointer;
+      backdrop-filter: blur(6px);
+      box-shadow: 0 2px 14px rgba(0, 0, 0, .5);
+    }
+    #photo-save.show { display: block; }
+    #photo-save:active { transform: translateX(-50%) scale(.96); }
+
     /* 触控层容器：本身不吃事件，只有按钮吃 */
     #mobile-act {
       display: none;
@@ -807,9 +830,40 @@
         max-height: min(260px, 66vw);
         transform: translate(-50%, -50%) rotate(90deg);
       }
+
+      /* 对话框也要跟着转。
+         不转的话：canvas 转了 90°，DOM 对话框还是正的 ——
+         玩家把手机横过来看，图是正的、字是躺着的，完全读不了。
+         摆放推导（物理 390×844，局部宽 w = 100vh-40 = 804、高 h）：
+           transform-origin: 0 100% → rotate(90deg) 后局部框占 x∈[0,h]、y∈[h,w+h]
+           再 translateY(-100%)（自己的 h）→ y∈[0,w]
+           加 top:20 → y∈[20, 824]，正好上下各留 20；x 从 0 起 = 贴着物理左边缘
+         物理左边缘就是用户视角的【下边】（这段的前提是旋转后屏幕右边缘 = 用户视角上边），
+         所以这条 bar 落在用户眼里的底部，和桌面版位置一致。 */
+      html.venue-force-landscape #dialog-root {
+        left: 0; right: auto; top: 20px; bottom: auto;
+        width: calc(100vh - 40px);
+        transform-origin: 0 100%;
+        transform: translateY(-100%) rotate(90deg) translateY(16px);
+      }
+      html.venue-force-landscape #dialog-root.active {
+        transform: translateY(-100%) rotate(90deg) translateY(0);
+      }
+
+      /* 合影保存按钮：并进上面那条顶栏，接在「任务」后面（top 396 → 510）。
+         和 #fs-btn / #quest-tab 同一套坐标，转 90° 后同样是用户视角里的一枚横条，
+         不会再压住别的按钮。 */
+      html.venue-force-landscape #photo-save {
+        left: auto; right: calc(12px + env(safe-area-inset-right, 0px));
+        top: 510px; bottom: auto;
+        transform: rotate(90deg);
+      }
+      html.venue-force-landscape #photo-save:active {
+        transform: rotate(90deg) scale(.96);
+      }
     }
   </style>
-  <script type="module" crossorigin src="./assets/venue-CGTRyeFY.js"></script>
+  <script type="module" crossorigin src="./assets/venue-G0WIQ9WO.js"></script>
 </head>
 <body>
   <div id="game-root"></div>
@@ -817,6 +871,9 @@
 
   <!-- 手机：横屏全屏切换（不会自动横屏的设备靠这个） -->
   <button id="fs-btn" type="button" aria-pressed="false" title="横屏全屏显示">横屏全屏</button>
+
+  <!-- 合影保存：只在合影铺满屏幕时出现（用户 m01462 第7项） -->
+  <button id="photo-save" type="button" title="把这张合影存到本地">保存合影</button>
 
   <!-- 手机：动作键（映射 F 互动 / M 地图） -->
   <div id="mobile-act">
@@ -1139,6 +1196,50 @@
         scene.toast(`「${label}」还在筹备中，之后再来看看`);
       }
     });
+
+    // =====================================================================
+    // 合影保存（用户 m01462 第7项：「和NPC单独合影加入保存功能」）
+    //
+    // 为什么不能只靠右键另存：
+    //   合影是 Phaser 画在 canvas 上的像素，右键存下来会得到整块带 HUD 的画布。
+    //   所以这里 fetch 原图文件 → 转 blob → 造一个临时 <a download> 点掉。
+    //
+    // 文件名由场景写在按钮的 dataset.file 上（形如「与芙宁娜的合影.jpg」）。
+    // 用 <a download> 而不是 window.open：手机上 open 一个图片地址
+    // 常常只是打开查看器，存不进相册；download 属性会走系统下载。
+    // =====================================================================
+    const photoSaveBtn = document.getElementById('photo-save');
+    if (photoSaveBtn) {
+      photoSaveBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const scene = window.__venueScene;
+        const tex = scene && scene._overlayTex;
+        if (!tex) return;
+        const name = photoSaveBtn.dataset.file || '合影.jpg';
+        try {
+          const res = await fetch(tex);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = name;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          // 立刻 revoke 会让部分浏览器（Safari）来不及读完，稍等一下再回收
+          setTimeout(() => URL.revokeObjectURL(url), 4000);
+          photoSaveBtn.textContent = '已保存 ✓';
+          setTimeout(() => { photoSaveBtn.textContent = '保存合影'; }, 1600);
+        } catch (err) {
+          console.warn('[合影] 保存失败：', err);
+          if (scene && typeof scene.toast === 'function') {
+            scene.toast('这张合影存不下来，长按图片试试');
+          }
+        }
+      });
+    }
 
     // =====================================================================
     // 初始化按钮（左下角）
